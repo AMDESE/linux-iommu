@@ -28,6 +28,15 @@ void *__init iommu_alloc_4k_pages(struct amd_iommu *iommu,
 				  gfp_t gfp, size_t size);
 int amd_iommu_pdom_id_alloc(void);
 void amd_iommu_pdom_id_free(int id);
+u8 __iomem * __init iommu_map_mmio_space(u64 address, u64 end);
+int iommu_flush_dte(struct amd_iommu *iommu, u16 devid);
+int amd_iommu_v1_map_pages(struct io_pgtable_ops *ops, unsigned long iova,
+			   phys_addr_t paddr, size_t pgsize, size_t pgcount,
+			   int prot, gfp_t gfp, size_t *mapped);
+unsigned long amd_iommu_v1_unmap_pages(struct io_pgtable_ops *ops,
+				       unsigned long iova,
+				       size_t pgsize, size_t pgcount,
+				       struct iommu_iotlb_gather *gather);
 
 #ifdef CONFIG_AMD_IOMMU_DEBUGFS
 void amd_iommu_debugfs_setup(struct amd_iommu *iommu);
