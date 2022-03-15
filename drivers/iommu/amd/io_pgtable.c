@@ -318,9 +318,9 @@ static void free_clear_pte(u64 *pte, u64 pteval,
  * supporting all features of AMD IOMMU page tables like level skipping
  * and full 64 bit address spaces.
  */
-static int iommu_v1_map_pages(struct io_pgtable_ops *ops, unsigned long iova,
-			      phys_addr_t paddr, size_t pgsize, size_t pgcount,
-			      int prot, gfp_t gfp, size_t *mapped)
+int amd_iommu_v1_map_pages(struct io_pgtable_ops *ops, unsigned long iova,
+			   phys_addr_t paddr, size_t pgsize, size_t pgcount,
+			   int prot, gfp_t gfp, size_t *mapped)
 {
 	struct amd_io_pgtable *pgtable = io_pgtable_ops_to_data(ops);
 	struct iommu_pages_list freelist = IOMMU_PAGES_LIST_INIT(freelist);
@@ -395,10 +395,10 @@ out:
 	return ret;
 }
 
-static unsigned long iommu_v1_unmap_pages(struct io_pgtable_ops *ops,
-					  unsigned long iova,
-					  size_t pgsize, size_t pgcount,
-					  struct iommu_iotlb_gather *gather)
+unsigned long amd_iommu_v1_unmap_pages(struct io_pgtable_ops *ops,
+				       unsigned long iova,
+				       size_t pgsize, size_t pgcount,
+				       struct iommu_iotlb_gather *gather)
 {
 	struct amd_io_pgtable *pgtable = io_pgtable_ops_to_data(ops);
 	unsigned long long unmapped;
@@ -546,8 +546,8 @@ static struct io_pgtable *v1_alloc_pgtable(struct io_pgtable_cfg *cfg, void *coo
 	cfg->ias            = IOMMU_IN_ADDR_BIT_SIZE;
 	cfg->oas            = IOMMU_OUT_ADDR_BIT_SIZE;
 
-	pgtable->pgtbl.ops.map_pages    = iommu_v1_map_pages;
-	pgtable->pgtbl.ops.unmap_pages  = iommu_v1_unmap_pages;
+	pgtable->pgtbl.ops.map_pages    = amd_iommu_v1_map_pages;
+	pgtable->pgtbl.ops.unmap_pages  = amd_iommu_v1_unmap_pages;
 	pgtable->pgtbl.ops.iova_to_phys = iommu_v1_iova_to_phys;
 	pgtable->pgtbl.ops.read_and_clear_dirty = iommu_v1_read_and_clear_dirty;
 

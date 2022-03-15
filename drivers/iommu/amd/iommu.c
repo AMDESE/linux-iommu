@@ -1509,7 +1509,7 @@ static void domain_flush_complete(struct protection_domain *domain)
 		iommu_completion_wait(pdom_iommu_info->iommu);
 }
 
-static int iommu_flush_dte(struct amd_iommu *iommu, u16 devid)
+int iommu_flush_dte(struct amd_iommu *iommu, u16 devid)
 {
 	struct iommu_cmd cmd;
 
