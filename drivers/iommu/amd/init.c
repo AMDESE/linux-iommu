@@ -34,6 +34,7 @@
 #include <linux/crash_dump.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 #include "../irq_remapping.h"
 #include "../iommu-pages.h"
 
@@ -2196,6 +2197,19 @@ static int __init iommu_init_pci(struct amd_iommu *iommu)
 	if (check_feature(FEATURE_PPR) && amd_iommu_alloc_ppr_log(iommu))
 		return -ENOMEM;
 
+	/*
+	 * vIOMMU is advertised in this IOMMU's EFR[VIOMMUSup]
+	 * (iommu->features). Do not use check_feature()/amd_iommu_efr;
+	 * that global mask is the AND of every IOMMU and can hide the
+	 * bit on mixed systems.
+	 */
+	if (iommu->features & FEATURE_VIOMMU) {
+		ret = amd_viommu_init(iommu);
+		if (ret)
+			pr_err("Failed to initialize vIOMMU on %s\n",
+			       pci_name(iommu->dev));
+	}
+
 	if (iommu->cap & (1UL << IOMMU_CAP_NPCACHE)) {
 		pr_info("Using strict mode due to virtualization\n");
 		iommu_set_dma_strict();
@@ -2264,6 +2278,25 @@ static int __init iommu_init_pci(struct amd_iommu *iommu)
 	return pci_enable_device(iommu->dev);
 }
 
+static void print_viommu_info(void)
+{
+	struct amd_iommu *iommu;
+	const char *sep = "";
+
+	for_each_iommu(iommu) {
+		if (!amd_iommu_viommu_enabled(iommu))
+			continue;
+		if (!sep[0])
+			pr_info("vIOMMU enabled: ");
+		else
+			pr_cont("%s", sep);
+		pr_cont("%s", pci_name(iommu->dev));
+		sep = ", ";
+	}
+	if (sep[0])
+		pr_cont("\n");
+}
+
 static void print_iommu_info(void)
 {
 	int i;
@@ -2301,6 +2334,7 @@ static void print_iommu_info(void)
 		pr_info("V2 page table enabled (Paging mode : %d level)\n",
 			amd_iommu_gpt_level);
 	}
+	print_viommu_info();
 }
 
 static int __init amd_iommu_init_pci(void)

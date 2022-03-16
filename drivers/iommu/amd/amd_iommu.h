@@ -112,6 +112,11 @@ static inline bool check_feature(u64 mask)
 	return (amd_iommu_efr & mask);
 }
 
+static inline bool amd_iommu_viommu_enabled(struct amd_iommu *iommu)
+{
+	return iommu && (iommu->flags & AMD_IOMMU_FLAG_VIOMMU_EN);
+}
+
 static inline bool check_feature2(u64 mask)
 {
 	return (amd_iommu_efr2 & mask);
