@@ -26,6 +26,7 @@ void amd_iommu_restart_ga_log(struct amd_iommu *iommu);
 void amd_iommu_restart_ppr_log(struct amd_iommu *iommu);
 void amd_iommu_set_rlookup_table(struct amd_iommu *iommu, u16 devid);
 void iommu_feature_enable(struct amd_iommu *iommu, u8 bit);
+bool iommu_feature_enable_and_check(struct amd_iommu *iommu, u8 bit);
 void *__init iommu_alloc_4k_pages(struct amd_iommu *iommu,
 				  gfp_t gfp, size_t size);
 int amd_iommu_pdom_id_alloc(void);
@@ -46,6 +47,8 @@ void amd_iommu_debugfs_setup(struct amd_iommu *iommu);
 #else
 static inline void amd_iommu_debugfs_setup(struct amd_iommu *iommu) {}
 #endif
+
+extern bool amd_iommu_viommu;
 
 /* Needed for interrupt remapping */
 int amd_iommu_prepare(void);
