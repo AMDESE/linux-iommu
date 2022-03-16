@@ -156,6 +156,9 @@
 #define EVENT_TYPE_IOTLB_INV_TO	0x7
 #define EVENT_TYPE_INV_DEV_REQ	0x8
 #define EVENT_TYPE_INV_PPR_REQ	0x9
+#define EVENT_TYPE_GUEST_EVENT_FAULT	0xb
+#define EVENT_TYPE_VIOMMU_HW_ERR	0xc
+
 #define EVENT_TYPE_RMP_FAULT	0xd
 #define EVENT_TYPE_RMP_HW_ERR	0xe
 #define EVENT_DEVID_MASK	0xffff
@@ -265,6 +268,10 @@
 /* constants for event buffer handling */
 #define EVT_BUFFER_SIZE		8192 /* 512 entries */
 #define EVT_LEN_MASK		(0x9ULL << 56)
+
+/* Constants for IO_PAGE_FAULT event */
+#define IO_PAGE_FAULT_VFLAGS_SHIFT	27
+#define IO_PAGE_FAULT_VFLAGS_MASK	GENMASK_ULL(27, 23)
 
 /* Constants for PPR Log handling */
 #define PPR_LOG_ENTRIES		512
