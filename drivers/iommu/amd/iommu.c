@@ -214,7 +214,7 @@ static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_da
 }
 
 static void get_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
-		      struct dev_table_entry *dte)
+		       struct dev_table_entry *dte)
 {
 	unsigned long flags;
 	struct dev_table_entry *ptr;
@@ -1875,7 +1875,7 @@ void amd_iommu_domain_flush_pages(struct protection_domain *domain,
 }
 
 /* Flush the whole IO/TLB for a given protection domain - including PDE */
-static void amd_iommu_domain_flush_all(struct protection_domain *domain)
+void amd_iommu_domain_flush_all(struct protection_domain *domain)
 {
 	amd_iommu_domain_flush_pages(domain, 0,
 				     CMD_INV_IOMMU_ALL_PAGES_ADDRESS);
@@ -2225,6 +2225,29 @@ static void set_dte_gcr3_table(struct amd_iommu *iommu,
 		target->data[2] |= FIELD_PREP(DTE_GPT_LEVEL_MASK, GUEST_PGTABLE_4_LEVEL);
 }
 
+static void set_dte_viommu(struct amd_iommu *iommu,
+			   struct iommu_dev_data *dev_data,
+			   struct dev_table_entry *dte)
+{
+	u64 tmp;
+
+	if (!dev_data->vImuEn)
+		return;
+
+	/* vImuEn */
+	dte->data[3] |= (1ULL << DTE_VIOMMU_EN_SHIFT);
+
+	/* GDeviceID */
+	tmp = dev_data->gDevId & DTE_VIOMMU_GUESTID_MASK;
+	dte->data[3] |= (tmp << DTE_VIOMMU_GUESTID_SHIFT);
+
+	/* GuestID */
+	tmp = dev_data->gid & DTE_VIOMMU_GUESTID_MASK;
+	dte->data[3] |= (tmp << DTE_VIOMMU_GDEVICEID_SHIFT);
+
+	dte->data[0] |= DTE_FLAG_GV;
+}
+
 static void set_dte_entry(struct amd_iommu *iommu,
 			  struct iommu_dev_data *dev_data)
 {
@@ -2289,6 +2312,7 @@ static void set_dte_entry(struct amd_iommu *iommu,
 	}
 
 	set_dte_gcr3_table(iommu, dev_data, &new);
+	set_dte_viommu(iommu, dev_data, &new);
 
 	update_dte256(iommu, dev_data, &new);
 

@@ -501,6 +501,63 @@ static void _amd_viommu_destroy(struct iommufd_viommu *viommu)
 	amd_iommu_vminfo_free(iommu, vminfo);
 }
 
+static void set_dev_data_viommu(struct amd_iommu *iommu, u16 hDevId, u16 gid, u16 gDevId)
+{
+	struct iommu_dev_data *dev_data = search_dev_data(iommu, hDevId);
+
+	if (!dev_data) {
+		pr_err("%s: Failed to get host devid %#x\n", __func__, hDevId);
+		return;
+	}
+
+	dev_data->vImuEn = true;
+	dev_data->gid = gid;
+	dev_data->gDevId = gDevId;
+}
+
+static void dump_device_mapping(struct amd_iommu *iommu, u16 guestId, u16 gdev_id)
+{
+	void *addr;
+	u64 offset, val;
+	struct amd_iommu_vminfo *vminfo;
+
+	vminfo = amd_iommu_get_vminfo(guestId);
+	if (!vminfo)
+		return;
+
+	addr = vminfo->devid_table;
+	offset = gdev_id << 4;
+	val = *((u64 *)(addr + offset));
+
+	pr_debug("%s: guestId=%#x, gdev_id=%#x, base=%#llx, offset=%#llx(val=%#llx)\n", __func__,
+		 guestId, gdev_id, (unsigned long long)iommu_virt_to_phys(vminfo->devid_table),
+		 (unsigned long long)offset, (unsigned long long)val);
+}
+
+/*
+ * Program the DevID via VFCTRL registers
+ * This function will be called during VM init via VFIO.
+ */
+static void set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
+			       u16 guestId, u16 queueId, u16 gDevId)
+{
+	u64 val, tmp1, tmp2;
+	u8 __iomem *vfctrl;
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, hDevId=%#x, gDevId=%#x\n",
+		__func__, pci_dev_id(iommu->dev), guestId, hDevId, gDevId);
+
+	tmp1 = gDevId;
+	tmp1 = ((tmp1 & 0xFFFFULL) << 46);
+	tmp2 = hDevId;
+	tmp2 = ((tmp2 & 0xFFFFULL) << 14);
+	val = tmp1 | tmp2 | 0x8000000000000001ULL;
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId);
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET);
+
+	wbinvd_on_all_cpus();
+}
+
 /*
  * See include/linux/iommufd.h
  * struct iommufd_viommu_ops - vIOMMU specific operations

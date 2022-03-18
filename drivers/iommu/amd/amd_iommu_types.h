@@ -930,6 +930,10 @@ struct iommu_dev_data {
 	bool defer_attach;
 
 	struct ratelimit_state rs;        /* Ratelimit IOPF messages */
+
+	bool vImuEn;
+	u16 gid;
+	u16 gDevId;
 };
 
 /* Map HPET and IOAPIC ids to the devid used by the IOMMU */
