@@ -156,6 +156,9 @@ enum io_pgtable_fmt amd_iommu_pgtable = AMD_IOMMU_V1;
 /* Guest page table level */
 int amd_iommu_gpt_level = PAGE_MODE_4_LEVEL;
 
+/* Secure ATS support */
+bool amd_iommu_sats;
+
 int amd_iommu_guest_ir = AMD_IOMMU_GUEST_IR_VAPIC;
 static int amd_iommu_xt_mode = IRQ_REMAP_XAPIC_MODE;
 
@@ -1921,6 +1924,12 @@ static int __init init_iommu_all(struct acpi_table_header *table)
 			return ret;
 	}
 
+	if (amd_iommu_sats && !check_feature_on_all_iommus(FEATURE_SATSSUP)) {
+		pr_info("Secure ATS is not supported");
+		amd_iommu_sats = false;
+	}
+
+
 	return 0;
 }
 
@@ -3402,6 +3411,8 @@ static int __init parse_amd_iommu_options(char *str)
 			amd_iommu_pgtable = AMD_IOMMU_V1;
 		} else if (strncmp(str, "pgtbl_v2", 8) == 0) {
 			amd_iommu_pgtable = AMD_IOMMU_V2;
+		} else if (strncmp(str, "sats", 4) == 0) {
+			amd_iommu_sats = true;
 		} else {
 			pr_notice("Unknown option - '%s'\n", str);
 		}

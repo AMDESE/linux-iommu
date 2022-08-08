@@ -1578,8 +1578,25 @@ static void set_dte_entry(struct amd_iommu *iommu, u16 devid,
 
 	flags = dev_table[devid].data[1];
 
-	if (ats)
+	if (ats) {
 		flags |= DTE_FLAG_IOTLB;
+
+		/*
+		 * XXX: do not enable dev_data.ata.enabled if snp is ON &&
+		 * secure ATS feature is not enabled
+		 */
+
+		/*
+		 * Enable Secure ATS when :
+		 *   - SNP is enabled or
+		 *   - amd_iommu=sats is passed on command line
+		 */
+		if (amd_iommu_sats || amd_iommu_snp_en) {
+			flags |= DTE_FLAG_SATS;
+
+			dev_table[devid].data[2] |= DTE_HPT_MODE;
+		}
+	}
 
 	if (ppr) {
 		if (iommu_feature(iommu, FEATURE_EPHSUP))

@@ -96,6 +96,7 @@
 #define FEATURE_GATS_SHIFT	(12)
 #define FEATURE_GATS_MASK	(3ULL)
 #define FEATURE_GAM_VAPIC	(1ULL<<21)
+#define FEATURE_SATSSUP		(1ULL<<31)
 #define FEATURE_GIOSUP		(1ULL<<48)
 #define FEATURE_EPHSUP		(1ULL<<50)
 #define FEATURE_SNP		(1ULL<<63)
@@ -384,9 +385,10 @@
 #define DTE_FLAG_IW (1ULL << 62)
 
 #define DTE_FLAG_IOTLB	(1ULL << 32)
+#define DTE_FLAG_SATS	(1ULL << 42)
 #define DTE_FLAG_GIOV	(1ULL << 54)
 #define DTE_FLAG_GV	(1ULL << 55)
-#define DTE_FLAG_MASK	(0x3ffULL << 32)
+#define DTE_FLAG_MASK	(0x1fffULL << 32)
 #define DTE_GLX_SHIFT	(56)
 #define DTE_GLX_MASK	(3)
 #define DEV_DOMID_MASK	0xffffULL
@@ -404,6 +406,7 @@
 #define DTE_GCR3_SHIFT_C	43
 
 #define DTE_GPT_LEVEL_SHIFT	54
+#define DTE_HPT_MODE		(1ULL << 59)
 
 #define GCR3_VALID		0x01ULL
 
