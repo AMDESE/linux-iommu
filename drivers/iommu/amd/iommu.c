@@ -3422,14 +3422,6 @@ static int set_remap_table_entry_alias(struct pci_dev *pdev, u16 alias,
 	return 0;
 }
 
-static inline size_t get_irq_table_size(unsigned int max_irqs)
-{
-	if (!AMD_IOMMU_GUEST_IR_GA(amd_iommu_guest_ir))
-		return max_irqs * sizeof(u32);
-
-	return max_irqs * (sizeof(u64) * 2);
-}
-
 static struct irq_remap_table *alloc_irq_table(struct amd_iommu *iommu,
 					       u16 devid, struct pci_dev *pdev,
 					       unsigned int max_irqs)
@@ -4086,7 +4078,12 @@ static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
 int amd_iommu_update_ga(void *data, int cpu, bool ga_log_intr)
 {
 	struct amd_ir_data *ir_data = (struct amd_ir_data *)data;
-	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
+	struct irte_ga *entry;
+
+	if (!ir_data || !ir_data->entry)
+		return 0;
+
+	entry = (struct irte_ga *) ir_data->entry;
 
 	if (WARN_ON_ONCE(!AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir)))
 		return -EINVAL;
@@ -4151,6 +4148,11 @@ int amd_iommu_deactivate_guest_mode(void *data)
 
 	entry->lo.val = 0;
 	entry->hi.val = 0;
+
+//SURAVEE: HACK
+	if (ir_data->is_ext) {
+		return 0;
+	}
 
 	entry->lo.fields_remap.valid       = valid;
 	entry->lo.fields_remap.dm          = apic->dest_mode_logical;

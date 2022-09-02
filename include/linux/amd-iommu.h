@@ -11,6 +11,8 @@
 #include <linux/types.h>
 #include <linux/kvm_host.h>
 
+#include <asm/irq_remapping.h>
+
 struct amd_iommu;
 
 struct amd_iommu_svm_ops {
