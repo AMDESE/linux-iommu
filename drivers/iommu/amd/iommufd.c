@@ -242,4 +242,6 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.vdevice_init = _amd_viommu_vdevice_init,
 	.get_hw_queue_size = _amd_viommu_get_hw_queue_size,
 	.hw_queue_init = _amd_viommu_hw_queue_init,
+	.set_option = amd_viommu_guest_mmio_write,
+	.get_option = amd_viommu_guest_mmio_read,
 };
