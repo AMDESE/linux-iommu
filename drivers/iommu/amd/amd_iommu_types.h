@@ -646,6 +646,7 @@ struct protection_domain {
 	struct protection_domain *parent; /* Nested parent domain */
 	struct iommu_hwpt_amd_v2 guest_hwpt;
 	u16 guest_paging_mode;	/* Guest paging mode */
+	u16 guest_domain_id;	/* Guest domain ID */
 };
 
 /*

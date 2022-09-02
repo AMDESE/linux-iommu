@@ -2532,6 +2532,16 @@ int __amd_iommu_attach_device(struct device *dev, struct protection_domain *doma
 	/* Update device table */
 	amd_iommu_dev_update_dte(dev_data, true);
 
+//SURAVEE: CHECKME
+	/*
+	 * For nested domain, also setup domain ID mapping table
+	 * when attach a domain to a device.
+	 */
+	if (amd_iommu_domain_is_nested(domain))
+		ret = amd_viommu_domain_id_update(iommu, dev_data->gid,
+						  dev_data->gcr3_info.domid,
+						  domain->guest_domain_id,
+						  true);
 out:
 	mutex_unlock(&dev_data->mutex);
 

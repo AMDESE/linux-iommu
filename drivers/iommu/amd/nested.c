@@ -99,6 +99,8 @@ static int nested_gcr3_update(struct protection_domain *pdom, struct device *dev
 	if (!check_feature2(FEATURE_GCR3TRPMODE))
 		return -EOPNOTSUPP;
 
+	pdom->guest_domain_id = FIELD_GET(DTE_DOMID_MASK, hwpt->dte[1]);
+
 	if (FIELD_GET(DTE_GPT_LEVEL_MASK, hwpt->dte[2]) == GUEST_PGTABLE_5_LEVEL)
 		pdom->guest_paging_mode = PAGE_MODE_5_LEVEL;
 	else
@@ -110,8 +112,9 @@ static int nested_gcr3_update(struct protection_domain *pdom, struct device *dev
 	dev_data->gcr3_info.trp_gpa = hwpt_to_gcr3_trp(hwpt->dte);
 	/* Due to possible aliasing issue use nested domain ID */
 	dev_data->gcr3_info.domid = pdom->id;
-	pr_debug("%s: devid=%#x, domid=%#x, trp_gpa=%#llx, glx=%#x\n", __func__,
+	pr_debug("%s: devid=%#x, gdomid=%#x, hdomid=%#x, trp_gpa=%#llx, glx=%#x\n", __func__,
 		 pci_dev_id(pdev),
+		 pdom->guest_domain_id,
 		 dev_data->gcr3_info.domid,
 		 dev_data->gcr3_info.trp_gpa,
 		 dev_data->gcr3_info.glx);

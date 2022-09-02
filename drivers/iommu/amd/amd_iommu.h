@@ -235,4 +235,8 @@ static inline struct amd_iommu *get_amd_iommu_from_devid(u16 devid)
 int amd_iommu_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
 			  const struct iommu_user_data *user_data);
 
+/* VIOMMU */
+int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
+				u16 hdom_id, u16 gdom_id,
+				bool is_set);
 #endif /* AMD_IOMMU_H */

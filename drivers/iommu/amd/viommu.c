@@ -501,6 +501,66 @@ static void _amd_viommu_destroy(struct iommufd_viommu *viommu)
 	amd_iommu_vminfo_free(iommu, vminfo);
 }
 
+/*
+ * Program the DomID via VFCTRL registers
+ * This function will be called during VM init via VFIO.
+ */
+static void set_domain_mapping(struct amd_iommu *iommu, u16 guestId, u16 hDomId, u16 gDomId)
+{
+	u64 val, tmp1, tmp2;
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId);
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, dom_id=%#x, gdom_id=%#x, val=%#llx\n",
+		 __func__, pci_dev_id(iommu->dev), guestId, hDomId, gDomId, val);
+
+	tmp1 = gDomId;
+	tmp1 = ((tmp1 & 0xFFFFULL) << 46);
+	tmp2 = hDomId;
+	tmp2 = ((tmp2 & 0xFFFFULL) << 14);
+	val = tmp1 | tmp2 | 0x8000000000000001UL;
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
+	wbinvd_on_all_cpus();
+}
+
+static void dump_domain_mapping(struct amd_iommu *iommu, u16 gid, u16 gdom_id)
+{
+	void *addr;
+	u64 offset, val;
+	struct amd_iommu_vminfo *vminfo;
+
+	vminfo = amd_iommu_get_vminfo(gid);
+	if (!vminfo)
+		return;
+
+	addr = vminfo->domid_table;
+	offset = gdom_id << 3;
+	val = *((u64 *)(addr + offset));
+
+	pr_debug("%s: offset=%#llx(val=%#llx)\n", __func__,
+		(unsigned long long)offset,
+		(unsigned long long)val);
+}
+
+int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
+				u16 hdom_id, u16 gdom_id,
+				bool is_set)
+{
+	pr_debug("%s: guest_id %#x is %s domain id (host:%#x, guest:%#x)\n",
+		__func__, gid,
+		 is_set? "Mapping": "Unmapping",
+		 hdom_id, gdom_id);
+
+	if (is_set)
+		set_domain_mapping(iommu, gid, hdom_id, gdom_id);
+	else
+		clear_domain_mapping(iommu, gid, hdom_id, gdom_id);
+
+	dump_domain_mapping(iommu, gid, gdom_id);
+
+	return 0;
+}
+EXPORT_SYMBOL(amd_viommu_domain_id_update);
+
 static void set_dev_data_viommu(struct amd_iommu *iommu, u16 hDevId, u16 gid, u16 gDevId)
 {
 	struct iommu_dev_data *dev_data = search_dev_data(iommu, hDevId);
