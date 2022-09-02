@@ -180,4 +180,6 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.destroy = amd_iommufd_viommu_destroy,
 	.vdevice_size = VDEVICE_STRUCT_SIZE(struct amd_iommu_vdevice, core),
 	.vdevice_init = _amd_viommu_vdevice_init,
+	.set_option = amd_viommu_guest_mmio_write,
+	.get_option = amd_viommu_guest_mmio_read,
 };

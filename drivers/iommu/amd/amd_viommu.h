@@ -21,6 +21,11 @@ void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
 				   u16 guestId, u16 gDevId);
 
 u64 amd_viommu_get_vfmmio_addr(struct iommu_viommu_amd *data);
+
+int amd_viommu_guest_mmio_write(struct iommufd_viommu *viommu, u16 offset, u64 value);
+
+int amd_viommu_guest_mmio_read(struct iommufd_viommu *viommu, u16 offset, u64 *value);
+
 #else
 
 static inline int amd_viommu_init(struct amd_iommu *iommu)
@@ -48,6 +53,17 @@ static inline u64 amd_viommu_get_vfmmio_addr(struct iommu_viommu_amd *data)
 {
 	return 0;
 }
+
+static inline int amd_viommu_guest_mmio_write(struct iommufd_viommu *viommu, u16 offset, u64 value)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int amd_viommu_guest_mmio_read(struct iommufd_viommu *viommu, u16 offset, u64 *value)
+{
+	return -EOPNOTSUPP;
+}
+
 #endif /* CONFIG_AMD_IOMMU_IOMMUFD */
 
 #endif /* AMD_VIOMMU_H */
