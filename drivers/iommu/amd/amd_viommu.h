@@ -6,6 +6,14 @@
 #ifndef AMD_VIOMMU_H
 #define AMD_VIOMMU_H
 
+struct kvm;
+
+/* Extended Interrupt Remapping */
+enum ext_intremap_type {
+	EXT_INTREMAP_EVENT = 0,
+	EXT_INTREMAP_PPR,
+};
+
 #if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
 
 int amd_viommu_init(struct amd_iommu *iommu);
@@ -23,6 +31,13 @@ int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
 
 void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
 				   u16 guestId, u16 gDevId);
+
+int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
+				       struct kvm *kvm,
+				       enum ext_intremap_type type,
+				       u32 vcpu_id, u8 vector);
+
+struct ext_irte *amd_viommu_get_ext_irte(struct amd_iommu *iommu, u32 ext_id);
 #else
 
 static inline int amd_viommu_init(struct amd_iommu *iommu)
@@ -53,6 +68,11 @@ static inline void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hD
 {
 }
 
+static inline struct ext_irte *
+amd_viommu_get_ext_irte(struct amd_iommu *iommu, u32 ext_id)
+{
+	return NULL;
+}
 #endif /* CONFIG_AMD_IOMMU_IOMMUFD */
 
 #endif /* AMD_VIOMMU_H */
