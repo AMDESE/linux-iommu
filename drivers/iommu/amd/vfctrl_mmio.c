@@ -135,6 +135,16 @@ int amd_viommu_guest_mmio_write(struct iommufd_viommu *viommu, u16 offset, u64 v
 		writeq(val, vfctrl + 0x30);
 		break;
 	}
+	case MMIO_INTCAPXT_EVT_OFFSET:
+	{
+		amd_viommu_set_ext_int_remap_entry(viommu, EXT_INTREMAP_EVENT, value);
+		break;
+	}
+	case MMIO_INTCAPXT_PPR_OFFSET:
+	{
+		amd_viommu_set_ext_int_remap_entry(viommu, EXT_INTREMAP_PPR, value);
+		break;
+	}
 	default:
 		WARN_ON(1);
 		break;
