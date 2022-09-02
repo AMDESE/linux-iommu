@@ -3268,6 +3268,7 @@ static void _build_efr_guest_translation(struct amd_iommu *iommu, u64 *efr, u64 
 
 	*efr |= (amd_iommu_efr & FEATURE_GT);
 	*efr |= (amd_iommu_efr & FEATURE_GA);
+	*efr |= (amd_iommu_efr & FEATURE_X2APIC); //FIXME
 	*efr |= (amd_iommu_efr & FEATURE_GIOSUP);
 	*efr |= (amd_iommu_efr & FEATURE_PPR);
 	*efr |= (amd_iommu_efr & FEATURE_EPHSUP);
@@ -3591,14 +3592,6 @@ static int set_remap_table_entry_alias(struct pci_dev *pdev, u16 alias,
 	iommu_flush_dte(pci_seg->rlookup_table[alias], alias);
 
 	return 0;
-}
-
-static inline size_t get_irq_table_size(unsigned int max_irqs)
-{
-	if (!AMD_IOMMU_GUEST_IR_GA(amd_iommu_guest_ir))
-		return max_irqs * sizeof(u32);
-
-	return max_irqs * (sizeof(u64) * 2);
 }
 
 static struct irq_remap_table *alloc_irq_table(struct amd_iommu *iommu,
@@ -4263,6 +4256,11 @@ int amd_iommu_deactivate_guest_mode(void *data)
 	entry->lo.val = 0;
 	entry->hi.val = 0;
 
+//SURAVEE: HACK
+	if (ir_data->is_ext) {
+		return 0;
+	}
+
 	entry->lo.fields_remap.valid       = valid;
 	entry->lo.fields_remap.dm          = apic->dest_mode_logical;
 	entry->lo.fields_remap.int_type    = APIC_DELIVERY_MODE_FIXED;
@@ -4416,7 +4414,12 @@ int amd_iommu_create_irq_domain(struct amd_iommu *iommu)
 int amd_iommu_update_ga(int cpu, bool is_run, void *data)
 {
 	struct amd_ir_data *ir_data = (struct amd_ir_data *)data;
-	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
+	struct irte_ga *entry;
+
+	if (!ir_data || !ir_data->entry)
+		return 0;
+
+	entry = (struct irte_ga *) ir_data->entry;
 
 	if (!AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir) ||
 	    !entry || !entry->lo.fields_vapic.guest_mode)

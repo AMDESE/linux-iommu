@@ -55,6 +55,12 @@
 #define VIOMMU_GUEST_EVT_B_LOG_BASE	0x4800000000ULL
 #define VIOMMU_GUEST_EVT_B_LOG_SIZE	(1 << 19)
 
+/* Extended Interrupt Remapping */
+enum ext_intremap_type {
+	EXT_INTREMAP_EVENT = 0,
+	EXT_INTREMAP_PPR,
+};
+
 extern const struct iommufd_viommu_ops amd_viommu_ops;
 
 extern u64 amd_viommu_get_vfmmio_addr(struct iommu_viommu_amd *data);
@@ -63,4 +69,6 @@ extern int amd_viommu_init(struct amd_iommu *iommu);
 
 extern int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_vminfo *vminfo);
 
+extern int amd_viommu_set_ext_int_remap_entry(struct amd_iommu *iommu, enum ext_intremap_type type,
+					      u64 val, u16 gid);
 #endif /* AMD_VIOMMU_H */

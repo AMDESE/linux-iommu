@@ -196,6 +196,14 @@ static inline struct protection_domain *to_pdomain(struct iommu_domain *dom)
 	return container_of(dom, struct protection_domain, domain);
 }
 
+static inline size_t get_irq_table_size(unsigned int max_irqs)
+{
+	if (!AMD_IOMMU_GUEST_IR_GA(amd_iommu_guest_ir))
+		return max_irqs * sizeof(u32);
+
+	return max_irqs * (sizeof(u64) * 2);
+}
+
 bool translation_pre_enabled(struct amd_iommu *iommu);
 int __init add_special_device(u8 type, u8 id, u32 *devid, bool cmd_line);
 
@@ -240,4 +248,5 @@ int amd_iommu_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *pa
 int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
 				u16 hdom_id, u16 gdom_id,
 				bool is_set);
+struct ext_irte * amd_viommu_get_ext_irte(struct amd_iommu *iommu, u32 ext_id);
 #endif /* AMD_IOMMU_H */
