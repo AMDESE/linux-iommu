@@ -264,9 +264,8 @@ static int __init sp_mod_init(void)
 	if (ret)
 		return ret;
 
-#ifdef CONFIG_CRYPTO_DEV_SP_PSP
-	psp_pci_init();
-#endif
+	if (IS_ENABLED(CONFIG_CRYPTO_DEV_SP_PSP))
+		psp_pci_init();
 
 	initialized = true;
 
@@ -296,10 +295,8 @@ int __init sev_module_init(void)
 static void __exit sp_mod_exit(void)
 {
 #ifdef CONFIG_X86
-
-#ifdef CONFIG_CRYPTO_DEV_SP_PSP
-	psp_pci_exit();
-#endif
+	if (IS_ENABLED(CONFIG_CRYPTO_DEV_SP_PSP))
+		psp_pci_exit();
 
 	sp_pci_exit();
 #endif
