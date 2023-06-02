@@ -149,7 +149,7 @@ int sp_request_psp_irq(struct sp_device *sp, irq_handler_t handler,
 void sp_free_psp_irq(struct sp_device *sp, void *data);
 struct sp_device *sp_get_psp_master_device(void);
 
-#ifdef CONFIG_CRYPTO_DEV_SP_CCP
+#if defined(CONFIG_CRYPTO_DEV_SP_CCP) || defined(CONFIG_CRYPTO_DEV_SP_CCP_MODULE)
 
 int ccp_dev_init(struct sp_device *sp);
 void ccp_dev_destroy(struct sp_device *sp);
@@ -168,7 +168,7 @@ static inline void ccp_dev_suspend(struct sp_device *sp) { }
 static inline void ccp_dev_resume(struct sp_device *sp) { }
 #endif	/* CONFIG_CRYPTO_DEV_SP_CCP */
 
-#ifdef CONFIG_CRYPTO_DEV_SP_PSP
+#if defined(CONFIG_CRYPTO_DEV_SP_PSP) || defined(CONFIG_CRYPTO_DEV_SP_PSP_MODULE)
 
 int psp_dev_init(struct sp_device *sp);
 void psp_pci_init(void);
