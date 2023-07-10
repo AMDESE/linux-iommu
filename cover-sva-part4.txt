@@ -1,0 +1,90 @@
+iommu/amd: SVA Support (Part 4) - SVA and IOPF
+
+This is part 4 of the 4-part series to introduce Share Virtual Address
+(SVA) support for devices, which can support PCI ATS, PASID and PRI
+capabilities. These devices are referred to as SVA-capable devices in
+this series.
+
+It contains the following enhancements:
+
+* Patch 1 - 3:
+  Rename, add support to enable/disable features, update DTE etc.
+
+* Patch 4 - 12:
+  Add IOPF support
+
+* Patch 13 - 15:
+  Introduce SVA support
+
+
+This patch series is based on top of iommu/next (Commit f379a7e9c3b5).
+
+This is also available at github :
+  https://github.com/AMDESE/linux-iommu/tree/iommu_sva_part4_v7_v6.8_rc7
+
+
+Thanks everyone who reviewed previous version and provided valuable feedbacks.
+
+Changes from v6 -> v7:
+  - Rebased on top of iommu/next
+  - Trivial white space fix
+  - Added Reviewed-by tag
+
+
+v6: https://lore.kernel.org/linux-iommu/20240209112930.63663-1-vasant.hegde@amd.com/T/#t
+
+Changes from v5 -> v6:
+  - Rebased on top of SVA Part3 v7
+  - Reorganized, added few patches
+    - Patch to track per device max PASIDs
+    - Patch to setup GCR3 table for SVA capable domain
+    - Patch to enable PASID/PRI only when domain is capable of PRI support
+  - Dropped below patches as they are not needed anymore
+    - iommu/amd: Add GCR3 [un]initialization function
+    - iommu/amd: Add support for add/remove device for IOPF
+  - Rework sev[/remove_dev]_dev_pasid() functions
+  - Dropped late gcr3 setup patch
+
+v5: https://lore.kernel.org/linux-iommu/20240118073339.6978-1-vasant.hegde@amd.com/T/#t
+
+Changes from v4 -> v5:
+  - Rebased on top of v6.7-rc8 + SVA Part3 patches
+  - Few minor improvements like renaming structure name for better, introducing macros, etc
+
+
+V4: https://lore.kernel.org/linux-iommu/20231221111558.64652-1-vasant.hegde@amd.com/
+
+Changes from v3 -> v4:
+  - Moved amd_iommu_dev_update_dte() after set/clear_dte() so that we can avoid
+    forward declaration
+  - Dropped "iommu/amd: Do not override PASID entry in GCR3 table"
+  - Added patch to fix PPR interrupt processing logic
+  - Renamed enable_iommus_v2() -> enable_iommus_ppr()
+  - Added ops->domain_alloc_sva()
+  - Added domain_alloc_sva() support and reorganize SVA patches
+  - In error path iommu_call_iopf_notifier() calls amd_iommu_complete_ppr()
+    instead of amd_iommu_page_response()
+
+
+v3: https://lore.kernel.org/linux-iommu/20231016104351.5749-1-vasant.hegde@amd.com/T/#t
+
+Changes from v2 -> v3:
+  - Rename sva.c -> pasid.c
+  - Changed amd_iommu_sva_supported() -> amd_iommu_pasid_supported()
+  - Added patch to update/flush DTE
+  - Rework part of SVA support
+  - Move IOPF enablement to PASID bind time
+
+v2: https://lore.kernel.org/linux-iommu/20230911121046.1025732-1-vasant.hegde@amd.com/T/#u
+
+Changes from v1 -> v2:
+  - Added new patch to fix PASID override issue in GCR3 table
+  - Complete rework of SVA code on top of Tina's SVA series.
+  - Rework SVA enable code
+  - Reworked IOPF handler code on top of Baolu's IOPF improvement series.
+
+
+v1: https://lore.kernel.org/linux-iommu/20230823140415.729050-1-vasant.hegde@amd.com/T/#t
+
+Thank you,
+Vasant / Suravee
