@@ -807,6 +807,9 @@ struct amd_iommu {
 	/* IOPF support */
 	struct iopf_queue *iopf_queue;
 	unsigned char iopfq_name[32];
+
+	/* HW vIOMMU support */
+	struct protection_domain *viommu_pdom;
 };
 
 static inline struct amd_iommu *dev_to_amd_iommu(struct device *dev)

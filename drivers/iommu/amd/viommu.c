@@ -92,6 +92,78 @@ static int __init viommu_vf_vfcntl_init(struct amd_iommu *iommu)
 	return 0;
 }
 
+static struct iommu_domain *
+viommu_domain_alloc(struct amd_iommu *iommu)
+{
+	int ret;
+	struct pt_iommu_amdv1_cfg cfg = {};
+	struct protection_domain *domain;
+
+	domain = protection_domain_alloc();
+	if (!domain)
+		return NULL;
+
+	domain->pd_mode = PD_MODE_V1;
+	domain->iommu.driver_ops = &amd_hw_driver_ops_v1;
+	domain->iommu.nid = dev_to_node(&iommu->dev->dev);
+
+	cfg.common.features = BIT(PT_FEAT_DYNAMIC_TOP) |
+			      BIT(PT_FEAT_AMDV1_ENCRYPT_TABLES) |
+			      BIT(PT_FEAT_AMDV1_FORCE_COHERENCE);
+	cfg.common.features |= BIT(PT_FEAT_FLUSH_RANGE);
+	cfg.common.hw_max_vasz_lg2 =
+		min(64, (amd_iommu_hpt_level - 1) * 9 + 21);
+	cfg.common.hw_max_oasz_lg2 = 52;
+	cfg.starting_level = 2;
+	domain->domain.ops = &amdv1_ops;
+
+	ret = pt_iommu_amdv1_init(&domain->amdv1, &cfg, GFP_KERNEL);
+	if (ret) {
+		amd_iommu_domain_free(&domain->domain);
+		return ERR_PTR(ret);
+	}
+
+	/*
+	 * Narrow the supported page sizes to those selected by the kernel
+	 * command line.
+	 */
+	domain->domain.pgsize_bitmap &= amd_iommu_pgsize_bitmap;
+	domain->domain.type = IOMMU_DOMAIN_UNMANAGED;
+
+	return &domain->domain;
+}
+
+static int viommu_private_space_init(struct amd_iommu *iommu)
+{
+	struct iommu_domain *dom;
+	struct protection_domain *pdom;
+	struct pt_iommu_amdv1_hw_info pt_info;
+
+	/*
+	 * Setup page table root pointer, Guest MMIO and
+	 * Cmdbuf Dirty Status regions.
+	 */
+	dom = viommu_domain_alloc(iommu);
+	if (!dom) {
+		pr_err("%s: Failed to initialize private space\n", __func__);
+		goto err_out;
+	}
+
+	pdom = to_pdomain(dom);
+	iommu->viommu_pdom = pdom;
+
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+	pr_debug("%s: devid=%#x, pte_root=%#llx\n",
+		 __func__, iommu->devid,
+		 (unsigned long long)pt_info.host_pt_root);
+
+	return 0;
+err_out:
+	if (dom)
+		amd_iommu_domain_free(dom);
+	return -ENOMEM;
+}
+
 /*
  * Returns VF MMIO BAR offset for the give guest ID which will be
  * mapped to guest vIOMMU 3rd 4K MMIO address
@@ -116,6 +188,10 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 		return ret;
 
 	ret = viommu_vf_vfcntl_init(iommu);
+	if (ret)
+		return ret;
+
+	ret = viommu_private_space_init(iommu);
 	if (ret)
 		return ret;
 
