@@ -17,6 +17,7 @@
 #include "amd_iommu.h"
 #include "amd_iommu_types.h"
 #include "amd_viommu.h"
+#include "../iommu-pages.h"
 
 static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 {
@@ -39,9 +40,12 @@ static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 	}
 }
 
+static void viommu_private_space_uninit(struct amd_iommu *iommu);
+
 void __init amd_viommu_uninit(struct amd_iommu *iommu)
 {
 	iommu->flags &= ~AMD_IOMMU_FLAG_VIOMMU_EN;
+	viommu_private_space_uninit(iommu);
 	amd_viommu_vf_vfcntl_unmap(iommu);
 }
 
@@ -111,6 +115,187 @@ err_out:
 }
 
 /*
+ * Restore WB and free @va. If WB restore fails, leak the pages so
+ * UC-MINUS direct-map PTEs and the PAT memtype reservation are not
+ * returned to the buddy allocator.
+ */
+static void viommu_priv_wb_free(void *va, size_t size)
+{
+	if (WARN_ON_ONCE(set_memory_wb((unsigned long)va,
+				       size >> PAGE_SHIFT)))
+		return;
+	iommu_free_pages(va);
+}
+
+/*
+ * Allocate backing pages, mark UC, and map at @iova in viommu_pdom.
+ * *@out_va is NULL on any failure. @gfp is used for the backing
+ * folio and iommu_map() page tables.
+ */
+static int viommu_priv_alloc_map(struct amd_iommu *iommu, u64 iova, size_t size,
+				 gfp_t gfp, void **out_va)
+{
+	int ret;
+	void *va;
+	int nid = iommu && iommu->dev ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
+
+	*out_va = NULL;
+
+	if (!iommu || !iommu->viommu_pdom)
+		return -EINVAL;
+
+	va = iommu_alloc_pages_node_sz(nid, gfp, size);
+	if (!va)
+		return -ENOMEM;
+
+	/*
+	 * IOMMU spec: backing storage must be UC. set_memory_uc()
+	 * splits covering 2MB direct-map pages to 4K; set_memory_wb()
+	 * does not re-coalesce them.
+	 */
+	ret = set_memory_uc((unsigned long)va, size >> PAGE_SHIFT);
+	if (ret)
+		goto err_uc;
+
+	ret = iommu_map(&iommu->viommu_pdom->domain, iova,
+			iommu_virt_to_phys(va), size,
+			IOMMU_READ | IOMMU_WRITE, gfp);
+	if (ret)
+		goto err_uc;
+
+	*out_va = va;
+	return 0;
+
+err_uc:
+	viommu_priv_wb_free(va, size);
+	return ret;
+}
+
+static bool viommu_cmdbuf_enabled(struct amd_iommu *iommu)
+{
+	if (!iommu->mmio_base)
+		return false;
+	return readq(iommu->mmio_base + MMIO_CONTROL_OFFSET) &
+	       BIT_ULL(CONTROL_CMDBUF_EN);
+}
+
+/*
+ * Unmap @iova if the command buffer is still enabled, restore WB, and
+ * free @cpu_va. Skip IOTLB invalidation after disable_iommus().
+ */
+static void viommu_priv_unmap_free(struct amd_iommu *iommu, u64 iova, size_t size,
+				   void *cpu_va)
+{
+	size_t unmapped;
+
+	if (!cpu_va)
+		return;
+	if (!iommu || !iommu->viommu_pdom)
+		return;
+
+	if (viommu_cmdbuf_enabled(iommu)) {
+		unmapped = iommu_unmap(&iommu->viommu_pdom->domain, iova, size);
+		WARN_ON(unmapped != size);
+	}
+
+	viommu_priv_wb_free(cpu_va, size);
+}
+
+static void *alloc_private_subregion(struct amd_iommu *iommu, u64 base, size_t size)
+{
+	void *region = NULL;
+	int ret;
+
+	ret = viommu_priv_alloc_map(iommu, base, size, GFP_KERNEL, &region);
+	if (ret)
+		return NULL;
+
+	pr_debug("%s: base=%#llx, size=%#lx, subregion=%#llx(%#llx)\n",
+		 __func__, base, size, (unsigned long long)region, iommu_virt_to_phys(region));
+
+	return region;
+}
+
+static void viommu_private_space_uninit(struct amd_iommu *iommu)
+{
+	int i;
+	u64 base;
+	struct protection_domain *pdom;
+	struct iommu_domain *dom;
+
+	pdom = iommu->viommu_pdom;
+	if (!pdom)
+		return;
+
+	for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++) {
+		if (!iommu->viommu_priv_region[i])
+			continue;
+		base = VIOMMU_PRIV_REGION_BASE + (i * VIOMMU_PRIV_SUBREGION_SIZE);
+		viommu_priv_unmap_free(iommu, base, VIOMMU_PRIV_SUBREGION_SIZE,
+					     iommu->viommu_priv_region[i]);
+		iommu->viommu_priv_region[i] = NULL;
+	}
+
+	dom = &pdom->domain;
+	amd_iommu_pdom_unbind_iommu(iommu, pdom);
+	amd_iommu_domain_free(dom);
+	iommu->viommu_pdom = NULL;
+}
+
+static int viommu_private_space_init(struct amd_iommu *iommu)
+{
+	int i, ret;
+	u64 base;
+	struct iommu_domain *dom;
+	struct protection_domain *pdom;
+	struct pt_iommu_amdv1_hw_info pt_info;
+
+	dom = amd_iommu_domain_alloc_paging_v1(&iommu->dev->dev, 0);
+	if (IS_ERR(dom)) {
+		pr_err("%s: Failed to initialize private space\n", __func__);
+		return PTR_ERR(dom);
+	}
+
+	/*
+	 * Skipped iommu_domain_init(). set_dte_entry() only programs
+	 * v1 when type has __IOMMU_DOMAIN_PAGING.
+	 */
+	dom->type = IOMMU_DOMAIN_UNMANAGED;
+
+	pdom = to_pdomain(dom);
+	iommu->viommu_pdom = pdom;
+
+	ret = amd_iommu_pdom_bind_iommu(iommu, pdom);
+	if (ret) {
+		amd_iommu_domain_free(dom);
+		iommu->viommu_pdom = NULL;
+		return ret;
+	}
+
+	/*
+	 * Each private region requires to 8MB of memory to be allocated
+	 * and mapped. Split the region into 4 x 2MB-subregion.
+	 */
+	for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++) {
+		base = VIOMMU_PRIV_REGION_BASE + (i * VIOMMU_PRIV_SUBREGION_SIZE);
+		iommu->viommu_priv_region[i] = alloc_private_subregion(iommu, base,
+								       VIOMMU_PRIV_SUBREGION_SIZE);
+		if (!iommu->viommu_priv_region[i]) {
+			pr_err("%s: Failed to allocate vIOMMU private subregion %d\n", __func__, i);
+			viommu_private_space_uninit(iommu);
+			return -ENOMEM;
+		}
+	}
+
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+	pr_debug("%s: devid=%#x, pte_root=%#llx\n",
+		 __func__, iommu->devid,
+		 (unsigned long long)pt_info.host_pt_root);
+
+	return 0;
+}
+
+/*
  * Returns VF MMIO BAR offset for the given guest ID which will be
  * mapped to guest vIOMMU 3rd 4K MMIO address
  */
@@ -130,6 +315,13 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 	if (ret)
 		return ret;
 
+	ret = viommu_private_space_init(iommu);
+	if (ret)
+		goto err;
+
 	iommu->flags |= AMD_IOMMU_FLAG_VIOMMU_EN;
 	return 0;
+err:
+	amd_viommu_uninit(iommu);
+	return ret;
 }
