@@ -1798,7 +1798,12 @@ static void __init free_sysfs(struct amd_iommu *iommu)
 static void __init free_iommu_one(struct amd_iommu *iommu)
 {
 	free_sysfs(iommu);
-	/* Tear down vIOMMU before IOMMU buffers and MMIO are released. */
+	/*
+	 * Tear down vIOMMU before buffers and MMIO are released.
+	 * IOTLB invalidation runs only while CONTROL_CMDBUF_EN is
+	 * set (amd_viommu_init() unwind). disable_iommus() clears
+	 * that bit first on the boot-failure path.
+	 */
 	amd_viommu_uninit(iommu);
 	free_iommu_buffers(iommu);
 	amd_iommu_free_ppr_log(iommu);
