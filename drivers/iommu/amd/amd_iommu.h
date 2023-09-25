@@ -208,6 +208,8 @@ void amd_iommu_domain_set_pgtable(struct protection_domain *domain,
 struct dev_table_entry *get_dev_table(struct amd_iommu *iommu);
 struct iommu_dev_data *search_dev_data(struct amd_iommu *iommu, u16 devid);
 
+int iommu_completion_wait(struct amd_iommu *iommu);
+
 /* NESTED */
 struct iommu_domain *
 amd_iommu_domain_alloc_nested(struct device *dev, struct iommu_domain *parent,
