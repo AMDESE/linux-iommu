@@ -203,8 +203,11 @@
 #define CONTROL_PPR_AUTO_RSP_AON 48
 #define CONTROL_XT_EN		50
 #define CONTROL_INTCAPXT_EN	51
+#define CONTROL_VCMD_EN         52
+#define CONTROL_VIOMMU_EN       53
 #define CONTROL_GCR3TRPMODE	58
 #define CONTROL_IRTCACHEDIS	59
+#define CONTROL_GSTBUFFERTRPMODE	60
 #define CONTROL_SNPAVIC_EN	61
 
 #define CTRL_INV_TO_MASK	7
@@ -798,6 +801,9 @@ struct amd_iommu {
 	/* virtual addresses of vIOMMU VF/VF_CNTL BAR */
 	u8 __iomem *vf_base;
 	u8 __iomem *vfctrl_base;
+
+	void *guest_mmio1;
+	void *guest_mmio2;
 
 	/* pci domain of this IOMMU */
 	struct amd_iommu_pci_seg *pci_seg;
