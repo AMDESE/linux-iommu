@@ -131,6 +131,37 @@ err_out:
 	return -ENOMEM;
 }
 
+static int viommu_private_space_init(struct amd_iommu *iommu)
+{
+	struct iommu_domain *dom;
+	struct protection_domain *pdom;
+	struct pt_iommu_amdv1_hw_info pt_info;
+
+	/*
+	 * Setup page table root pointer, Guest MMIO and
+	 * Cmdbuf Dirty Status regions.
+	 */
+	dom = amd_iommu_domain_alloc_paging_v1(&iommu->dev->dev, 0);
+	if (!dom) {
+		pr_err("%s: Failed to initialize private space\n", __func__);
+		goto err_out;
+	}
+
+	pdom = to_pdomain(dom);
+	iommu->viommu_pdom = pdom;
+
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+	pr_debug("%s: devid=%#x, pte_root=%#llx\n",
+		 __func__, iommu->devid,
+		 (unsigned long long)pt_info.host_pt_root);
+
+	return 0;
+err_out:
+	if (dom)
+		amd_iommu_domain_free(dom);
+	return -ENOMEM;
+}
+
 /*
  * Returns VF MMIO BAR offset for the give guest ID which will be
  * mapped to guest vIOMMU 3rd 4K MMIO address
@@ -159,6 +190,10 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 		return ret;
 
 	amd_viommu_gid_ida_init(iommu);
+
+	ret = viommu_private_space_init(iommu);
+	if (ret)
+		return ret;
 
 	return 0;
 }

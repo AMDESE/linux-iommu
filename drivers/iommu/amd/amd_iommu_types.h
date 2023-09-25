@@ -814,6 +814,9 @@ struct amd_iommu {
 
 	struct ida gid_ida;		 /* guest IDs for this IOMMU */
 	bool gid_ida_inited;
+
+	/* HW vIOMMU support */
+	struct protection_domain *viommu_pdom;
 };
 
 static inline struct amd_iommu *dev_to_amd_iommu(struct device *dev)
