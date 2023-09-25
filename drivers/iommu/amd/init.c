@@ -34,6 +34,7 @@
 #include <linux/crash_dump.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 #include "../irq_remapping.h"
 #include "../iommu-pages.h"
 
@@ -2072,6 +2073,12 @@ static int __init iommu_init_pci(struct amd_iommu *iommu)
 
 	if (check_feature(FEATURE_PPR) && amd_iommu_alloc_ppr_log(iommu))
 		return -ENOMEM;
+
+	ret = amd_viommu_init(iommu);
+	if (ret) {
+		pr_err("Failed to initialize vIOMMU.\n");
+		return ret;
+	}
 
 	if (iommu->cap & (1UL << IOMMU_CAP_NPCACHE)) {
 		pr_info("Using strict mode due to virtualization\n");

@@ -38,6 +38,17 @@
 #define MMIO_RANGE_OFFSET	0x0c
 #define MMIO_MISC_OFFSET	0x10
 
+/* vIOMMU Capability offsets (from IOMMU Capability Header) */
+#define MMIO_VSC_HDR_OFFSET		0x00
+#define MMIO_VSC_INFO_OFFSET		0x00
+#define MMIO_VSC_VF_BAR_LO_OFFSET	0x08
+#define MMIO_VSC_VF_BAR_HI_OFFSET	0x0c
+#define MMIO_VSC_VF_CNTL_BAR_LO_OFFSET	0x10
+#define MMIO_VSC_VF_CNTL_BAR_HI_OFFSET	0x14
+
+#define IOMMU_VSC_INFO_REV(x)	((x >> 16) & 0xFF)
+#define IOMMU_VSC_INFO_ID(x)	(x & 0xFFFF)
+
 /* Masks, shifts and macros to parse the device range capability */
 #define MMIO_RANGE_LD_MASK	0xff000000
 #define MMIO_RANGE_FD_MASK	0x00ff0000
@@ -65,12 +76,15 @@
 #define MMIO_PPR_LOG_OFFSET	0x0038
 #define MMIO_GA_LOG_BASE_OFFSET	0x00e0
 #define MMIO_GA_LOG_TAIL_OFFSET	0x00e8
+#define MMIO_PPRB_LOG_OFFSET	0x00f0
+#define MMIO_EVTB_LOG_OFFSET	0x00f8
 #define MMIO_MSI_ADDR_LO_OFFSET	0x015C
 #define MMIO_MSI_ADDR_HI_OFFSET	0x0160
 #define MMIO_MSI_DATA_OFFSET	0x0164
 #define MMIO_INTCAPXT_EVT_OFFSET	0x0170
 #define MMIO_INTCAPXT_PPR_OFFSET	0x0178
 #define MMIO_INTCAPXT_GALOG_OFFSET	0x0180
+#define MMIO_VIOMMU_STATUS_OFFSET	0x0190
 #define MMIO_EXT_FEATURES2	0x01A0
 #define MMIO_CMD_HEAD_OFFSET	0x2000
 #define MMIO_CMD_TAIL_OFFSET	0x2008
@@ -189,10 +203,15 @@
 #define CONTROL_GAM_EN		25
 #define CONTROL_GALOG_EN	28
 #define CONTROL_GAINT_EN	29
+#define CONTROL_DUALPPRLOG_EN   30
+#define CONTROL_DUALEVTLOG_EN   32
+#define CONTROL_PPR_AUTO_RSP_EN 39
+#define CONTROL_BLKSTOPMRK_EN   41
 #define CONTROL_NUM_INT_REMAP_MODE	43
 #define CONTROL_NUM_INT_REMAP_MODE_MASK	0x03
 #define CONTROL_NUM_INT_REMAP_MODE_2K	0x01
 #define CONTROL_EPH_EN		45
+#define CONTROL_PPR_AUTO_RSP_AON 48
 #define CONTROL_XT_EN		50
 #define CONTROL_INTCAPXT_EN	51
 #define CONTROL_GCR3TRPMODE	58
@@ -444,6 +463,13 @@
 
 #define DTE_GPT_LEVEL_SHIFT	54
 #define DTE_GPT_LEVEL_MASK	GENMASK_ULL(55, 54)
+
+/* vIOMMU bit fields */
+#define DTE_VIOMMU_EN_SHIFT		15
+#define DTE_VIOMMU_GUESTID_SHIFT	16
+#define DTE_VIOMMU_GUESTID_MASK		0xFFFF
+#define DTE_VIOMMU_GDEVICEID_SHIFT	32
+#define DTE_VIOMMU_GUESTID_MASK		0xFFFF
 
 #define GCR3_VALID		0x01ULL
 
@@ -730,6 +756,23 @@ struct amd_iommu {
 	 * pointers.
 	 */
 	u16 cap_ptr;
+
+	/* Vendor-Specific Capability (VSC) pointer. */
+	u16 vsc_offset;
+
+	/*
+	 * VF MMIO base physical address. This is needed to calculate/pass
+	 * per guest VF MMIO address (3rd 4K of IOMMU MMIO space)
+	 */
+	u64 vf_base_phys;
+
+	/* virtual addresses of vIOMMU VF/VF_CNTL BAR */
+	u8 __iomem *vf_base;
+	u8 __iomem *vfctrl_base;
+
+	struct protection_domain *viommu_pdom;
+	void *guest_mmio;
+	void *cmdbuf_dirty_mask;
 
 	/* pci domain of this IOMMU */
 	struct amd_iommu_pci_seg *pci_seg;
