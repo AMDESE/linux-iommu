@@ -729,6 +729,9 @@ struct amd_iommu {
 	u8 __iomem *vf_base;
 	u8 __iomem *vfctrl_base;
 
+	void *guest_mmio1;
+	void *guest_mmio2;
+
 	/* pci domain of this IOMMU */
 	struct amd_iommu_pci_seg *pci_seg;
 
