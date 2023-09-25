@@ -417,6 +417,13 @@
 /* Guest ID bits 0-14; bit 15 is reserved for secure vIOMMU. */
 #define VIOMMU_MAX_GID		0x7FFF
 
+/*
+ * Total IOMMU private region is 8MB (4 x 2MB-subregion)
+ */
+#define VIOMMU_PRIV_REGION_BASE		(0)
+#define VIOMMU_PRIV_SUBREGION_CNT	(4)
+#define VIOMMU_PRIV_SUBREGION_SIZE	(0x200000)  /* 2MB */
+
 /* Timeout stuff */
 #define LOOP_TIMEOUT		100000
 #define MMIO_STATUS_TIMEOUT	2000000
@@ -804,6 +811,10 @@ struct amd_iommu {
 	unsigned char iopfq_name[32];
 
 	struct ida gid_ida;		 /* guest IDs for this IOMMU */
+
+	/* HW vIOMMU support */
+	struct protection_domain *viommu_pdom;
+	void *viommu_priv_region[VIOMMU_PRIV_SUBREGION_CNT];
 };
 
 static inline struct amd_iommu *dev_to_amd_iommu(struct device *dev)
