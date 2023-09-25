@@ -1551,7 +1551,7 @@ static void domain_flush_complete(struct protection_domain *domain)
 		amd_iommu_completion_wait(pdom_iommu_info->iommu);
 }
 
-static int iommu_flush_dte(struct amd_iommu *iommu, u16 devid)
+int iommu_flush_dte(struct amd_iommu *iommu, u16 devid)
 {
 	struct iommu_cmd cmd;
 
@@ -2399,6 +2399,16 @@ static void pdom_detach_iommu(struct amd_iommu *iommu,
 	spin_unlock_irqrestore(&pdom->lock, flags);
 }
 
+int amd_iommu_pdom_bind_iommu(struct amd_iommu *iommu, struct protection_domain *pdom)
+{
+	return pdom_attach_iommu(iommu, pdom);
+}
+
+void amd_iommu_pdom_unbind_iommu(struct amd_iommu *iommu, struct protection_domain *pdom)
+{
+	pdom_detach_iommu(iommu, pdom);
+}
+
 /*
  * If a device is not yet associated with a domain, this function makes the
  * device visible in the domain
@@ -2726,12 +2736,12 @@ static void amd_iommu_iotlb_sync(struct iommu_domain *domain,
 	iommu_put_pages_list(&gather->freelist);
 }
 
-static const struct pt_iommu_driver_ops amd_hw_driver_ops_v1 = {
+const struct pt_iommu_driver_ops amd_hw_driver_ops_v1 = {
 	.get_top_lock = amd_iommu_get_top_lock,
 	.change_top = amd_iommu_change_top,
 };
 
-static const struct iommu_domain_ops amdv1_ops = {
+const struct iommu_domain_ops amdv1_ops = {
 	IOMMU_PT_DOMAIN_OPS(amdv1),
 	.iotlb_sync_map = amd_iommu_iotlb_sync_map,
 	.flush_iotlb_all = amd_iommu_flush_iotlb_all,
@@ -2746,8 +2756,7 @@ static const struct iommu_dirty_ops amdv1_dirty_ops = {
 	.set_dirty_tracking = amd_iommu_set_dirty_tracking,
 };
 
-static struct iommu_domain *amd_iommu_domain_alloc_paging_v1(struct device *dev,
-							     u32 flags)
+struct iommu_domain *amd_iommu_domain_alloc_paging_v1(struct device *dev, u32 flags)
 {
 	struct pt_iommu_amdv1_cfg cfg = {};
 	struct protection_domain *domain;
