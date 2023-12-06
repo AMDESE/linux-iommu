@@ -24,6 +24,7 @@
 #include <linux/amd-iommu.h>
 #include <linux/notifier.h>
 #include <linux/export.h>
+#include <linux/idr.h>
 #include <linux/irq.h>
 #include <linux/msi.h>
 #include <linux/irqdomain.h>
@@ -59,6 +60,15 @@ LIST_HEAD(acpihid_map);
 
 const struct iommu_ops amd_iommu_ops;
 static const struct iommu_dirty_ops amd_dirty_ops;
+
+/* VMInfo Hashtable */
+#define AMD_IOMMU_VMINFO_HASH_BITS	16
+DEFINE_HASHTABLE(amd_iommu_vminfo_hash, AMD_IOMMU_VMINFO_HASH_BITS);
+DEFINE_SPINLOCK(amd_iommu_vminfo_hash_lock);
+
+/* Global VMID */
+#define AMD_IOMMU_VMID_INVALID (-1U)
+static DEFINE_IDA(amd_iommu_global_vmid_ida);
 
 int amd_iommu_max_glx_val = -1;
 
@@ -235,6 +245,68 @@ static inline bool pdom_is_in_pt_mode(struct protection_domain *pdom)
 static inline bool pdom_is_sva_capable(struct protection_domain *pdom)
 {
 	return pdom_is_v2_pgtbl_mode(pdom) || pdom_is_in_pt_mode(pdom);
+}
+
+static int get_vmid(void)
+{
+	int ret;
+
+	/*
+	 * TODO:
+	 *   When Secure vIOMMU is enabled Bit 15 is reserved for SNP guest.
+	 *   Add support to check platfrom capability to select correct number
+	 *   of bits for Guest ID allocation
+	 */
+	ret = ida_alloc_range(&amd_iommu_global_vmid_ida, 1, 0x7FFF, GFP_KERNEL);
+	return ret < 0 ? AMD_IOMMU_VMID_INVALID : ret;
+}
+
+int amd_iommu_vminfo_alloc(struct amd_iommu *iommu, struct amd_iommu_vminfo *vminfo)
+{
+	u32 gid;
+	unsigned long flags;
+
+	spin_lock_irqsave(&amd_iommu_vminfo_hash_lock, flags);
+	gid = get_vmid();
+	if (gid == AMD_IOMMU_VMID_INVALID)
+		return -EINVAL;
+
+	pr_debug("%s: gid=%u\n", __func__, gid);
+	vminfo->gid = gid;
+
+	hash_add(amd_iommu_vminfo_hash, &vminfo->hnode, vminfo->gid);
+	spin_unlock_irqrestore(&amd_iommu_vminfo_hash_lock, flags);
+	return 0;
+}
+
+void amd_iommu_vminfo_free(struct amd_iommu *iommu,
+			    struct amd_iommu_vminfo *vminfo)
+{
+	unsigned long flags;
+
+	pr_debug("%s: gid=%u\n", __func__, vminfo->gid);
+	spin_lock_irqsave(&amd_iommu_vminfo_hash_lock, flags);
+	hash_del(&vminfo->hnode);
+	ida_free(&amd_iommu_global_vmid_ida, vminfo->gid);
+	spin_unlock_irqrestore(&amd_iommu_vminfo_hash_lock, flags);
+}
+
+struct amd_iommu_vminfo *amd_iommu_get_vminfo(int gid)
+{
+	unsigned long flags;
+	struct amd_iommu_vminfo *tmp, *ptr = NULL;
+
+	spin_lock_irqsave(&amd_iommu_vminfo_hash_lock, flags);
+	hash_for_each_possible(amd_iommu_vminfo_hash, tmp, hnode, gid) {
+		if (tmp->gid == gid) {
+			ptr = tmp;
+			break;
+		}
+	}
+	if (!ptr)
+		pr_debug("%s : gid=%u not found\n", __func__, gid);
+	spin_unlock_irqrestore(&amd_iommu_vminfo_hash_lock, flags);
+	return ptr;
 }
 
 static inline int get_acpihid_device_id(struct device *dev,

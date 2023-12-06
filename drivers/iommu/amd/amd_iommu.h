@@ -194,4 +194,10 @@ struct iommu_dev_data *search_dev_data(struct amd_iommu *iommu, u16 devid);
 struct iommu_domain *
 amd_iommu_domain_alloc_nested(struct device *dev, struct iommu_domain *parent,
 			      u32 flags, const struct iommu_user_data *user_data);
+
+/* AMD IOMMU GID */
+int amd_iommu_vminfo_alloc(struct amd_iommu *iommu, struct amd_iommu_vminfo *vminfo);
+void amd_iommu_vminfo_free(struct amd_iommu *iommu, struct amd_iommu_vminfo *vminfo);
+struct amd_iommu_vminfo *amd_iommu_get_vminfo(int gid);
+
 #endif /* AMD_IOMMU_H */
