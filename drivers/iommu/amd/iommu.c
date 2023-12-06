@@ -24,6 +24,7 @@
 #include <linux/amd-iommu.h>
 #include <linux/notifier.h>
 #include <linux/export.h>
+#include <linux/idr.h>
 #include <linux/irq.h>
 #include <linux/msi.h>
 #include <linux/irqdomain.h>
@@ -60,6 +61,9 @@ LIST_HEAD(acpihid_map);
 
 const struct iommu_ops amd_iommu_ops;
 static const struct iommu_dirty_ops amd_dirty_ops;
+
+/* Global guest ID */
+static DEFINE_IDA(amd_iommu_global_gid_ida);
 
 int amd_iommu_max_glx_val = -1;
 
@@ -252,6 +256,30 @@ static inline bool pdom_is_in_pt_mode(struct protection_domain *pdom)
 static inline bool pdom_is_sva_capable(struct protection_domain *pdom)
 {
 	return pdom_is_v2_pgtbl_mode(pdom) || pdom_is_in_pt_mode(pdom);
+}
+
+int amd_iommu_gid_alloc(void)
+{
+	int ret;
+
+	/*
+	 * TODO:
+	 *   When Secure vIOMMU is enabled Bit 15 is reserved for SNP guest.
+	 *   Add support to check platfrom capability to select correct number
+	 *   of bits for Guest ID allocation
+	 */
+	ret = ida_alloc_range(&amd_iommu_global_gid_ida, 1, 0x7FFF, GFP_KERNEL);
+	if (ret < 0)
+		pr_err("%s: Failed to allocate guest ID\n", __func__);
+	else
+		pr_debug("%s: gid=%u\n", __func__, ret);
+
+	return ret;
+}
+
+void amd_iommu_gid_free(int gid)
+{
+	ida_free(&amd_iommu_global_gid_ida, gid);
 }
 
 static inline int get_acpihid_device_id(struct device *dev,
