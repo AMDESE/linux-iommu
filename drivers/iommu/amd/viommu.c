@@ -26,9 +26,20 @@
 #include "amd_viommu.h"
 #include "../iommu-pages.h"
 
+#define VIOMMU_DEVID_MAPPING_BASE	0x1000000000ULL
+#define VIOMMU_DEVID_MAPPING_ENTRY_SIZE	(1 << 20)
+
+#define VIOMMU_DOMID_MAPPING_BASE	0x2000000000ULL
+#define VIOMMU_DOMID_MAPPING_ENTRY_SIZE	(1 << 19)
+
 #define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET	0x08
 
+#define VIOMMU_MAX_GDEVID	0xFFFF
+#define VIOMMU_MAX_GDOMID	0xFFFF
+
 LIST_HEAD(viommu_devid_map);
+
+static void viommu_clear_dirty_status_mask(struct amd_iommu *iommu, unsigned int gid);
 
 static int viommu_init_pci_vsc(struct amd_iommu *iommu)
 {
@@ -145,3 +156,141 @@ int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
 	return 0;
 }
 EXPORT_SYMBOL(amd_viommu_domain_id_update);
+
+static int alloc_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+				   u64 base, size_t size, u16 guestId)
+{
+	int ret;
+	size_t mapped;
+	u64 addr = base + (guestId * size);
+	int nid = iommu && iommu->dev ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
+
+	*entry = (void *)iommu_alloc_pages_node_sz(nid, GFP_KERNEL | __GFP_ZERO, size);
+	if (!*entry)
+		return -ENOMEM;
+
+	ret = set_memory_uc((unsigned long)*entry, size >> PAGE_SHIFT);
+	if (ret)
+		return ret;
+
+	pr_debug("%s: entry=%#llx(%#llx), addr=%#llx, size=%#lx\n", __func__,
+		 (unsigned long  long)*entry, iommu_virt_to_phys(*entry), addr, size);
+
+	ret = pt_iommu_amdv1_map_pages(&iommu->viommu_pdom->domain, addr,
+				       iommu_virt_to_phys(*entry), PAGE_SIZE, (size / PAGE_SIZE),
+				       IOMMU_PROT_IR | IOMMU_PROT_IW, GFP_KERNEL, &mapped);
+	if (ret)
+		return ret;
+
+	return amd_iommu_flush_private_vm_region(iommu, iommu->viommu_pdom, addr, size);
+}
+
+static void free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+					u64 base, size_t size, u16 guestId)
+{
+	size_t ret;
+	struct iommu_iotlb_gather gather;
+	u64 addr = base + (guestId * size);
+
+	pr_debug("%s: entry=%#llx(%#llx), base=%#llx, addr=%#llx, size=%#lx\n",
+		 __func__, (unsigned long  long)*entry,
+		 iommu_virt_to_phys(*entry), base, addr, size);
+
+	if (!iommu || !iommu->viommu_pdom)
+		return;
+
+	iommu_iotlb_gather_init(&gather);
+	ret = pt_iommu_amdv1_unmap_pages(&iommu->viommu_pdom->domain,
+					 addr, PAGE_SIZE, (size / PAGE_SIZE), &gather);
+	if (ret)
+		amd_iommu_iotlb_sync(&iommu->viommu_pdom->domain, &gather);
+
+	iommu_free_pages(*entry);
+	*entry = NULL;
+}
+
+static void viommu_clear_mapping(struct amd_iommu *iommu,
+				 struct amd_iommu_viommu *aviommu)
+{
+	int i;
+	u16 gid = aviommu->gid;
+
+	/*
+	 * IOMMU hardware uses the domain ID mapping table to map gdom ID to hdom ID.
+	 * If the mapping does not exist, the hardware would generate error in the event log.
+	 * Therefore, initialize all gdom ID entries to map to parent domain ID to prevent
+	 * unknown mapping scenario.
+	 */
+	for (i = 0; i <= VIOMMU_MAX_GDOMID; i++)
+		amd_viommu_domain_id_update(iommu, gid, aviommu->parent->id, i);
+}
+
+static void viommu_clear_dirty_status_mask(struct amd_iommu *iommu, unsigned int gid)
+{
+	u32 offset, index, bits;
+	u64 *group, val;
+
+	if (gid >= 256 * 256)
+		return;
+
+	group = (u64 *)(iommu->cmdbuf_dirty_mask +
+		(((gid & 0xFF) << 4) | (((gid >> 13) & 0x7) << 2)));
+	offset = (gid >> 8) & 0x1F;
+	index = offset >> 6;
+	bits = offset & 0x3F;
+
+	val = READ_ONCE(group[index]);
+	val &= ~(1ULL << bits);
+	WRITE_ONCE(group[index], val);
+}
+
+void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu)
+{
+	pr_debug("%s: gid=%u\n", __func__, aviommu->gid);
+
+	free_private_vm_region(iommu, &aviommu->devid_table,
+			       VIOMMU_DEVID_MAPPING_BASE,
+			       VIOMMU_DEVID_MAPPING_ENTRY_SIZE,
+			       aviommu->gid);
+	free_private_vm_region(iommu, &aviommu->domid_table,
+			       VIOMMU_DOMID_MAPPING_BASE,
+			       VIOMMU_DOMID_MAPPING_ENTRY_SIZE,
+			       aviommu->gid);
+
+	viommu_clear_mapping(iommu, aviommu);
+	viommu_clear_dirty_status_mask(iommu, aviommu->gid);
+}
+
+/*
+ * Allocate pages for the following regions:
+ * - Guest MMIO
+ * - DeviceID/DomainId Mapping Table
+ * - Cmd buffer
+ * - Event/PRR (A/B) logs
+ */
+int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu)
+{
+	int ret;
+
+	ret = alloc_private_vm_region(iommu, &viommu->devid_table,
+				      VIOMMU_DEVID_MAPPING_BASE,
+				      VIOMMU_DEVID_MAPPING_ENTRY_SIZE,
+				      viommu->gid);
+	if (ret)
+		goto err_out;
+
+	ret = alloc_private_vm_region(iommu, &viommu->domid_table,
+				      VIOMMU_DOMID_MAPPING_BASE,
+				      VIOMMU_DOMID_MAPPING_ENTRY_SIZE,
+				      viommu->gid);
+	if (ret)
+		goto err_out;
+
+	viommu_clear_mapping(iommu, viommu);
+	viommu_clear_dirty_status_mask(iommu, viommu->gid);
+
+	return 0;
+err_out:
+	amd_viommu_uninit_one(iommu, viommu);
+	return -ENOMEM;
+}

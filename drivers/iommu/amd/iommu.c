@@ -43,6 +43,7 @@
 #include <linux/generic_pt/iommu.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 #include "iommufd.h"
 #include "../irq_remapping.h"
 #include "../iommu-pages.h"
@@ -1812,6 +1813,22 @@ static int domain_flush_pages_v1(struct protection_domain *pdom,
 	return ret;
 }
 
+int amd_iommu_flush_private_vm_region(struct amd_iommu *iommu, struct protection_domain *pdom,
+				      u64 address, size_t size)
+{
+	int ret;
+	struct iommu_cmd cmd;
+
+	build_inv_iommu_pages(&cmd, address, size, pdom->id, 0, false);
+
+	ret = iommu_queue_command(iommu, &cmd);
+	if (ret)
+		return ret;
+
+	iommu_completion_wait(iommu);
+	return ret;
+}
+
 /*
  * TLB invalidation function which is called from the mapping functions.
  * It flushes range of PTEs of the domain.
@@ -2716,8 +2733,8 @@ static void amd_iommu_flush_iotlb_all(struct iommu_domain *domain)
 	spin_unlock_irqrestore(&dom->lock, flags);
 }
 
-static void amd_iommu_iotlb_sync(struct iommu_domain *domain,
-				 struct iommu_iotlb_gather *gather)
+void amd_iommu_iotlb_sync(struct iommu_domain *domain,
+			  struct iommu_iotlb_gather *gather)
 {
 	struct protection_domain *dom = to_pdomain(domain);
 	unsigned long flags;

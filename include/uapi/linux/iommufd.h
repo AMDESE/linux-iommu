@@ -1077,11 +1077,15 @@ struct iommu_viommu_tegra241_cmdqv {
  * struct iommu_viommu_amd - AMD vIOMMU Interface (IOMMU_VIOMMU_TYPE_AMD)
  * @iommu_devid: Host IOMMU PCI device ID
  * @out_gid: (out) Guest ID
+ * @viommu_devid: Guest vIOMMU PCI device ID
+ * @trans_devid: GPA->GVA translation device ID (host)
  * @reserved: Must be zero
  */
 struct iommu_viommu_amd {
 	__u32 iommu_devid;
 	__u32 out_gid;
+	__u32 viommu_devid;
+	__u32 trans_devid;
 	__u32 reserved; /* must be last */
 };
 

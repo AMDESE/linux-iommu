@@ -486,6 +486,7 @@ extern bool amdr_ivrs_remap_support;
 /* VIOMMU stuff */
 #define VIOMMU_VF_MMIO_ENTRY_SIZE		4096
 #define VIOMMU_VFCTRL_MMIO_ENTRY_SIZE		64
+#define VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET	0x10
 
 #define VIOMMU_VF_MMIO_BASE(iommu, guestId) \
 	(iommu->vf_base + (guestId * VIOMMU_VF_MMIO_ENTRY_SIZE))
@@ -542,6 +543,10 @@ struct amd_iommu_viommu {
 
 	u32 iommu_devid;
 	u16 gid;	/* Guest ID for the vIOMMU */
+	u64 *devid_table;
+	u64 *domid_table;
+	u16 trans_devid;
+	u32 viommu_devid;
 };
 
 /*
@@ -813,6 +818,10 @@ struct amd_iommu {
 	/* IOPF support */
 	struct iopf_queue *iopf_queue;
 	unsigned char iopfq_name[32];
+
+	/* HW vIOMMU support */
+	struct protection_domain *viommu_pdom;
+	void *cmdbuf_dirty_mask;
 };
 
 static inline struct amd_iommu *dev_to_amd_iommu(struct device *dev)
