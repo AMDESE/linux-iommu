@@ -622,6 +622,10 @@ struct amd_iommu_viommu {
 
 	u32 iommu_devid;
 	u16 gid;
+	u64 *devid_table;
+	u64 *domid_table;
+	u16 trans_devid;
+	u32 viommu_devid;
 };
 
 /*
@@ -880,6 +884,10 @@ struct amd_iommu {
 	/* IOPF support */
 	struct iopf_queue *iopf_queue;
 	unsigned char iopfq_name[32];
+
+	/* HW vIOMMU support */
+	struct protection_domain *viommu_pdom;
+	void *cmdbuf_dirty_mask;
 };
 
 static inline struct amd_iommu *dev_to_amd_iommu(struct device *dev)
