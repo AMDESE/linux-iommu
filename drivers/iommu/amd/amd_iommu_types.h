@@ -1148,6 +1148,8 @@ struct amd_irte_ops {
 struct amd_iommu_vminfo {
 	u16 gid;
 	struct hlist_node hnode;
+	u64 *devid_table;
+	u64 *domid_table;
 };
 
 #ifdef CONFIG_IRQ_REMAP
