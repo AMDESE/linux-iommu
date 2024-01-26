@@ -238,13 +238,29 @@ static void avic_deactivate_vmcb(struct vcpu_svm *svm)
 	avic_set_x2apic_msr_interception(svm, true);
 }
 
+static struct kvm_svm *get_kvm_svm(u32 vm_id)
+{
+	unsigned long flags;
+	struct kvm_svm *tmp, *svm = NULL;
+
+	spin_lock_irqsave(&svm_vm_data_hash_lock, flags);
+	hash_for_each_possible(svm_vm_data_hash, tmp, hnode, vm_id) {
+		if (tmp->avic_vm_id == vm_id) {
+			svm = tmp;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&svm_vm_data_hash_lock, flags);
+
+	return svm;
+}
+
 /* Note:
  * This function is called from IOMMU driver to notify
  * SVM to schedule in a particular vCPU of a particular VM.
  */
 static int avic_ga_log_notifier(u32 ga_tag)
 {
-	unsigned long flags;
 	struct kvm_svm *kvm_svm;
 	struct kvm_vcpu *vcpu = NULL;
 	u32 vm_id = AVIC_GATAG_TO_VMID(ga_tag);
@@ -253,14 +269,10 @@ static int avic_ga_log_notifier(u32 ga_tag)
 	pr_debug("SVM: %s: vm_id=%#x, vcpu_idx=%#x\n", __func__, vm_id, vcpu_idx);
 	trace_kvm_avic_ga_log(vm_id, vcpu_idx);
 
-	spin_lock_irqsave(&svm_vm_data_hash_lock, flags);
-	hash_for_each_possible(svm_vm_data_hash, kvm_svm, hnode, vm_id) {
-		if (kvm_svm->avic_vm_id != vm_id)
-			continue;
-		vcpu = kvm_get_vcpu(&kvm_svm->kvm, vcpu_idx);
-		break;
-	}
-	spin_unlock_irqrestore(&svm_vm_data_hash_lock, flags);
+	kvm_svm = get_kvm_svm(vm_id);
+	if (!kvm_svm)
+		return -EINVAL;
+	vcpu = kvm_get_vcpu_by_id(&kvm_svm->kvm, vcpu_idx);
 
 	/* Note:
 	 * At this point, the IOMMU should have already set the pending
