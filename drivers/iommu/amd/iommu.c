@@ -60,7 +60,7 @@ LIST_HEAD(ioapic_map);
 LIST_HEAD(hpet_map);
 LIST_HEAD(acpihid_map);
 
-const struct iommu_ops amd_iommu_ops;
+const struct amd_iommu_svm_ops *svm_ops;
 
 /* Global guest ID */
 static DEFINE_IDA(amd_iommu_global_gid_ida);
@@ -1073,24 +1073,21 @@ static void iommu_poll_events(struct amd_iommu *iommu)
 
 }
 
-#ifdef CONFIG_IRQ_REMAP
-static int (*iommu_ga_log_notifier)(u32);
-
-int amd_iommu_register_ga_log_notifier(int (*notifier)(u32))
+int amd_iommu_register_svm_ops(const struct amd_iommu_svm_ops *ops)
 {
-	iommu_ga_log_notifier = notifier;
+	svm_ops = ops;
 
 	/*
 	 * Ensure all in-flight IRQ handlers run to completion before returning
 	 * to the caller, e.g. to ensure module code isn't unloaded while it's
 	 * being executed in the IRQ handler.
 	 */
-	if (!notifier)
+	if (!ops)
 		synchronize_rcu();
 
 	return 0;
 }
-EXPORT_SYMBOL(amd_iommu_register_ga_log_notifier);
+EXPORT_SYMBOL(amd_iommu_register_svm_ops);
 
 static void iommu_poll_ga_log(struct amd_iommu *iommu)
 {
@@ -1118,14 +1115,14 @@ static void iommu_poll_ga_log(struct amd_iommu *iommu)
 		/* Handle GA entry */
 		switch (GA_REQ_TYPE(log_entry)) {
 		case GA_GUEST_NR:
-			if (!iommu_ga_log_notifier)
+			if (!svm_ops->ga_log_notifier)
 				break;
 
 			pr_debug("%s: devid=%#x, ga_tag=%#x\n",
 				 __func__, GA_DEVID(log_entry),
 				 GA_TAG(log_entry));
 
-			if (iommu_ga_log_notifier(GA_TAG(log_entry)) != 0)
+			if (svm_ops->ga_log_notifier(GA_TAG(log_entry)) != 0)
 				pr_err("GA log notifier failed.\n");
 			break;
 		default:
@@ -1143,11 +1140,6 @@ amd_iommu_set_pci_msi_domain(struct device *dev, struct amd_iommu *iommu)
 
 	dev_set_msi_domain(dev, iommu->ir_domain);
 }
-
-#else /* CONFIG_IRQ_REMAP */
-static inline void
-amd_iommu_set_pci_msi_domain(struct device *dev, struct amd_iommu *iommu) { }
-#endif /* !CONFIG_IRQ_REMAP */
 
 static void amd_iommu_handle_irq(void *data, const char *evt_type,
 				 u32 int_mask, u32 overflow_mask,
