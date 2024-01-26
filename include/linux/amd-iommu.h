@@ -12,6 +12,10 @@
 
 struct amd_iommu;
 
+struct amd_iommu_svm_ops {
+	int (*ga_log_notifier)(u32 ga_tag);
+};
+
 #ifdef CONFIG_AMD_IOMMU
 
 struct task_struct;
@@ -28,7 +32,7 @@ static inline void amd_iommu_detect(void) { }
 #if defined(CONFIG_AMD_IOMMU) && defined(CONFIG_IRQ_REMAP)
 
 /* IOMMU AVIC Function */
-extern int amd_iommu_register_ga_log_notifier(int (*notifier)(u32));
+extern int amd_iommu_register_svm_ops(const struct amd_iommu_svm_ops *ops);
 
 extern int amd_iommu_update_ga(void *data, int cpu, bool ga_log_intr);
 extern int amd_iommu_activate_guest_mode(void *data, int cpu, bool ga_log_intr);
@@ -36,8 +40,7 @@ extern int amd_iommu_deactivate_guest_mode(void *data);
 
 #else /* defined(CONFIG_AMD_IOMMU) && defined(CONFIG_IRQ_REMAP) */
 
-static inline int
-amd_iommu_register_ga_log_notifier(int (*notifier)(u32))
+static int amd_iommu_register_ops(struct amd_iommu_ops *ops);
 {
 	return 0;
 }
