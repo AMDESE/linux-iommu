@@ -3575,16 +3575,48 @@ static int __modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
 	return 0;
 }
 
+static int __modify_ext_irte_ga(struct amd_iommu *iommu, u32 ext_id,
+				struct irte_ga *irte)
+{
+	u128 old;
+	int ret;
+	struct ext_irte *eirte = amd_viommu_get_ext_irte(iommu, ext_id);
+
+	if (!eirte || !eirte->entry_ptr) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * We use cmpxchg16 to atomically update the 128-bit IRTE,
+	 * and it cannot be updated by the hardware or other processors
+	 * behind us, so the return value of cmpxchg16 should be the
+	 * same as the old value.
+	 */
+	old = eirte->entry_ptr->irte;
+	WARN_ON(!try_cmpxchg128(&eirte->entry_ptr->irte, &old, irte->irte));
+	ret = 0;
+out:
+	return ret;
+}
+
 static int modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
-			  struct irte_ga *irte)
+			  struct irte_ga *irte,
+			  struct amd_ir_data *ir_data)
 {
 	int ret;
 
-	ret = __modify_irte_ga(iommu, devid, index, irte);
-	if (ret)
-		return ret;
-
-	iommu_flush_irt_and_complete(iommu, devid);
+	if (ir_data && ir_data->is_ext) {
+		ret = __modify_ext_irte_ga(iommu, ir_data->ext_id, irte);
+		if (ret)
+			return ret;
+		iommu_flush_irt_and_complete(iommu, iommu->devid);
+	} else {
+		ret = __modify_irte_ga(iommu, devid, index, irte);
+		if (ret)
+			return ret;
+		iommu_flush_irt_and_complete(iommu, devid);
+	}
 
 	return 0;
 }
@@ -3667,7 +3699,7 @@ static void irte_ga_activate(struct amd_iommu *iommu, void *entry, u16 devid, u1
 	struct irte_ga *irte = (struct irte_ga *) entry;
 
 	irte->lo.fields_remap.valid = 1;
-	modify_irte_ga(iommu, devid, index, irte);
+	modify_irte_ga(iommu, devid, index, irte, NULL);
 }
 
 static void irte_deactivate(struct amd_iommu *iommu, void *entry, u16 devid, u16 index)
@@ -3683,7 +3715,7 @@ static void irte_ga_deactivate(struct amd_iommu *iommu, void *entry, u16 devid, 
 	struct irte_ga *irte = (struct irte_ga *) entry;
 
 	irte->lo.fields_remap.valid = 0;
-	modify_irte_ga(iommu, devid, index, irte);
+	modify_irte_ga(iommu, devid, index, irte, NULL);
 }
 
 static void irte_set_affinity(struct amd_iommu *iommu, void *entry, u16 devid, u16 index,
@@ -3707,7 +3739,7 @@ static void irte_ga_set_affinity(struct amd_iommu *iommu, void *entry, u16 devid
 					APICID_TO_IRTE_DEST_LO(dest_apicid);
 		irte->hi.fields.destination =
 					APICID_TO_IRTE_DEST_HI(dest_apicid);
-		modify_irte_ga(iommu, devid, index, irte);
+		modify_irte_ga(iommu, devid, index, irte, NULL);
 	}
 }
 
@@ -4103,8 +4135,11 @@ int amd_iommu_update_ga(void *data, int cpu, bool ga_log_intr)
 
 	__amd_iommu_update_ga(entry, cpu, ga_log_intr);
 
-	return __modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
-				ir_data->irq_2_irte.index, entry);
+	if (!ir_data->is_ext)
+		return __modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
+					ir_data->irq_2_irte.index, entry);
+	else
+		return __modify_ext_irte_ga(ir_data->iommu, ir_data->ext_id, entry);
 }
 EXPORT_SYMBOL(amd_iommu_update_ga);
 
@@ -4134,7 +4169,7 @@ int amd_iommu_activate_guest_mode(void *data, int cpu, bool ga_log_intr)
 	__amd_iommu_update_ga(entry, cpu, ga_log_intr);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
-			      ir_data->irq_2_irte.index, entry);
+			      ir_data->irq_2_irte.index, entry, ir_data);
 }
 EXPORT_SYMBOL(amd_iommu_activate_guest_mode);
 
@@ -4171,7 +4206,7 @@ int amd_iommu_deactivate_guest_mode(void *data)
 				APICID_TO_IRTE_DEST_HI(cfg->dest_apicid);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
-			      ir_data->irq_2_irte.index, entry);
+			      ir_data->irq_2_irte.index, entry, ir_data);
 }
 EXPORT_SYMBOL(amd_iommu_deactivate_guest_mode);
 
