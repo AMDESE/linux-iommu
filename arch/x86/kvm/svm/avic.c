@@ -1317,10 +1317,33 @@ static u64 avic_get_apic_backing_page(struct kvm *kvm, u32 vcpu_id)
 	return avic_get_backing_page_address(svm);
 }
 
+static int avic_set_ext_ir_affinity(struct kvm *kvm, u32 vcpu_id,
+				    struct amd_iommu_pi_data *pi)
+{
+	int ret;
+	struct vcpu_svm *svm = get_vcpu_svm(kvm, vcpu_id);
+
+	if (IS_ERR(svm))
+		return PTR_ERR(svm);
+
+	//TODO: check me
+	ret = amd_iommu_activate_guest_mode(pi->ir_data, pi->cpu, true);
+	if (ret)
+		return ret;
+
+//SURAVEE: CHECKME
+//	ret = svm_ir_list_add(svm, pi);
+//	if (!ret)
+//		avic_refresh_apicv_exec_ctrl(&svm->vcpu);
+
+	return ret;
+}
+
 const struct amd_iommu_svm_ops svm_ops = {
 	.ga_log_notifier = avic_ga_log_notifier,
 	.get_ga_tag = avic_get_ga_tag,
 	.get_apic_backing_page = avic_get_apic_backing_page,
+	.set_ext_ir_affinity = avic_set_ext_ir_affinity,
 };
 
 /*
