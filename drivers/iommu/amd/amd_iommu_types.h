@@ -551,6 +551,7 @@ struct amd_iommu_viommu {
 	struct protection_domain *parent; /* nest parent domain for this viommu */
 	struct list_head pdom_list;	  /* For protection_domain->viommu_list */
 	u16 gid;			  /* Guest ID for the vIOMMU */
+	void *kvm;			  /* Hold struct kvm pointer */
 
 	/*
 	 * Per-vIOMMU guest domain ID to host domain ID mapping.
