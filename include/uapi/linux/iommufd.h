@@ -1085,10 +1085,12 @@ struct iommu_viommu_tegra241_cmdqv {
 /**
  * struct iommu_viommu_amd - AMD vIOMMU Interface (IOMMU_VIOMMU_TYPE_AMD)
  * @out_vfmmio_mmap_offset: (out) mmap offset for vIOMMU VF-MMIO
+ * @kvmfd: KVM FD handler
  * @reserved: Must be zero
  */
 struct iommu_viommu_amd {
 	__aligned_u64 out_vfmmio_mmap_offset;
+	__u32 kvmfd;
 	__u32 reserved; /* must be last */
 };
 
