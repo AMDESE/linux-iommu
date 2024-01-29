@@ -360,6 +360,9 @@
 #define DTE_INTTABLEN_2K	(DTE_INTTABLEN_VALUE_2K << 1)
 #define MAX_IRQS_PER_TABLE_2K	BIT(DTE_INTTABLEN_VALUE_2K)
 
+#define DTE_EXT_INTTABLEN_L1_VALUE	10ULL
+#define DTE_EXT_INTTABLEN_L1		(DTE_EXT_INTTABLEN_L1_VALUE << 1)
+
 #define PAGE_MODE_NONE    0x00
 #define PAGE_MODE_1_LEVEL 0x01
 #define PAGE_MODE_2_LEVEL 0x02
@@ -865,6 +868,8 @@ struct amd_iommu {
 	/* IOPF support */
 	struct iopf_queue *iopf_queue;
 	unsigned char iopfq_name[32];
+
+	u64 *ext_ir_table;		 /* Pointer to the Ext-IR table */
 };
 
 static inline struct amd_iommu *dev_to_amd_iommu(struct device *dev)
