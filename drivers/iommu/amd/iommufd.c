@@ -4,6 +4,8 @@
  */
 
 #include <linux/iommu.h>
+#include <linux/file.h>
+#include <linux/amd-iommu.h>
 
 #include "iommufd.h"
 #include "amd_iommu.h"
@@ -42,6 +44,20 @@ size_t amd_iommufd_get_viommu_size(struct device *dev, enum iommu_viommu_type vi
 	return VIOMMU_STRUCT_SIZE(struct amd_iommu_viommu, core);
 }
 
+static void *get_kvm_handler(u32 kvmfd)
+{
+	struct fd f;
+
+	f = fdget(kvmfd);
+
+	if (fd_empty(f)) {
+		pr_warn("%s: fdget failed\n", __func__);
+		return NULL;
+	}
+
+	return fd_file(f)->private_data;
+}
+
 int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
 			    const struct iommu_user_data *user_data)
 {
@@ -70,6 +86,13 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 		return aviommu->gid;
 	data.out_gid = aviommu->gid;
 	pr_debug("%s: gid=%#x", __func__, aviommu->gid);
+
+	/* Get KVM handler first for secure guests */
+	aviommu->kvm = get_kvm_handler(data.kvmfd);
+	if (aviommu->kvm == NULL) {
+		pr_err("Failed to get KVM handler for secure guest\n");
+		return -EINVAL;
+	}
 
 	/* Reset vIOMMU MMIOs to initialize the vIOMMU */
 	iommu_reset_vmmio(iommu, aviommu->gid);

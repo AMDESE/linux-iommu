@@ -1084,6 +1084,7 @@ struct iommu_viommu_tegra241_cmdqv {
  * @viommu_devid: Guest vIOMMU PCI device ID
  * @trans_devid: GPA->GVA translation device ID (host)
  * @out_vfmmio_mmap_offset: (out) mmap offset for vIOMMU VF-MMIO
+ * @kvmfd: KVM FD handler
  * @reserved: Must be zero
  */
 struct iommu_viommu_amd {
@@ -1092,6 +1093,7 @@ struct iommu_viommu_amd {
 	__u32 viommu_devid;
 	__u32 trans_devid;
 	__aligned_u64 out_vfmmio_mmap_offset;
+	__u32 kvmfd;
 	__u32 reserved; /* must be last */
 };
 
