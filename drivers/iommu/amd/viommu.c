@@ -49,6 +49,8 @@ static_assert(VIOMMU_DOMID_MAPPING_ENTRY_SIZE >=
 #define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET	0x00
 #define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET	0x08
 
+#define EXT_INT_REMAP_TBL_L1_SIZE (PAGE_SIZE * 2)
+
 static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 {
 	if (iommu->vfctrl_base) {
@@ -126,11 +128,13 @@ static int viommu_alloc_self_dev_data(struct amd_iommu *iommu)
 }
 
 static void viommu_private_space_uninit(struct amd_iommu *iommu);
+static void free_ext_int_remap_tbl(struct amd_iommu *iommu);
 
 void __init amd_viommu_uninit(struct amd_iommu *iommu)
 {
 	iommu->flags &= ~AMD_IOMMU_FLAG_VIOMMU_EN;
 	viommu_free_self_dev_data(iommu);
+	free_ext_int_remap_tbl(iommu);
 	viommu_private_space_uninit(iommu);
 	amd_viommu_vf_vfcntl_unmap(iommu);
 }
@@ -393,6 +397,28 @@ u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
 	return iommu->vf_base_phys + gid * VIOMMU_VF_MMIO_ENTRY_SIZE;
 }
 
+/*
+ * L1 IRT is indexed by 10-bit value (1024 entries),
+ * each entry is 8 bytes (64-bit). So, the L1 table is 8K bytes.
+ */
+static int alloc_ext_int_remap_tbl(struct amd_iommu *iommu)
+{
+	iommu->ext_ir_table = (void *) __get_free_pages(GFP_KERNEL | __GFP_ZERO,
+							get_order(EXT_INT_REMAP_TBL_L1_SIZE));
+
+	return iommu->ext_ir_table ? 0 : -ENOMEM;
+}
+
+static void free_ext_int_remap_tbl(struct amd_iommu *iommu)
+{
+	if (!iommu->ext_ir_table)
+		return;
+
+	free_pages((unsigned long)iommu->ext_ir_table,
+		   get_order(EXT_INT_REMAP_TBL_L1_SIZE));
+	iommu->ext_ir_table = NULL;
+}
+
 int __init amd_viommu_init(struct amd_iommu *iommu)
 {
 	int ret;
@@ -405,9 +431,22 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 	if (ret)
 		goto err;
 
+	ret = alloc_ext_int_remap_tbl(iommu);
+	if (ret)
+		goto err;
+
 	ret = viommu_alloc_self_dev_data(iommu);
 	if (ret)
 		goto err;
+
+	/*
+	 * Program the ExtIRT into the DTE.
+	 *  - DTE[IntTabBase] = 8K-aligned address
+	 *  - DTE[IntTabLen] = 1024 entries (value b'1010)
+	 */
+	amd_iommu_update_dte_ir(iommu, iommu->viommu_dev_data,
+				iommu_virt_to_phys(iommu->ext_ir_table),
+				DTE_EXT_INTTABLEN_L1);
 
 	iommu->flags |= AMD_IOMMU_FLAG_VIOMMU_EN;
 	return 0;

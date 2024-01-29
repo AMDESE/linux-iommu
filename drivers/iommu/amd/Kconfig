@@ -34,6 +34,7 @@ config AMD_IOMMU_IOMMUFD
 	bool "Enable IOMMUFD features for AMD IOMMU (EXPERIMENTAL)"
 	depends on IOMMUFD
 	depends on AMD_IOMMU
+	depends on IRQ_REMAP
 	help
 	  Support for IOMMUFD features intended to support virtual machines
 	  with accelerated virtual IOMMUs.
