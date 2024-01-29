@@ -42,6 +42,8 @@
 #define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET	0x00
 #define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET	0x08
 
+#define EXT_INT_REMAP_TBL_L1_SIZE (PAGE_SIZE * 2)
+
 LIST_HEAD(viommu_devid_map);
 
 static int viommu_init_pci_vsc(struct amd_iommu *iommu)
@@ -331,6 +333,25 @@ u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
 	return iommu->vf_base_phys + gid * VIOMMU_VF_MMIO_ENTRY_SIZE;
 }
 
+static int alloc_ext_int_remap_tbl(struct amd_iommu *iommu)
+{
+	iommu->ext_ir_table = (void *) __get_free_pages(GFP_KERNEL | __GFP_ZERO,
+							get_order(EXT_INT_REMAP_TBL_L1_SIZE));
+
+	return iommu->ext_ir_table ? 0 : -ENOMEM;
+}
+
+static void free_ext_int_remap_tbl(struct amd_iommu *iommu)
+{
+	if (!iommu->ext_ir_table)
+		return;
+
+	free_pages((unsigned long)iommu->ext_ir_table,
+		   get_order(EXT_INT_REMAP_TBL_L1_SIZE));
+	iommu->ext_ir_table = NULL;
+}
+
+/* Set DTE for IOMMU device */
 static void set_dte_ipa(struct amd_iommu *iommu, struct dev_table_entry *new)
 {
 	struct pt_iommu_amdv1_hw_info pt_info;
@@ -369,16 +390,28 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 
 	ret = viommu_private_space_init(iommu);
 	if (ret)
-		return ret;
+		goto err_unmap_vf;
+
+	ret = alloc_ext_int_remap_tbl(iommu);
+	if (ret)
+		goto err_private_space;
 
 	/* Set DTE for IOMMU device */
 	amd_iommu_make_clear_dte(iommu, iommu->devid, &new);
 	set_dte_ipa(iommu, &new);
 	amd_iommu_update_dte(iommu, iommu->viommu_dev_data, &new);
+	amd_iommu_update_dte_ir(iommu, iommu->viommu_dev_data,
+				iommu_virt_to_phys(iommu->ext_ir_table),
+				DTE_EXT_INTTABLEN_L1);
 	dte_set = true;
 
 	return 0;
 
+err_private_space:
+	viommu_private_space_uninit(iommu);
+	free_ext_int_remap_tbl(iommu);
+err_unmap_vf:
+	amd_viommu_uninit(iommu);
 err_dev_data:
 	viommu_free_self_dev_data(iommu, dte_set);
 	return ret;
