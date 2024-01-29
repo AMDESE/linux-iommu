@@ -4,6 +4,8 @@
  */
 
 #include <linux/iommu.h>
+#include <linux/file.h>
+#include <linux/amd-iommu.h>
 
 #include "iommufd.h"
 #include "amd_iommu.h"
@@ -40,6 +42,20 @@ size_t amd_iommufd_get_viommu_size(struct device *dev, enum iommu_viommu_type vi
 		return 0;
 
 	return VIOMMU_STRUCT_SIZE(struct amd_iommu_viommu, core);
+}
+
+static void *get_kvm_handler(u32 kvmfd)
+{
+	struct fd f;
+
+	f = fdget(kvmfd);
+
+	if (fd_empty(f)) {
+		pr_warn("%s: fdget failed\n", __func__);
+		return NULL;
+	}
+
+	return fd_file(f)->private_data;
 }
 
 int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
@@ -80,6 +96,13 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		goto err_mmap;
 
+	aviommu->kvm = get_kvm_handler(data.kvmfd);
+	if (aviommu->kvm == NULL) {
+		pr_err("%s: Failed to get KVM handler (kvmfd=%#x)\n", __func__, data.kvmfd);
+		ret = -EINVAL;
+		goto err_kvmfd;
+	}
+
 	/* Reset vIOMMU MMIOs to initialize the vIOMMU */
 	iommu_reset_vmmio(iommu, aviommu->gid);
 
@@ -93,6 +116,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		goto err_init;
 
+	aviommu->kvmfd = data.kvmfd;
 	viommu->ops = &amd_viommu_ops;
 
 	spin_lock_irqsave(&pdom->lock, flags);
@@ -101,6 +125,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 
 	return 0;
 err_init:
+err_kvmfd:
 	iommufd_viommu_destroy_mmap(&aviommu->core, data.out_vfmmio_mmap_offset);
 err_mmap:
 	amd_iommu_gid_free(aviommu->gid);
