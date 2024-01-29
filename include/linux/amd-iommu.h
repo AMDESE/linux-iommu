@@ -9,6 +9,7 @@
 #define _ASM_X86_AMD_IOMMU_H
 
 #include <linux/types.h>
+#include <linux/kvm_host.h>
 
 struct amd_iommu;
 
@@ -17,6 +18,8 @@ struct fd;
 
 struct amd_iommu_svm_ops {
 	int (*ga_log_notifier)(u32 ga_tag);
+	u32 (*get_ga_tag)(struct kvm *kvm, u32 vcpu_id);
+	u64 (*get_apic_backing_page)(struct kvm *kvm, u32 vcpu_id);
 	struct kvm *(*kvm_from_fd)(u32 kvmfd, struct fd *f);
 };
 
