@@ -16,6 +16,8 @@ struct kvm;
 
 struct amd_iommu_svm_ops {
 	int (*ga_log_notifier)(u32 ga_tag);
+	u32 (*get_ga_tag)(struct kvm *kvm, u32 vcpu_id);
+	u64 (*get_apic_backing_page)(struct kvm *kvm, u32 vcpu_id);
 	/* Extra users_count and kvm_amd pin; caller must put_kvm(). */
 	struct kvm *(*kvm_from_fd)(u32 kvmfd);
 	void (*put_kvm)(struct kvm *kvm);
