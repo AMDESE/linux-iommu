@@ -3179,6 +3179,20 @@ out:
 	return true;
 }
 
+static void iommu_sev_guest_enable(void)
+{
+	/*
+	 * Force IOMMU default domain to pass-through for
+	 * SEV guest since we cannot support DMA-remapping.
+	 * Note: This check must be done after IOMMU_ENABLED state.
+	 */
+	if (!cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
+		return;
+
+	pr_info("Force pass-through for SEV guest\n");
+	iommu_set_default_passthrough(false);
+}
+
 static void iommu_snp_enable(void)
 {
 #ifdef CONFIG_KVM_AMD_SEV
@@ -3247,6 +3261,7 @@ static int __init state_next(void)
 		break;
 	case IOMMU_ENABLED:
 		register_syscore_ops(&amd_iommu_syscore_ops);
+		iommu_sev_guest_enable();
 		iommu_snp_enable();
 		ret = amd_iommu_init_pci();
 		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_PCI_INIT;

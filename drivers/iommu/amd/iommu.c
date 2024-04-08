@@ -2876,6 +2876,12 @@ static int amd_iommu_def_domain_type(struct device *dev)
 		return IOMMU_DOMAIN_IDENTITY;
 	}
 
+	/*
+	 * Force identity map for SEV guest.
+	 */
+	if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
+		return IOMMU_DOMAIN_IDENTITY;
+
 	return 0;
 }
 
