@@ -309,7 +309,6 @@
  * AMD IOMMU hardware only support 512 IRTEs despite
  * the architectural limitation of 2048 entries.
  */
-#define DTE_INTTAB_ALIGNMENT    128
 #define DTE_INTTABLEN_VALUE     9ULL
 #define DTE_INTTABLEN           (DTE_INTTABLEN_VALUE << 1)
 #define DTE_INTTABLEN_MASK      (0xfULL << 1)
@@ -497,7 +496,7 @@ struct amd_iommu_mem {
 struct irq_remap_table {
 	raw_spinlock_t lock;
 	unsigned min_index;
-	u32 *table;
+	struct amd_iommu_mem mem;
 };
 
 /* Interrupt remapping feature used? */

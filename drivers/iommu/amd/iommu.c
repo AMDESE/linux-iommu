@@ -73,8 +73,6 @@ struct iommu_cmd {
 	u32 data[4];
 };
 
-struct kmem_cache *amd_iommu_irq_cache;
-
 static void detach_device(struct device *dev);
 
 static void set_dte_entry(struct amd_iommu *iommu,
@@ -2998,7 +2996,7 @@ static void set_dte_irq_entry(struct amd_iommu *iommu, u16 devid,
 
 	dte	= dev_table[devid].data[2];
 	dte	&= ~DTE_IRQ_PHYS_ADDR_MASK;
-	dte	|= iommu_virt_to_phys(table->table);
+	dte	|= amd_iommu_mem_to_phys(&table->mem);
 	dte	|= DTE_IRQ_REMAP_INTCTL;
 	dte	|= DTE_INTTABLEN;
 	dte	|= DTE_IRQ_REMAP_ENABLE;
@@ -3024,27 +3022,35 @@ static struct irq_remap_table *get_irq_table(struct amd_iommu *iommu, u16 devid)
 	return table;
 }
 
-static struct irq_remap_table *__alloc_irq_table(void)
+static size_t get_irq_table_size(void)
 {
+	if (!AMD_IOMMU_GUEST_IR_GA(amd_iommu_guest_ir))
+		return (MAX_IRQS_PER_TABLE * sizeof(u32));
+	else
+		return (MAX_IRQS_PER_TABLE * (sizeof(u64) * 2));
+}
+
+static struct irq_remap_table *__alloc_irq_table(struct amd_iommu *iommu)
+{
+	struct amd_iommu_mem *mem;
 	struct irq_remap_table *table;
+	int order = get_order(get_irq_table_size());
+	int nid = (iommu && iommu->dev) ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
 
 	table = kzalloc(sizeof(*table), GFP_KERNEL);
 	if (!table)
 		return NULL;
 
-	table->table = kmem_cache_alloc(amd_iommu_irq_cache, GFP_KERNEL);
-	if (!table->table) {
+	mem = &table->mem;
+	mem->modes = ALLOC_MODE_GUEST_MEM_DECRYPT;
+	mem->order = order;
+	mem->buf = amd_iommu_get_zeroed_mem_node(nid, GFP_KERNEL, mem);
+	if (!mem->buf) {
 		kfree(table);
 		return NULL;
 	}
 	raw_spin_lock_init(&table->lock);
 
-	if (!AMD_IOMMU_GUEST_IR_GA(amd_iommu_guest_ir))
-		memset(table->table, 0,
-		       MAX_IRQS_PER_TABLE * sizeof(u32));
-	else
-		memset(table->table, 0,
-		       (MAX_IRQS_PER_TABLE * (sizeof(u64) * 2)));
 	return table;
 }
 
@@ -3101,7 +3107,7 @@ static struct irq_remap_table *alloc_irq_table(struct amd_iommu *iommu,
 	spin_unlock_irqrestore(&iommu_table_lock, flags);
 
 	/* Nothing there yet, allocate new irq remapping table */
-	new_table = __alloc_irq_table();
+	new_table = __alloc_irq_table(iommu);
 	if (!new_table)
 		return NULL;
 
@@ -3136,7 +3142,7 @@ out_unlock:
 	spin_unlock_irqrestore(&iommu_table_lock, flags);
 
 	if (new_table) {
-		kmem_cache_free(amd_iommu_irq_cache, new_table->table);
+		amd_iommu_free_mem(&new_table->mem);
 		kfree(new_table);
 	}
 	return table;
@@ -3202,7 +3208,7 @@ static int __modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
 
 	raw_spin_lock_irqsave(&table->lock, flags);
 
-	entry = (struct irte_ga *)table->table;
+	entry = (struct irte_ga *)table->mem.buf;
 	entry = &entry[index];
 
 	/*
@@ -3244,7 +3250,7 @@ static int modify_irte(struct amd_iommu *iommu,
 		return -ENOMEM;
 
 	raw_spin_lock_irqsave(&table->lock, flags);
-	table->table[index] = irte->val;
+	((u32 *)table->mem.buf)[index] = irte->val;
 	raw_spin_unlock_irqrestore(&table->lock, flags);
 
 	iommu_flush_irt_and_complete(iommu, devid);
@@ -3358,12 +3364,12 @@ static void irte_ga_set_affinity(struct amd_iommu *iommu, void *entry, u16 devid
 #define IRTE_ALLOCATED (~1U)
 static void irte_set_allocated(struct irq_remap_table *table, int index)
 {
-	table->table[index] = IRTE_ALLOCATED;
+	((u32 *)table->mem.buf)[index] = IRTE_ALLOCATED;
 }
 
 static void irte_ga_set_allocated(struct irq_remap_table *table, int index)
 {
-	struct irte_ga *ptr = (struct irte_ga *)table->table;
+	struct irte_ga *ptr = (struct irte_ga *)table->mem.buf;
 	struct irte_ga *irte = &ptr[index];
 
 	memset(&irte->lo.val, 0, sizeof(u64));
@@ -3373,7 +3379,7 @@ static void irte_ga_set_allocated(struct irq_remap_table *table, int index)
 
 static bool irte_is_allocated(struct irq_remap_table *table, int index)
 {
-	union irte *ptr = (union irte *)table->table;
+	union irte *ptr = (union irte *)table->mem.buf;
 	union irte *irte = &ptr[index];
 
 	return irte->val != 0;
@@ -3381,7 +3387,7 @@ static bool irte_is_allocated(struct irq_remap_table *table, int index)
 
 static bool irte_ga_is_allocated(struct irq_remap_table *table, int index)
 {
-	struct irte_ga *ptr = (struct irte_ga *)table->table;
+	struct irte_ga *ptr = (struct irte_ga *)table->mem.buf;
 	struct irte_ga *irte = &ptr[index];
 
 	return irte->hi.fields.vector != 0;
@@ -3389,12 +3395,12 @@ static bool irte_ga_is_allocated(struct irq_remap_table *table, int index)
 
 static void irte_clear_allocated(struct irq_remap_table *table, int index)
 {
-	table->table[index] = 0;
+	((u32 *)table->mem.buf)[index] = 0;
 }
 
 static void irte_ga_clear_allocated(struct irq_remap_table *table, int index)
 {
-	struct irte_ga *ptr = (struct irte_ga *)table->table;
+	struct irte_ga *ptr = (struct irte_ga *)table->mem.buf;
 	struct irte_ga *irte = &ptr[index];
 
 	memset(&irte->lo.val, 0, sizeof(u64));
