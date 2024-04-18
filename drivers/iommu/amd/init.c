@@ -3848,7 +3848,7 @@ int amd_iommu_snp_disable(void)
 		if (ret)
 			return ret;
 
-		ret = iommu_make_shared(iommu->ppr_log, PPR_LOG_SIZE);
+		ret = iommu_make_shared(iommu->ppr_log_mem.buf, PPR_LOG_SIZE);
 		if (ret)
 			return ret;
 

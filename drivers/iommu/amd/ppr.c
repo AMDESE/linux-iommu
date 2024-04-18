@@ -19,21 +19,27 @@
 
 int __init amd_iommu_alloc_ppr_log(struct amd_iommu *iommu)
 {
-	iommu->ppr_log = iommu_alloc_4k_pages(iommu, GFP_KERNEL | __GFP_ZERO,
-					      PPR_LOG_SIZE);
-	return iommu->ppr_log ? 0 : -ENOMEM;
+	struct amd_iommu_mem *mem = &iommu->ppr_log_mem;
+
+	mem->modes = ALLOC_MODE_4K;
+	mem->order = get_order(PPR_LOG_SIZE);
+	mem->buf = amd_iommu_get_zeroed_mem(GFP_KERNEL, mem);
+	if (!mem->buf)
+		return -ENOMEM;
+	return 0;
 }
 
 void amd_iommu_enable_ppr_log(struct amd_iommu *iommu)
 {
 	u64 entry;
 
-	if (iommu->ppr_log == NULL)
+	if (iommu->ppr_log_mem.buf == NULL)
 		return;
 
 	iommu_feature_enable(iommu, CONTROL_PPR_EN);
 
-	entry = iommu_virt_to_phys(iommu->ppr_log) | PPR_LOG_SIZE_512;
+	entry = amd_iommu_mem_to_phys(&iommu->ppr_log_mem);
+	entry |= PPR_LOG_SIZE_512;
 
 	memcpy_toio(iommu->mmio_base + MMIO_PPR_LOG_OFFSET,
 		    &entry, sizeof(entry));
@@ -48,7 +54,7 @@ void amd_iommu_enable_ppr_log(struct amd_iommu *iommu)
 
 void __init amd_iommu_free_ppr_log(struct amd_iommu *iommu)
 {
-	iommu_free_pages(iommu->ppr_log, get_order(PPR_LOG_SIZE));
+	amd_iommu_free_mem(&iommu->ppr_log_mem);
 }
 
 /*
@@ -163,7 +169,7 @@ void amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
 {
 	u32 head, tail;
 
-	if (iommu->ppr_log == NULL)
+	if (iommu->ppr_log_mem.buf == NULL)
 		return;
 
 	head = readl(iommu->mmio_base + MMIO_PPR_HEAD_OFFSET);
@@ -174,7 +180,7 @@ void amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
 		u64 entry[2];
 		int i;
 
-		raw = (u64 *)(iommu->ppr_log + head);
+		raw = (u64 *)((u8 *)iommu->ppr_log_mem.buf) + head;
 
 		/*
 		 * Hardware bug: Interrupt may arrive before the entry is
