@@ -1078,7 +1078,7 @@ static void copy_cmd_to_buffer(struct amd_iommu *iommu,
 
 	/* Copy command to buffer */
 	tail = iommu->cmd_buf_tail;
-	target = iommu->cmd_buf + tail;
+	target = ((u8 *)iommu->cmd_buf_mem.buf) + tail;
 	memcpy(target, cmd, sizeof(*cmd));
 
 	tail = (tail + sizeof(*cmd)) % CMD_BUFFER_SIZE;

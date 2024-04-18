@@ -735,10 +735,15 @@ static void __init free_alias_table(struct amd_iommu_pci_seg *pci_seg)
  */
 static int __init alloc_command_buffer(struct amd_iommu *iommu)
 {
-	iommu->cmd_buf = iommu_alloc_pages(GFP_KERNEL,
-					   get_order(CMD_BUFFER_SIZE));
+	struct amd_iommu_mem *mem = &iommu->cmd_buf_mem;
 
-	return iommu->cmd_buf ? 0 : -ENOMEM;
+	mem->modes = ALLOC_MODE_GUEST_MEM_DECRYPT;
+	mem->order = get_order(CMD_BUFFER_SIZE);
+	mem->buf = amd_iommu_get_zeroed_mem(GFP_KERNEL, mem);
+	if (!mem->buf)
+		return -ENOMEM;
+
+	return 0;
 }
 
 /*
@@ -812,9 +817,9 @@ static void iommu_enable_command_buffer(struct amd_iommu *iommu)
 {
 	u64 entry;
 
-	BUG_ON(iommu->cmd_buf == NULL);
+	BUG_ON(iommu->cmd_buf_mem.buf == NULL);
 
-	entry = iommu_virt_to_phys(iommu->cmd_buf);
+	entry = amd_iommu_mem_to_phys(&iommu->cmd_buf_mem);
 	entry |= MMIO_CMD_SIZE_512;
 
 	memcpy_toio(iommu->mmio_base + MMIO_CMD_BUF_OFFSET,
@@ -833,7 +838,7 @@ static void iommu_disable_command_buffer(struct amd_iommu *iommu)
 
 static void __init free_command_buffer(struct amd_iommu *iommu)
 {
-	iommu_free_pages(iommu->cmd_buf, get_order(CMD_BUFFER_SIZE));
+	amd_iommu_free_mem(&iommu->cmd_buf_mem);
 }
 
 void *__init iommu_alloc_4k_pages(struct amd_iommu *iommu, gfp_t gfp,

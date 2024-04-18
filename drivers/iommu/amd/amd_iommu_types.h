@@ -733,7 +733,7 @@ struct amd_iommu {
 	u64 exclusion_length;
 
 	/* command buffer virtual address */
-	u8 *cmd_buf;
+	struct amd_iommu_mem cmd_buf_mem;
 	u32 cmd_buf_head;
 	u32 cmd_buf_tail;
 
