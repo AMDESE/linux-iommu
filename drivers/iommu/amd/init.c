@@ -860,19 +860,25 @@ void *__init iommu_alloc_4k_pages(struct amd_iommu *iommu, gfp_t gfp,
 /* allocates the memory where the IOMMU will log its events to */
 static int __init alloc_event_buffer(struct amd_iommu *iommu)
 {
-	iommu->evt_buf = iommu_alloc_4k_pages(iommu, GFP_KERNEL,
-					      EVT_BUFFER_SIZE);
+	struct amd_iommu_mem *mem = &iommu->evt_buf_mem;
 
-	return iommu->evt_buf ? 0 : -ENOMEM;
+	mem->modes = ALLOC_MODE_4K | ALLOC_MODE_GUEST_MEM_DECRYPT;
+	mem->order = get_order(EVT_BUFFER_SIZE);
+	mem->buf = amd_iommu_get_zeroed_mem(GFP_KERNEL, mem);
+	if (!mem->buf)
+		return -ENOMEM;
+
+	return 0;
 }
 
 static void iommu_enable_event_buffer(struct amd_iommu *iommu)
 {
 	u64 entry;
 
-	BUG_ON(iommu->evt_buf == NULL);
+	BUG_ON(iommu->evt_buf_mem.buf == NULL);
 
-	entry = iommu_virt_to_phys(iommu->evt_buf) | EVT_LEN_MASK;
+	entry = amd_iommu_mem_to_phys(&iommu->evt_buf_mem);
+	entry |= EVT_LEN_MASK;
 
 	memcpy_toio(iommu->mmio_base + MMIO_EVT_BUF_OFFSET,
 		    &entry, sizeof(entry));
@@ -894,7 +900,7 @@ static void iommu_disable_event_buffer(struct amd_iommu *iommu)
 
 static void __init free_event_buffer(struct amd_iommu *iommu)
 {
-	iommu_free_pages(iommu->evt_buf, get_order(EVT_BUFFER_SIZE));
+	amd_iommu_free_mem(&iommu->evt_buf_mem);
 }
 
 static void free_ga_log(struct amd_iommu *iommu)
@@ -3838,7 +3844,7 @@ int amd_iommu_snp_disable(void)
 		return 0;
 
 	for_each_iommu(iommu) {
-		ret = iommu_make_shared(iommu->evt_buf, EVT_BUFFER_SIZE);
+		ret = iommu_make_shared(iommu->evt_buf_mem.buf, EVT_BUFFER_SIZE);
 		if (ret)
 			return ret;
 
