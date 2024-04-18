@@ -841,22 +841,6 @@ static void __init free_command_buffer(struct amd_iommu *iommu)
 	amd_iommu_free_mem(&iommu->cmd_buf_mem);
 }
 
-void *__init iommu_alloc_4k_pages(struct amd_iommu *iommu, gfp_t gfp,
-				  size_t size)
-{
-	int order = get_order(size);
-	void *buf = iommu_alloc_pages(gfp, order);
-
-	if (buf &&
-	    check_feature(FEATURE_SNP) &&
-	    set_memory_4k((unsigned long)buf, (1 << order))) {
-		iommu_free_pages(buf, order);
-		buf = NULL;
-	}
-
-	return buf;
-}
-
 /* allocates the memory where the IOMMU will log its events to */
 static int __init alloc_event_buffer(struct amd_iommu *iommu)
 {
