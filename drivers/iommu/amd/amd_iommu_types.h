@@ -798,7 +798,7 @@ struct amd_iommu {
 #endif
 
 	u32 flags;
-	volatile u64 *cmd_sem;
+	struct amd_iommu_mem cmd_sem_mem;
 	atomic64_t cmd_sem_val;
 
 #ifdef CONFIG_AMD_IOMMU_DEBUGFS

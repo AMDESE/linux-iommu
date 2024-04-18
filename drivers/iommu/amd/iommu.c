@@ -1056,8 +1056,9 @@ irqreturn_t amd_iommu_int_handler(int irq, void *data)
 static int wait_on_sem(struct amd_iommu *iommu, u64 data)
 {
 	int i = 0;
+	u64 *cmd_sem = (u64 *)iommu->cmd_sem_mem.buf;
 
-	while (*iommu->cmd_sem != data && i < LOOP_TIMEOUT) {
+	while (*cmd_sem != data && i < LOOP_TIMEOUT) {
 		udelay(1);
 		i += 1;
 	}
@@ -1092,7 +1093,7 @@ static void build_completion_wait(struct iommu_cmd *cmd,
 				  struct amd_iommu *iommu,
 				  u64 data)
 {
-	u64 paddr = iommu_virt_to_phys((void *)iommu->cmd_sem);
+	u64 paddr = amd_iommu_mem_to_phys(&iommu->cmd_sem_mem);
 
 	memset(cmd, 0, sizeof(*cmd));
 	cmd->data[0] = lower_32_bits(paddr) | CMD_COMPL_WAIT_STORE_MASK;

@@ -383,7 +383,7 @@ static void iommu_set_exclusion_range(struct amd_iommu *iommu)
 
 static void iommu_set_cwwb_range(struct amd_iommu *iommu)
 {
-	u64 start = iommu_virt_to_phys((void *)iommu->cmd_sem);
+	u64 start = amd_iommu_mem_to_phys(&iommu->cmd_sem_mem);
 	u64 entry = start & PM_ADDR_MASK;
 
 	if (!check_feature(FEATURE_SNP))
@@ -963,15 +963,20 @@ err_out:
 
 static int __init alloc_cwwb_sem(struct amd_iommu *iommu)
 {
-	iommu->cmd_sem = iommu_alloc_4k_pages(iommu, GFP_KERNEL, 1);
+	struct amd_iommu_mem *mem = &iommu->cmd_sem_mem;
 
-	return iommu->cmd_sem ? 0 : -ENOMEM;
+	mem->modes = ALLOC_MODE_4K | ALLOC_MODE_GUEST_MEM_DECRYPT;
+	mem->order = get_order(1);
+	mem->buf = amd_iommu_get_zeroed_mem(GFP_KERNEL, mem);
+	if (!mem->buf)
+		return -ENOMEM;
+
+	return 0;
 }
 
 static void __init free_cwwb_sem(struct amd_iommu *iommu)
 {
-	if (iommu->cmd_sem)
-		iommu_free_page((void *)iommu->cmd_sem);
+	amd_iommu_free_mem(&iommu->cmd_sem_mem);
 }
 
 static void iommu_enable_xt(struct amd_iommu *iommu)
@@ -3841,7 +3846,7 @@ int amd_iommu_snp_disable(void)
 		if (ret)
 			return ret;
 
-		ret = iommu_make_shared((void *)iommu->cmd_sem, PAGE_SIZE);
+		ret = iommu_make_shared(iommu->cmd_sem_mem.buf, PAGE_SIZE);
 		if (ret)
 			return ret;
 	}
