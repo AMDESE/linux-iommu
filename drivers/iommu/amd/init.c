@@ -409,11 +409,10 @@ static void iommu_set_device_table(struct amd_iommu *iommu)
 {
 	u64 entry;
 	u32 dev_table_size = iommu->pci_seg->dev_table_size;
-	void *dev_table = (void *)get_dev_table(iommu);
 
 	BUG_ON(iommu->mmio_base == NULL);
 
-	entry = iommu_virt_to_phys(dev_table);
+	entry = amd_iommu_mem_to_phys(&iommu->pci_seg->dev_table_mem);
 	entry |= (dev_table_size >> 12) - 1;
 	memcpy_toio(iommu->mmio_base + MMIO_DEV_TABLE_OFFSET,
 			&entry, sizeof(entry));
@@ -650,9 +649,12 @@ static int __init find_last_devid_acpi(struct acpi_table_header *table, u16 pci_
 /* Allocate per PCI segment device table */
 static inline int __init alloc_dev_table(struct amd_iommu_pci_seg *pci_seg)
 {
-	pci_seg->dev_table = iommu_alloc_pages(GFP_KERNEL | GFP_DMA32,
-					       get_order(pci_seg->dev_table_size));
-	if (!pci_seg->dev_table)
+	struct amd_iommu_mem *mem = &pci_seg->dev_table_mem;
+
+	mem->modes = ALLOC_MODE_GUEST_MEM_DECRYPT;
+	mem->order = get_order(pci_seg->dev_table_size);
+	mem->buf = amd_iommu_get_zeroed_mem(GFP_KERNEL | GFP_DMA32, mem);
+	if (!mem->buf)
 		return -ENOMEM;
 
 	return 0;
@@ -660,9 +662,7 @@ static inline int __init alloc_dev_table(struct amd_iommu_pci_seg *pci_seg)
 
 static inline void free_dev_table(struct amd_iommu_pci_seg *pci_seg)
 {
-	iommu_free_pages(pci_seg->dev_table,
-			 get_order(pci_seg->dev_table_size));
-	pci_seg->dev_table = NULL;
+	amd_iommu_free_mem(&pci_seg->dev_table_mem);
 }
 
 /* Allocate per PCI segment IOMMU rlookup table. */
@@ -2570,7 +2570,7 @@ static int __init init_memory_definitions(struct acpi_table_header *table)
 static void init_device_table_dma(struct amd_iommu_pci_seg *pci_seg)
 {
 	u32 devid;
-	struct dev_table_entry *dev_table = pci_seg->dev_table;
+	struct dev_table_entry *dev_table = pci_seg->dev_table_mem.buf;
 
 	if (dev_table == NULL)
 		return;
@@ -2585,7 +2585,7 @@ static void init_device_table_dma(struct amd_iommu_pci_seg *pci_seg)
 static void __init uninit_device_table_dma(struct amd_iommu_pci_seg *pci_seg)
 {
 	u32 devid;
-	struct dev_table_entry *dev_table = pci_seg->dev_table;
+	struct dev_table_entry *dev_table = pci_seg->dev_table_mem.buf;
 
 	if (dev_table == NULL)
 		return;
@@ -2606,7 +2606,7 @@ static void init_device_table(void)
 
 	for_each_pci_segment(pci_seg) {
 		for (devid = 0; devid <= pci_seg->last_bdf; ++devid)
-			__set_dev_entry_bit(pci_seg->dev_table,
+			__set_dev_entry_bit(pci_seg->dev_table_mem.buf,
 					    devid, DEV_ENTRY_IRQ_TBL_EN);
 	}
 }
@@ -2778,9 +2778,9 @@ static void early_enable_iommus(void)
 		pr_info("Copied DEV table from previous kernel.\n");
 
 		for_each_pci_segment(pci_seg) {
-			iommu_free_pages(pci_seg->dev_table,
+			iommu_free_pages(pci_seg->dev_table_mem.buf,
 					 get_order(pci_seg->dev_table_size));
-			pci_seg->dev_table = pci_seg->old_dev_tbl_cpy;
+			pci_seg->dev_table_mem.buf = pci_seg->old_dev_tbl_cpy;
 		}
 
 		for_each_iommu(iommu) {

@@ -144,7 +144,7 @@ struct dev_table_entry *get_dev_table(struct amd_iommu *iommu)
 	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
 
 	BUG_ON(pci_seg == NULL);
-	dev_table = pci_seg->dev_table;
+	dev_table = pci_seg->dev_table_mem.buf;
 	BUG_ON(dev_table == NULL);
 
 	return dev_table;

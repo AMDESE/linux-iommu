@@ -638,7 +638,7 @@ struct amd_iommu_pci_seg {
 	 * information about the domain the device belongs to as well as the
 	 * page table root pointer.
 	 */
-	struct dev_table_entry *dev_table;
+	struct amd_iommu_mem dev_table_mem;
 
 	/*
 	 * The rlookup iommu table is used to find the IOMMU which is
