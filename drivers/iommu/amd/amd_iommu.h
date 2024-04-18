@@ -28,6 +28,11 @@ void iommu_feature_enable(struct amd_iommu *iommu, u8 bit);
 void *__init iommu_alloc_4k_pages(struct amd_iommu *iommu,
 				  gfp_t gfp, size_t size);
 
+void *amd_iommu_get_zeroed_mem(gfp_t gfp_mask, struct amd_iommu_mem *mem);
+void *amd_iommu_get_zeroed_mem_node(int nid, gfp_t gfp_mask,
+				    struct amd_iommu_mem *mem);
+void amd_iommu_free_mem(struct amd_iommu_mem *mem);
+
 #ifdef CONFIG_AMD_IOMMU_DEBUGFS
 void amd_iommu_debugfs_setup(struct amd_iommu *iommu);
 #else
@@ -135,6 +140,30 @@ static inline bool amd_iommu_gt_ppr_supported(void)
 static inline u64 iommu_virt_to_phys(void *vaddr)
 {
 	return (u64)__sme_set(virt_to_phys(vaddr));
+}
+
+static inline bool amd_iommu_mem_is_decrypted(struct amd_iommu_mem *mem)
+{
+	return (mem->modes & ALLOC_MODE_GUEST_MEM_DECRYPT);
+}
+
+static inline bool amd_iommu_mem_is_4k(struct amd_iommu_mem *mem)
+{
+	return (mem->modes & ALLOC_MODE_4K);
+}
+
+static inline u64 amd_iommu_mem_to_phys(struct amd_iommu_mem *mem)
+{
+	/*
+	 * Return physical address without the encryption bit for data
+	 * structures allocated with the flag ALLOC_MODE_GUEST_MEM_DECRYPT
+	 * when running in SEV guest.
+	 */
+	if (amd_iommu_mem_is_decrypted(mem) &&
+	    cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
+		return (u64)virt_to_phys(mem->buf);
+
+	return iommu_virt_to_phys(mem->buf);
 }
 
 static inline void *iommu_phys_to_virt(unsigned long paddr)

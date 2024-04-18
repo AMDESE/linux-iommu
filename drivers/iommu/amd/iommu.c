@@ -37,6 +37,7 @@
 #include <asm/iommu.h>
 #include <asm/gart.h>
 #include <asm/dma.h>
+#include <asm/set_memory.h>
 #include <uapi/linux/iommufd.h>
 
 #include "amd_iommu.h"
@@ -572,6 +573,71 @@ static void amd_iommu_uninit_device(struct device *dev)
 	 * We keep dev_data around for unplugged devices and reuse it when the
 	 * device is re-plugged - not doing so would introduce a ton of races.
 	 */
+}
+
+void amd_iommu_free_mem(struct amd_iommu_mem *mem)
+{
+	int ret;
+	unsigned long addr = (unsigned long)mem->buf;
+
+	if (amd_iommu_mem_is_decrypted(mem) &&
+	    cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT)) {
+		ret = set_memory_encrypted(addr, 1 << mem->order);
+		if (ret) {
+			pr_warn("%s: Fail to set memory encrypted (ret=%d)\n",
+				__func__, ret);
+			return;
+		}
+	}
+
+	iommu_free_pages(mem->buf, mem->order);
+	mem->buf = NULL;
+}
+
+void *amd_iommu_get_zeroed_mem_node(int nid, gfp_t gfp_mask, struct amd_iommu_mem *mem)
+{
+	int ret;
+	unsigned long addr;
+	int numpages = (1 << mem->order);
+
+	mem->buf = iommu_alloc_pages_node(nid, gfp_mask, mem->order);
+	if (!mem->buf)
+		return NULL;
+
+	addr = (unsigned long)mem->buf;
+
+	/* Allocate SEV guest memory as decrypted */
+	if (amd_iommu_mem_is_decrypted(mem) &&
+	    cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT)) {
+		ret = set_memory_decrypted(addr, numpages);
+		if (ret) {
+			pr_warn("%s: Fail to set memory decrypted (ret=%d)\n",
+				__func__, ret);
+			goto out_free;
+		}
+	}
+
+	/* Allocate memory as 4K-aligned on SNP-enabled system. */
+	if (amd_iommu_mem_is_4k(mem) &&
+	    check_feature(FEATURE_SNP)) {
+		ret = set_memory_4k(addr, numpages);
+		if (ret) {
+			pr_warn("%s: Fail to set memory 4K(ret=%d)\n",
+				__func__, ret);
+			goto out_free;
+		}
+	}
+
+	return mem->buf;
+
+out_free:
+	amd_iommu_free_mem(mem);
+	return NULL;
+}
+
+void *amd_iommu_get_zeroed_mem(gfp_t gfp_mask, struct amd_iommu_mem *mem)
+{
+	return amd_iommu_get_zeroed_mem_node(NUMA_NO_NODE, gfp_mask, mem);
 }
 
 /****************************************************************************

@@ -479,6 +479,21 @@ extern bool amd_iommu_np_cache;
 /* Only true if all IOMMUs support device IOTLBs */
 extern bool amd_iommu_iotlb_sup;
 
+/*
+ * Allocation modes for struct amd_iommu_mem.
+ */
+
+/* Allocate memory as 4K-aligned mode */
+#define ALLOC_MODE_4K			BIT(0)
+/* Allocate memory as decrypted mode (for SEV guest) */
+#define ALLOC_MODE_GUEST_MEM_DECRYPT	BIT(1)
+
+struct amd_iommu_mem {
+	void *buf;
+	int order;
+	u32 modes;
+};
+
 struct irq_remap_table {
 	raw_spinlock_t lock;
 	unsigned min_index;
