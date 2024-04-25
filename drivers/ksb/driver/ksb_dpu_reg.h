@@ -1,0 +1,893 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (C) 2023, Advanced Micro Devices, Inc.
+ */
+
+#ifndef __KSB_DPU_REG_H
+#define __KSB_DPU_REG_H
+
+/** Number of DPU Data channels connected to one exerciser */
+#define EF_DPU_DATA_CHANNELS_NUM 2
+
+/**
+ * Number of data channels connected to the NoC on DPU
+ *
+ * We cannot use these data channels with exercisers
+ */
+#define EF_DPU_MAX_NOC_DCHAN_NUM 4
+
+/**
+ * Maximum number of DPU data channels of each type
+ *
+ * See XN-200041-AN-Q 4.5.1 Number of Channels
+ */
+#define EF_DPU_MAX_HOST_U2D_DCHAN_NUM 20
+#define EF_DPU_MAX_HOST_D2U_DCHAN_NUM 20
+#define EF_DPU_MAX_NET_U2D_DCHAN_NUM  12
+#define EF_DPU_MAX_NET_D2U_DCHAN_NUM  12
+
+#define DPU_EXERCISER_OFFSET    0x2000000
+
+/* Exerciser Indentifer */
+#define DPUEX_COM_REG_ID_OFFSET         0x00000000
+/* Exerciser Version */
+#define  DPUEX_COM_REG_VERSION_OFFSET   0x00000004
+/* Exerciser Common Test Enable Control */
+#define  DPUEX_COM_REG_CONTROL_TRIGGER_TEST_EN_OFFSET 0x00000008
+/* Exerciser Common Command Exerciser Test Enable Control */
+#define  DPUEX_COM_REG_CONTROL_CMD_EX_EN_OFFSET 0x00000010
+/* Exerciser Common Data In Exerciser Test Enable Control */
+#define  DPUEX_COM_REG_CONTROL_DATA_IN_EX_EN_OFFSET 0x00000014
+/* Exerciser Common Data Out Exerciser Test Enable Control */
+#define  DPUEX_COM_REG_CONTROL_DATA_OUT_EX_EN_OFFSET 0x00000018
+/* Exerciser Snapshot Control */
+#define  DPUEX_COM_REG_PERF_STAT_SNAP_CTRL_OFFSET 0x00000030
+#define  DPUEX_COM_REG_PERF_STAT_SNAP_CTRL_DPU_SNAP_LBN 0
+#define  DPUEX_COM_REG_PERF_STAT_SNAP_CTRL_DPU_SNAP_WIDTH 1
+
+/* DPU Config register */
+#define DPUEX_COM_REG_EX_CONFIG 0x00000040
+/* 0: DPU Host Common Module 1: DPU Net Common Module */
+#define    DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_DOX SEE ABOVE
+#define    DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_MASK BIT(0)
+#define    DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_DFLT 0x0
+#define    DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_DTKN DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_DFLT
+#define    DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_DTCR DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_DFLT
+#define    DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_LBN 0
+#define    DPUEX_COM_REG_EX_CONFIG_HOST_OR_NET_WIDTH 1
+/**
+ * Number of command channel exercisers implemented This also means 9
+ * event channel exercisers
+ */
+#define    DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_DOX SEE ABOVE
+#define    DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_MASK BITS(8, 4)
+#define    DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_DFLT 0x9
+#define    DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_DTKN DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_DFLT
+#define    DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_DTCR DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_DFLT
+#define    DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_LBN 4
+#define    DPUEX_COM_REG_EX_CONFIG_NUM_CMD_CH_EX_WIDTH 5
+
+#define  DPUEX_COM_REG_EX_CMD_RST_CTRL 0x00000080
+#define  DPUEX_COM_REG_EX_CMD_RST_STS 0x00000084
+#define  DPUEX_COM_REG_EX_EVNT_RST_CTRL 0x00000088
+#define  DPUEX_COM_REG_EX_U2D_RST_CTRL 0x00000090
+#define  DPUEX_COM_REG_EX_D2U_RST_CTRL 0x00000098
+
+
+
+
+#define DPUEX_COM_REG_EX_NET_BASE_OFFSET        0x00000044
+#define DPUEX_COM_REG_EX_CMD_OFFSET             0x00000050
+#define DPUEX_COM_REG_EX_CMD_STEP_OFFSET        0x00000054
+#define DPUEX_COM_REG_EX_EVNT_OFFSET            0x00000068
+#define DPUEX_COM_REG_EX_EVNT_STEP_OFFSET       0x0000006C
+#define DPUEX_COM_REG_EX_NTFY_OFFSET            0x00000070
+#define DPUEX_COM_REG_EX_U2D_OFFSET             0x00000058
+#define DPUEX_COM_REG_EX_U2D_STEP_OFFSET        0x0000005c
+#define DPUEX_COM_REG_EX_D2U_OFFSET				0x00000060
+#define DPUEX_COM_REG_EX_D2U_STEP_OFFSET		0x00000064
+
+/* Exerciser Command Indentifer */
+#define  DPUEX_CMD_REG_ID 0x00000000
+/* Exerciser Version */
+#define  DPUEX_CMD_REG_VERSION 0x00000004
+/* Exerciser Sequence Control */
+#define  DPUEX_CMD_REG_CONTROL 0x00000008
+#define    DPUEX_CMD_REG_CONTROL_TEST_EN_DOX SEE ABOVE
+#define    DPUEX_CMD_REG_CONTROL_TEST_EN_MASK BIT(0)
+#define    DPUEX_CMD_REG_CONTROL_TEST_EN_DFLT 0x0
+#define    DPUEX_CMD_REG_CONTROL_TEST_EN_DTKN DPUEX_CMD_REG_CONTROL_TEST_EN_DFLT
+#define    DPUEX_CMD_REG_CONTROL_TEST_EN_DTCR DPUEX_CMD_REG_CONTROL_TEST_EN_DFLT
+#define    DPUEX_CMD_REG_CONTROL_TEST_EN_LBN 0
+#define    DPUEX_CMD_REG_CONTROL_TEST_EN_WIDTH 1
+/* Command memory start address */
+#define    DPUEX_CMD_REG_CONTROL_START_ADDR_DOX SEE ABOVE
+#define    DPUEX_CMD_REG_CONTROL_START_ADDR_MASK BITS(19, 8)
+#define    DPUEX_CMD_REG_CONTROL_START_ADDR_DFLT 0x0
+#define    DPUEX_CMD_REG_CONTROL_START_ADDR_DTKN DPUEX_CMD_REG_CONTROL_START_ADDR_DFLT
+#define    DPUEX_CMD_REG_CONTROL_START_ADDR_DTCR DPUEX_CMD_REG_CONTROL_START_ADDR_DFLT
+#define    DPUEX_CMD_REG_CONTROL_START_ADDR_LBN 8
+#define    DPUEX_CMD_REG_CONTROL_START_ADDR_WIDTH 12
+/* Command memory stop address */
+#define    DPUEX_CMD_REG_CONTROL_STOP_ADDR_DOX SEE ABOVE
+#define    DPUEX_CMD_REG_CONTROL_STOP_ADDR_MASK BITS(31, 20)
+#define    DPUEX_CMD_REG_CONTROL_STOP_ADDR_DFLT 0x0
+#define    DPUEX_CMD_REG_CONTROL_STOP_ADDR_DTKN DPUEX_CMD_REG_CONTROL_STOP_ADDR_DFLT
+#define    DPUEX_CMD_REG_CONTROL_STOP_ADDR_DTCR DPUEX_CMD_REG_CONTROL_STOP_ADDR_DFLT
+#define    DPUEX_CMD_REG_CONTROL_STOP_ADDR_LBN 20
+#define    DPUEX_CMD_REG_CONTROL_STOP_ADDR_WIDTH 12
+
+/* Exerciser Loop Control Low */
+#define  DPUEX_CMD_REG_SET_LOOPS_L 0x00000010
+#define  DPUEX_CMD_REG_SET_LOOPS_L_NUM_LOOPS_L_LBN 0
+#define  DPUEX_CMD_REG_SET_LOOPS_L_NUM_LOOPS_L_WIDTH 32
+
+/* Exerciser Loop Control High */
+#define  DPUEX_CMD_REG_SET_LOOPS_H 0x00000014
+#define    DPUEX_CMD_REG_SET_LOOPS_H_NUM_LOOPS_H_LBN 0
+#define    DPUEX_CMD_REG_SET_LOOPS_H_NUM_LOOPS_H_WIDTH 16
+#define    DPUEX_CMD_REG_SET_LOOPS_H_NUM_LOOPS_SEQID_LBN 16
+#define    DPUEX_CMD_REG_SET_LOOPS_H_NUM_LOOPS_SEQID_WIDTH 4
+#define    DPUEX_CMD_REG_SET_LOOPS_H_NUM_LOOPS_CTRL_LBN 28
+#define    DPUEX_CMD_REG_SET_LOOPS_H_NUM_LOOPS_CTRL_WIDTH 2
+
+/* Exerciser Loop Status Low */
+#define  DPUEX_CMD_REG_GET_LOOPS_L 0x00000018
+/* Exerciser Loop Status High */
+#define  DPUEX_CMD_REG_GET_LOOPS_H 0x0000001c
+#define    DPUEX_CMD_REG_GET_LOOPS_H_CUR_LOOPS_H_LBN 0
+#define    DPUEX_CMD_REG_GET_LOOPS_H_CUR_LOOPS_H_WIDTH 16
+#define    DPUEX_CMD_REG_GET_LOOPS_H_CUR_LOOPS_SEQID_LBN 16
+#define    DPUEX_CMD_REG_GET_LOOPS_H_CUR_LOOPS_SEQID_WIDTH 4
+#define    DPUEX_CMD_REG_GET_LOOPS_H_CUR_LOOPS_CLR_LBN 28
+#define    DPUEX_CMD_REG_GET_LOOPS_H_CUR_LOOPS_CLR_WIDTH 1
+
+/**
+ * One-hot for each sequence.  1 = Sequence active; 0 = Sequence inactive
+ * Initially only 1 sequence is allowed to be running at a time. This
+ * means that REG_PERF_SEQ_STS register will be a single bit indicating
+ * the status of sequence 0.
+ */
+#define    DPUEX_CMD_REG_SEQID_STS_SEQ_STS_DOX SEE ABOVE
+#define    DPUEX_CMD_REG_SEQID_STS_SEQ_STS_MASK BIT(0)
+#define    DPUEX_CMD_REG_SEQID_STS_SEQ_STS_DFLT 0x0
+#define    DPUEX_CMD_REG_SEQID_STS_SEQ_STS_DTKN DPUEX_CMD_REG_SEQID_STS_SEQ_STS_DFLT
+#define    DPUEX_CMD_REG_SEQID_STS_SEQ_STS_DTCR DPUEX_CMD_REG_SEQID_STS_SEQ_STS_DFLT
+#define    DPUEX_CMD_REG_SEQID_STS_SEQ_STS_LBN 0
+#define    DPUEX_CMD_REG_SEQID_STS_SEQ_STS_WIDTH 1
+/* Exerciser Sequence ID Status */
+#define  DPUEX_CMD_REG_SEQID_STS_OFFSET 0x00000020
+#define  DPUEX_CMD_REG_SEQID_STS 0x00000020
+#define  DPUEX_CMD_REG_SEQID_STS_RESET 0x0
+
+/* Exerciser Performance Mode Sequence Control */
+#define  DPUEX_CMD_REG_PERF_CONTROL 0x00000040
+/* Enable Performance Mode When 0, all performance mode registers and
+ * sideband are ignored.
+ */
+#define    DPUEX_CMD_REG_PERF_CONTROL_PERF_EN_LBN 0
+#define    DPUEX_CMD_REG_PERF_CONTROL_PERF_EN_WIDTH 1
+#define    DPUEX_CMD_REG_PERF_CONTROL_NXT_CMD_EN_LBN 1
+#define    DPUEX_CMD_REG_PERF_CONTROL_NXT_CMD_EN_WIDTH 1
+#define    DPUEX_CMD_REG_PERF_CONTROL_SEQ_RATE_CTRL_LBN 4
+#define    DPUEX_CMD_REG_PERF_CONTROL_SEQ_RATE_CTRL_WIDTH 8
+#define    DPUEX_CMD_REG_PERF_CONTROL_NXT_CMD_RATE_CTRL_LBN 12
+#define    DPUEX_CMD_REG_PERF_CONTROL_NXT_CMD_RATE_CTRL_WIDTH 8
+#define    DPUEX_CMD_REG_PERF_CONTROL_SEQ_RATE_CTRL_LOW_LBN 20
+#define    DPUEX_CMD_REG_PERF_CONTROL_SEQ_RATE_CTRL_LOW_WIDTH 12
+
+/* Event CAM Match Table Load Control, lowest index is highest priority. */
+#define  DPUEX_CMD_REG_PERF_EV_CAM_CTRL 0x000000cc
+/* Exerciser Cookie Edit Control */
+#define  DPUEX_CMD_REG_PERF_COOKIE_CTRL 0x00000050
+/* Exerciser DMA Address Increment Table Load Starting Increment */
+#define  DPUEX_CMD_REG_PERF_ADDR_INC_BASE 0x00000060
+/* Exerciser DMA Address Increment Table Load Mask */
+#define  DPUEX_CMD_REG_PERF_ADDR_INC_MASK 0x00000064
+/* Exerciser DMA Addres Increment Table Load */
+#define  DPUEX_CMD_REG_PERF_ADDR_INC_LOAD 0x0000006c
+/* Exerciser Credit Wait Enable Control */
+#define  DPUEX_CMD_REG_PERF_CRDT_CTRL 0x00000070
+/* internal credit counter */
+#define  DPUEX_CMD_REG_PERF_CRDT_EV 0x00000080
+#define  DPUEX_CMD_REG_PERF_CRDT_CMD 0x00000084
+/**
+ * This is the last sampled value for command credits on the credit
+ * interface.
+ */
+#define  DPUEX_CMD_REG_PERF_CRDT_POOL_CTRL 0x00000088
+#define  DPUEX_CMD_REG_PERF_CRDT_POOL 0x0000008c
+#define  DPUEX_CMD_REG_PERF_CRDT_DMA_RD 0x00000090
+#define  DPUEX_CMD_REG_PERF_CRDT_DMA_WR 0x00000094
+
+/**
+ * This field indicates the number of times that the command capture
+ * memory has wrapped. You can calculate the total number of commands
+ * that
+ * have been stored by multiplying this value by the depth of the memory
+ * and adding the current wr_ptr. Write this register with any value to
+ * clear pointers.
+ */
+#define  DPUEX_CMD_REG_SNAP_BUSY 0x000001fc
+#define    DPUEX_CMD_REG_SNAP_BUSY_SNAP_BUSY_LBN 0
+#define    DPUEX_CMD_REG_SNAP_BUSY_SNAP_BUSY_WIDTH 1
+#define    DPUEX_CMD_REG_SNAP_BUSY_SNAP_CNT_LBN 16
+#define    DPUEX_CMD_REG_SNAP_BUSY_SNAP_CNT_WIDTH 16
+
+/**
+ * Command interface tlast count (valid and ready and  tlast) Counts the
+ * last command word in each command. If you were to setup a command with
+ * 5 command words, you would expect to see 5 in CMD_ACTV_CNT but only 1
+ * here
+ */
+#define  DPUEX_CMD_REG_SNAP_EV_ACTV 0x00000228
+
+/* HW checker cookie of last erroneous command */
+#define  DPUEX_CMD_REG_CMD_SIDE 0x00004000
+
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0 0x00010000
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_STEP 16
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_63_32 0x00010004
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_63_32_STEP 16
+
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_CMD_HEADER0_LBN 0
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_CMD_HEADER0_WIDTH 1
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_CMD_HEADER1_LBN 1
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_CMD_HEADER1_WIDTH 1
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_WAIT_CTXT_SRC_LBN 2
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_WAIT_CTXT_SRC_WIDTH 4
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_EDIT_BUFID_EN_LBN 13
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_31_0_EDIT_BUFID_EN_WIDTH 1
+
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_63_32_ROUTE_CTRL_LBN 16
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_63_32_ROUTE_CTRL_WIDTH 5
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_63_32_CTXT_STR_EN_LBN 8
+#define  DPUEX_CMD_REG_PERF_CMD_SIDE_63_32_CTXT_STR_EN_WIDTH 1
+
+#define  DPUEX_CMD_REG_CMD_31_0 0x00020000
+#define  DPUEX_CMD_REG_CMD_31_0_STEP 32
+#define  DPUEX_CMD_REG_CMD_63_32 0x00020004
+#define  DPUEX_CMD_REG_CMD_63_32_STEP 32
+#define  DPUEX_CMD_REG_CMD_95_64 0x00020008
+#define  DPUEX_CMD_REG_CMD_95_64_STEP 32
+#define  DPUEX_CMD_REG_CMD_127_96 0x0002000c
+#define  DPUEX_CMD_REG_CMD_127_96_STEP 32
+#define  DPUEX_CMD_REG_CMD_159_128 0x00020010
+#define  DPUEX_CMD_REG_CMD_159_128_STEP 32
+#define  DPUEX_CMD_REG_CMD_191_160 0x00020014
+#define  DPUEX_CMD_REG_CMD_191_160_STEP 32
+#define  DPUEX_CMD_REG_CMD_223_192 0x00020018
+#define  DPUEX_CMD_REG_CMD_223_192_STEP 32
+#define  DPUEX_CMD_REG_CMD_255_224 0x0002001c
+#define  DPUEX_CMD_REG_CMD_255_224_STEP 32
+
+/* Exerciser Event Version */
+#define  DPUEX_EV_REG_VERSION_OFFSET 0x00000004
+#define  DPUEX_EV_REG_VERSION 0x00000004
+#define  DPUEX_EV_REG_VERSION_RESET 0x1
+
+/* Exerciser Event Status 0 */
+#define  DPUEX_EV_REG_EVENT_0_OFFSET 0x00000008
+#define  DPUEX_EV_REG_EVENT_0 0x00000008
+#define  DPUEX_EV_REG_EVENT_0_RESET 0x0
+#define    DPUEX_EV_REG_EVENT_0_EV_VALID_DOX SEE ABOVE
+#define    DPUEX_EV_REG_EVENT_0_EV_VALID_MASK BIT(0)
+#define    DPUEX_EV_REG_EVENT_0_EV_VALID_DFLT 0x0
+#define    DPUEX_EV_REG_EVENT_0_EV_VALID_DTKN DPUEX_EV_REG_EVENT_0_EV_VALID_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_VALID_DTCR DPUEX_EV_REG_EVENT_0_EV_VALID_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_VALID_LBN 0
+#define    DPUEX_EV_REG_EVENT_0_EV_VALID_WIDTH 1
+#define    DPUEX_EV_REG_EVENT_0_EV_ERR_DOX SEE ABOVE
+#define    DPUEX_EV_REG_EVENT_0_EV_ERR_MASK BIT(1)
+#define    DPUEX_EV_REG_EVENT_0_EV_ERR_DFLT 0x0
+#define    DPUEX_EV_REG_EVENT_0_EV_ERR_DTKN DPUEX_EV_REG_EVENT_0_EV_ERR_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_ERR_DTCR DPUEX_EV_REG_EVENT_0_EV_ERR_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_ERR_LBN 1
+#define    DPUEX_EV_REG_EVENT_0_EV_ERR_WIDTH 1
+#define    DPUEX_EV_REG_EVENT_0_EV_DISCRIM_DOX SEE ABOVE
+#define    DPUEX_EV_REG_EVENT_0_EV_DISCRIM_MASK BIT(2)
+#define    DPUEX_EV_REG_EVENT_0_EV_DISCRIM_DFLT 0x0
+#define    DPUEX_EV_REG_EVENT_0_EV_DISCRIM_DTKN DPUEX_EV_REG_EVENT_0_EV_DISCRIM_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_DISCRIM_DTCR DPUEX_EV_REG_EVENT_0_EV_DISCRIM_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_DISCRIM_LBN 2
+#define    DPUEX_EV_REG_EVENT_0_EV_DISCRIM_WIDTH 1
+#define    DPUEX_EV_REG_EVENT_0_EV_COOKIE_DOX SEE ABOVE
+#define    DPUEX_EV_REG_EVENT_0_EV_COOKIE_MASK BITS(31, 16)
+#define    DPUEX_EV_REG_EVENT_0_EV_COOKIE_DFLT 0x0
+#define    DPUEX_EV_REG_EVENT_0_EV_COOKIE_DTKN DPUEX_EV_REG_EVENT_0_EV_COOKIE_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_COOKIE_DTCR DPUEX_EV_REG_EVENT_0_EV_COOKIE_DFLT
+#define    DPUEX_EV_REG_EVENT_0_EV_COOKIE_LBN 16
+#define    DPUEX_EV_REG_EVENT_0_EV_COOKIE_WIDTH 16
+
+/* Exerciser Event Status 1 */
+#define  DPUEX_EV_REV_EVENT_1_OFFSET 0x0000000c
+#define  DPUEX_EV_REV_EVENT_1 0x0000000c
+#define  DPUEX_EV_REV_EVENT_1_RESET 0x0
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_DOX SEE ABOVE
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_MASK BITS(14, 0)
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_DFLT 0x0
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_DTKN DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_DFLT
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_DTCR DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_DFLT
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_LBN 0
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_HEAD_WIDTH 15
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_DOX SEE ABOVE
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_MASK BITS(30, 16)
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_DFLT 0x0
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_DTKN DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_DFLT
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_DTCR DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_DFLT
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_LBN 16
+#define    DPUEX_EV_REV_EVENT_1_EV_BUF_TAIL_ERR_INFO_WIDTH 15
+/* Exerciser Event Status OE */
+#define  DPUEX_EV_REG_EVENT_OE_OFFSET 0x00000010
+#define  DPUEX_EV_REG_EVENT_OE 0x00000010
+#define  DPUEX_EV_REG_EVENT_OE_RESET 0x0
+#define  DPUEX_EV_REG_EVENT_OE_ROWS 6
+#define  DPUEX_EV_REG_EVENT_OE_STEP 4
+#define    DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_DOX SEE ABOVE
+#define    DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_MASK BITS(31, 0)
+#define    DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_DFLT 0x0
+#define    DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_DTKN DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_DFLT
+#define    DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_DTCR DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_DFLT
+#define    DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_LBN 0
+#define    DPUEX_EV_REG_EVENT_OE_EV_OE_INFO_WIDTH 32
+/* Exerciser Event Count */
+#define  DPUEX_EV_REG_EVENT_COUNT 0x0000002c
+
+/* Exerciser Performance Mode Sequence Control */
+#define DPUEX_D2U_REG_PERF_CONTROL_0_OFFSET 0x000000a0
+#define DPUEX_D2U_REG_PERF_CONTROL_0 0x000000a0
+#define DPUEX_D2U_REG_PERF_CONTROL_0_RESET 0x64640
+/**
+ * Enable Performance Mode When 0, all performance mode registers and
+ * sideband are ignored.
+ */
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_PERF_EN_LBN 0
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_PERF_EN_WIDTH 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_NXT_CMD_EN_LBN 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_NXT_CMD_EN_WIDTH 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_FULL_DATA_PKT_MODE_EN_LBN 2
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_FULL_DATA_PKT_MODE_EN_WIDTH 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_SEQ_RATE_CTRL_LBN 4
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_SEQ_RATE_CTRL_WIDTH 8
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_NXT_CMD_RATE_CTRL_LBN 12
+#define    DPUEX_D2U_REG_PERF_CONTROL_0_NXT_CMD_RATE_CTRL_WIDTH 8
+
+/* Exerciser Performance Mode Sequence Control for 2nd IF */
+#define  DPUEX_D2U_REG_PERF_CONTROL_1_OFFSET 0x000000a4
+#define  DPUEX_D2U_REG_PERF_CONTROL_1 0x000000a4
+#define  DPUEX_D2U_REG_PERF_CONTROL_1_RESET 0x64640
+
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_PERF_EN_LBN 0
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_PERF_EN_WIDTH 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_NXT_CMD_EN_LBN 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_NXT_CMD_EN_WIDTH 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_FULL_DATA_PKT_MODE_EN_LBN 2
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_FULL_DATA_PKT_MODE_EN_WIDTH 1
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_SEQ_RATE_CTRL_LBN 4
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_SEQ_RATE_CTRL_WIDTH 8
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_NXT_CMD_RATE_CTRL_LBN 12
+#define    DPUEX_D2U_REG_PERF_CONTROL_1_NXT_CMD_RATE_CTRL_WIDTH 8
+
+/* Exerciser Sequence Control */
+#define  DPUEX_D2U_REG_CONTROL_0_OFFSET 0x00000010
+#define  DPUEX_D2U_REG_CONTROL_0 0x00000010
+#define  DPUEX_D2U_REG_CONTROL_0_RESET 0x0
+#define  DPUEX_D2U_REG_CONTROL_0_TEST_EN_LBN 0
+#define  DPUEX_D2U_REG_CONTROL_0_TEST_EN_WIDTH 1
+#define  DPUEX_D2U_REG_CONTROL_0_START_ADDR_LBN 8
+#define  DPUEX_D2U_REG_CONTROL_0_START_ADDR_WIDTH 12
+#define  DPUEX_D2U_REG_CONTROL_0_STOP_ADDR_LBN 20
+#define  DPUEX_D2U_REG_CONTROL_0_STOP_ADDR_WIDTH 12
+
+/* Exerciser Sequence Control for for 2nd IF */
+#define  DPUEX_D2U_REG_CONTROL_1_OFFSET 0x00000014
+#define  DPUEX_D2U_REG_CONTROL_1 0x00000014
+#define  DPUEX_D2U_REG_CONTROL_1_RESET 0x0
+#define    DPUEX_D2U_REG_CONTROL_1_TEST_EN_LBN 0
+#define    DPUEX_D2U_REG_CONTROL_1_TEST_EN_WIDTH 1
+#define    DPUEX_D2U_REG_CONTROL_1_START_ADDR_LBN 8
+#define    DPUEX_D2U_REG_CONTROL_1_START_ADDR_WIDTH 12
+#define    DPUEX_D2U_REG_CONTROL_1_STOP_ADDR_LBN 20
+#define    DPUEX_D2U_REG_CONTROL_1_STOP_ADDR_WIDTH 12
+
+/* Exerciser Loop Control Low */
+#define  DPUEX_D2U_REG_SET_LOOPS_L_0_OFFSET 0x00000020
+#define  DPUEX_D2U_REG_SET_LOOPS_L_0 0x00000020
+#define  DPUEX_D2U_REG_SET_LOOPS_L_0_RESET 0x1
+#define    DPUEX_D2U_REG_SET_LOOPS_L_0_NUM_LOOPS_L_LBN 0
+#define    DPUEX_D2U_REG_SET_LOOPS_L_0_NUM_LOOPS_L_WIDTH 32
+
+/* Exerciser Loop Control High */
+#define  DPUEX_D2U_REG_SET_LOOPS_H_0_OFFSET 0x00000024
+#define  DPUEX_D2U_REG_SET_LOOPS_H_0 0x00000024
+#define  DPUEX_D2U_REG_SET_LOOPS_H_0_RESET 0x0/* Exerciser Loop Control High */
+#define    DPUEX_D2U_REG_SET_LOOPS_H_0_NUM_LOOPS_CTRL_LBN 28
+#define    DPUEX_D2U_REG_SET_LOOPS_H_0_NUM_LOOPS_CTRL_WIDTH 2
+#define    DPUEX_D2U_REG_SET_LOOPS_H_0_NUM_LOOPS_H_LBN 0
+#define    DPUEX_D2U_REG_SET_LOOPS_H_0_NUM_LOOPS_H_WIDTH 16
+
+/* Exerciser Loop Status Low */
+#define  DPUEX_D2U_REG_GET_LOOPS_L_0_OFFSET 0x00000030
+#define  DPUEX_D2U_REG_GET_LOOPS_L_0 0x00000030
+#define  DPUEX_D2U_REG_GET_LOOPS_L_0_RESET 0x0
+
+/* Exerciser Loop Status High */
+#define  DPUEX_D2U_REG_GET_LOOPS_H_0_OFFSET 0x00000034
+#define  DPUEX_D2U_REG_GET_LOOPS_H_0 0x00000034
+#define  DPUEX_D2U_REG_GET_LOOPS_H_0_RESET 0x0
+#define    DPUEX_D2U_REG_GET_LOOPS_H_0_CUR_LOOPS_CLR_LBN 28
+#define    DPUEX_D2U_REG_GET_LOOPS_H_0_CUR_LOOPS_CLR_WIDTH 1
+
+/* Exerciser Packet Data Control 0 */
+#define  DPUEX_D2U_REG_PACKET_DATA_0_OFFSET 0x00004000
+#define  DPUEX_D2U_REG_PACKET_DATA_0 0x00004000
+#define  DPUEX_D2U_REG_PACKET_DATA_0_RESET 0x0
+#define  DPUEX_D2U_REG_PACKET_DATA_0_ROWS 4096
+#define  DPUEX_D2U_REG_PACKET_DATA_0_STEP 4
+
+#define    DPUEX_D2U_REG_PACKET_DATA_0_COOKIE_LBN 0
+#define    DPUEX_D2U_REG_PACKET_DATA_0_COOKIE_WIDTH 16
+#define    DPUEX_D2U_REG_PACKET_DATA_0_LENGTH_LBN 16
+#define    DPUEX_D2U_REG_PACKET_DATA_0_LENGTH_WIDTH 14
+
+/* Exerciser Loop Control Low for 2nd IF */
+#define  DPUEX_D2U_REG_SET_LOOPS_L_1_OFFSET 0x00000028
+#define  DPUEX_D2U_REG_SET_LOOPS_L_1 0x00000028
+#define  DPUEX_D2U_REG_SET_LOOPS_L_1_RESET 0x1
+
+#define    DPUEX_D2U_REG_SET_LOOPS_L_1_NUM_LOOPS_L_LBN 0
+#define    DPUEX_D2U_REG_SET_LOOPS_L_1_NUM_LOOPS_L_WIDTH 32
+
+/* Exerciser Loop Control High for 2nd IF */
+#define  DPUEX_D2U_REG_SET_LOOPS_H_1_OFFSET 0x0000002c
+#define  DPUEX_D2U_REG_SET_LOOPS_H_1 0x0000002c
+#define  DPUEX_D2U_REG_SET_LOOPS_H_1_RESET 0x0
+
+#define    DPUEX_D2U_REG_SET_LOOPS_H_1_NUM_LOOPS_H_LBN 0
+#define    DPUEX_D2U_REG_SET_LOOPS_H_1_NUM_LOOPS_H_WIDTH 16
+#define    DPUEX_D2U_REG_SET_LOOPS_H_1_NUM_LOOPS_CTRL_LBN 28
+#define    DPUEX_D2U_REG_SET_LOOPS_H_1_NUM_LOOPS_CTRL_WIDTH 2
+
+
+/* Exerciser Loop Status Low for 2nd IF */
+#define  DPUEX_D2U_REG_GET_LOOPS_L_1_OFFSET 0x00000038
+#define  DPUEX_D2U_REG_GET_LOOPS_L_1 0x00000038
+#define  DPUEX_D2U_REG_GET_LOOPS_L_1_RESET 0x0
+
+#define    DPUEX_D2U_REG_GET_LOOPS_L_1_CUR_LOOPS_L_LBN 0
+#define    DPUEX_D2U_REG_GET_LOOPS_L_1_CUR_LOOPS_L_WIDTH 32
+
+/* Exerciser Loop Status High for 2nd IF */
+#define  DPUEX_D2U_REG_GET_LOOPS_H_1_OFFSET 0x0000003c
+#define  DPUEX_D2U_REG_GET_LOOPS_H_1 0x0000003c
+#define  DPUEX_D2U_REG_GET_LOOPS_H_1_RESET 0x0
+
+#define    DPUEX_D2U_REG_GET_LOOPS_H_1_CUR_LOOPS_H_LBN 0
+#define    DPUEX_D2U_REG_GET_LOOPS_H_1_CUR_LOOPS_H_WIDTH 16
+#define    DPUEX_D2U_REG_GET_LOOPS_H_1_CUR_LOOPS_CLR_LBN 28
+#define    DPUEX_D2U_REG_GET_LOOPS_H_1_CUR_LOOPS_CLR_WIDTH 1
+
+/* Exerciser Packet Data Control 1 */
+#define  DPUEX_D2U_REG_PACKET_DATA_1_OFFSET 0x00008000
+#define  DPUEX_D2U_REG_PACKET_DATA_1 0x00008000
+#define  DPUEX_D2U_REG_PACKET_DATA_1_RESET 0x0
+#define  DPUEX_D2U_REG_PACKET_DATA_1_ROWS 4096
+#define  DPUEX_D2U_REG_PACKET_DATA_1_STEP 4
+
+#define    DPUEX_D2U_REG_PACKET_DATA_1_COOKIE_LBN 0
+#define    DPUEX_D2U_REG_PACKET_DATA_1_COOKIE_WIDTH 16
+#define    DPUEX_D2U_REG_PACKET_DATA_1_LENGTH_LBN 16
+#define    DPUEX_D2U_REG_PACKET_DATA_1_LENGTH_WIDTH 14
+
+
+enum dpu_cmd_type_t {
+	DPU_CMD_RD         = 0,
+	DPU_CMD_WR         = 1,
+	DPU_CMD_RX         = 0,
+	DPU_CMD_TX         = 1,
+	DPU_CMD_RD_BARRIER = 2,
+	DPU_CMD_BUF        = 4,
+	DPU_CMD_BUF_WRITE  = 5,
+};
+
+enum dpu_src_type_t {
+	DPU_SRC_BUF         = 0,
+	DPU_SRC_HDR_AND_BUF = 1,
+	DPU_SRC_RESERVED    = 2,
+	DPU_SRC_DCHAN       = 3,
+	DPU_SRC_DMA         = 4,
+	DPU_SRC_HDR_AND_DMA = 5,
+};
+
+enum dpu_dst_type_t {
+	DPU_DST_BUF            = 0,
+	DPU_DST_DCHAN          = 1,
+	DPU_DST_BUF_AND_DCHAN  = 2,
+	DPU_DST_BUF_APPEND     = 3,
+	DPU_DST_REMOTE_BUF     = 4,
+	DPU_DST_DMA            = 5,
+	DPU_DST_NET_TX         = 6,
+	DPU_DST_BUF_AND_NET_TX = 7,
+};
+
+/** Type of DPU command (See XN-200041-AN-Q - 6 DPU commands overview) */
+typedef enum ef_dpu_cmd_type_e {
+	EF_DPU_CMD_RD,
+	EF_DPU_CMD_WR,
+	EF_DPU_CMD_RX,
+	EF_DPU_CMD_TX,
+	EF_DPU_CMD_RD_BARRIER,
+	EF_DPU_CMD_BUF,
+	EF_DPU_CMD_BUF_WRITE,
+} ef_dpu_cmd_type_t;
+
+/**
+ * Type of DPU command (See XN-200041-AN-Q - 10.3.3 Buffer Subsystem command
+ * header (dpu_cmd_buf_hdr))
+ */
+typedef enum ef_dpu_cmd_buf_subtype_e {
+	EF_DPU_CMD_BUF_ST_ALLOC,
+	EF_DPU_CMD_BUF_ST_FREE,
+	EF_DPU_CMD_BUF_ST_SEND,
+} ef_dpu_cmd_buf_subtype_t;
+
+/**
+ * Type of source in DPU command
+ * (See XN-200041-AN-Q - 6 DPU commands overview)
+ */
+typedef enum ef_dpu_src_type_e {
+	EF_DPU_SRC_BUF,
+	EF_DPU_SRC_HDR_AND_BUF,
+	EF_DPU_SRC_RESERVED,
+	EF_DPU_SRC_DCHAN,
+	EF_DPU_SRC_DMA,
+	EF_DPU_SRC_HDR_AND_DMA,
+} ef_dpu_src_type_t;
+
+/**
+ * Type of destination in DPU command
+ * (See XN-200041-AN-Q - 6 DPU commands overview)
+ */
+typedef enum ef_dpu_dst_type_e {
+	EF_DPU_DST_BUF,
+	EF_DPU_DST_DCHAN,
+	EF_DPU_DST_BUF_AND_DCHAN,
+	EF_DPU_DST_BUF_APPEND,
+	EF_DPU_DST_REMOTE_BUF,
+	EF_DPU_DST_DMA,
+	EF_DPU_DST_NET_TX,
+	EF_DPU_DST_BUF_AND_NET_TX,
+} ef_dpu_dst_type_t;
+
+/**
+ * Path variants in DPU command.
+ * (See XN-200041-AN-Q - 10.3.2 Offload Pipeline command headers (dpu_cmd_hdr))
+ */
+typedef enum {
+	EF_DPU_CMD_PATH_OFFLOAD_ENGINES = 0,
+	EF_DPU_CMD_PATH_BYPASS = 1
+} ef_dpu_cmd_path_t;
+
+/**
+ * Type of DPU.
+ */
+typedef enum {
+	SL_DPU_HOST,
+	SL_DPU_NET
+} sl_dpu_type_t;
+
+/**
+ * Type of DMA source/destination.
+ */
+typedef enum {
+	SL_DPU_DMA_HOST,
+	SL_DPU_DMA_PSX,
+	SL_DPU_DMA_DDR
+} sl_dpu_dma_type_t;
+
+/**
+ * Type of DPU Pipeline.
+ */
+typedef enum {
+	SL_DPU_HOST_WR0 = 0,
+	SL_DPU_HOST_WR1,
+	SL_DPU_HOST_RD0,
+	SL_DPU_HOST_RD1,
+	SL_DPU_NET_TX0,
+	SL_DPU_NET_TX1,
+	SL_DPU_NET_RX0,
+	SL_DPU_NET_RX1,
+
+	SL_DPU_PIPELINE__MIN = SL_DPU_HOST_WR0,
+	SL_DPU_PIPELINE__MAX = SL_DPU_NET_RX1,
+} sl_dpu_pipeline_type_t;
+
+/**
+ * Type of DPU Buffer.
+ */
+typedef enum {
+	SL_DPU_BUFFER_TYPE_HOST = 0,
+	SL_DPU_BUFFER_TYPE_NET,
+} sl_dpu_buffer_type_t;
+
+/**
+ * Type of DPU exerciser.
+ */
+typedef enum {
+	SL_DPU_EX_CMD,
+	SL_DPU_EX_U2D,
+	SL_DPU_EX_D2U,
+	SL_DPU_EX_EV,
+	SL_DPU_EX_NOTIFY,
+} sl_dpu_ex_type_t;
+
+
+/** DPU Data channels */
+typedef enum {
+	EF_DPU_EX_DATA_CHANNEL_0,
+	EF_DPU_EX_DATA_CHANNEL_1,
+} ef_dpu_ex_data_channel_t;
+
+/*
+ * Sideband definitions.
+ * See XN-201326-AN-C for details.
+ */
+typedef enum {
+	SIDEBAND_ROUTE_CTRL_DROP = 0x1f,
+	SIDEBAND_ROUTE_CTRL_DPU_LOCAL = 0,
+	SIDEBAND_ROUTE_CTRL_DPU_REMOTE = 1,
+} sideband_route_ctrl_t;
+
+/* See XN-201326-AN-C for details. */
+typedef enum {
+	SIDEBAND_WAIT_CTXT_SRC_NONE = 0,
+	SIDEBAND_WAIT_CTXT_SRC_OTHER_EX = 1,
+	SIDEBAND_WAIT_CTXT_SRC_OTHER_EX_AND_REMOTE_EV = 2,
+	SIDEBAND_WAIT_CTXT_SRC_REMOTE_EV = 3,
+	SIDEBAND_WAIT_CTXT_SRC_NOTIFY = 4,
+	SIDEBAND_WAIT_CTXT_SRC_ANY_EX_EV = 5,
+	SIDEBAND_WAIT_CTXT_SRC_NOTIFY_AND_ANY_EX_EV = 6,
+	SIDEBAND_WAIT_CTXT_SRC_NEXT_CMD_CTXT = 7,
+	SIDEBAND_WAIT_CTXT_SRC_NEXT_CMD_CTXT_AND_REMOTE_EV = 8,
+} sideband_wait_ctxt_src_t;
+
+/*
+ * Performance mode definitions.
+ * See XN-201326-AN-C for details.
+ */
+#define PERF_MODE_NUM_LOOPS_L_WIDTH DPUEX_CMD_REG_SET_LOOPS_L_NUM_LOOPS_L_WIDTH
+#define PERF_MODE_NUM_LOOPS_L_MASK                                             \
+  KSB_BITFIELD_MASK64(PERF_MODE_NUM_LOOPS_L_WIDTH)
+#define PERF_MODE_NUM_LOOPS_H_MASK                                             \
+  KSB_BITFIELD_MASK64(DPUEX_CMD_REG_SET_LOOPS_H_NUM_LOOPS_H_WIDTH)
+
+typedef enum {
+  PERF_MODE_LOOPS_CTRL_WRITE_ONLY = 0,
+  PERF_MODE_LOOPS_CTRL_WRITE_AND_START = 1,
+  PERF_MODE_LOOPS_CTRL_STOP_ONLY = 2,
+  PERF_MODE_LOOPS_CTRL_READ = 3,
+} perf_mode_loops_ctrl_t;
+
+/**
+ * Maximum buffer length in DPU DMA descriptor according to XN-200041-AN-Q
+ * 10.3.4 DMA descriptors
+ */
+#define EF_DPU_DMA_DESC_MAX_LEN 4096
+
+/** DPU BufSS pool numbers for received packets from MAC */
+#define EF_DPU_RX_PORT0_BUF_POOL 20
+#define EF_DPU_RX_PORT1_BUF_POOL 24
+
+/*
+ * XN-200147/7.1: Up to four DPU.host command channels can be configured
+ * (as read capable) to support DMA read commands. This constraint does not
+ * apply to DMA write commands.
+ */
+#define EF_DPU_DMA_READ_EXS_NUM 4
+
+/**
+ * Maximum number of HW words in one sideband word.
+ *
+ * After each 2 cmd words we should write a word with sideband information.
+ * If number of cmd words is not multiple of 2 then one empty cmd word should
+ * be written before sideband word.
+ */
+#define EF_DPU_HW_CMD_WORDS_NUM_PER_SIDEBAND 2
+
+/**
+ * The maximum exerciser number that has ability to allocate buffers.
+ * XN-201326-AN-D: Only command channels 7 to 0 have access to pool credits.
+ */
+#define EF_DPU_BUF_ALLOC_MAX_EX_NUM 7
+
+/**
+ * The special value for DPU command ch_dst_dchan_max_words field that means
+ * maximum possible value (1024).
+ */
+#define EF_DPU_DST_FABRIC_MAX_WORDS_MAX 0
+
+/**
+ * The number of bytes per one word for DPU command ch_dst_dchan_max_words
+ * field.
+ */
+#define EF_DPU_DST_FABRIC_WORD_BYTES 16
+
+/** Number of bytes in one block in DPU BufSS */
+#define EF_DPU_BUFSS_BLOCK_BYTES 256
+
+/* struct dpu_cmd_hdr */
+#define DPU_CMD_HDR_WIDTH 128
+#define DPU_CMD_HDR_CH_CMD_WORDS_LBN               0
+#define DPU_CMD_HDR_CH_CMD_WORDS_WIDTH             6
+#define DPU_CMD_HDR_CH_TYPE_LBN                    6
+#define DPU_CMD_HDR_CH_TYPE_WIDTH                  3
+#define DPU_CMD_HDR_CH_PATH_LBN                    9
+#define DPU_CMD_HDR_CH_PATH_WIDTH                  1
+#define DPU_CMD_HDR_CH_EV_CHAN_LBN                 10
+#define DPU_CMD_HDR_CH_EV_CHAN_WIDTH               4
+#define DPU_CMD_HDR_CH_COOKIE_LBN                  14
+#define DPU_CMD_HDR_CH_COOKIE_WIDTH                16
+#define DPU_CMD_HDR_CH_SRC_TYPE_LBN                30
+#define DPU_CMD_HDR_CH_SRC_TYPE_WIDTH              3
+#define DPU_CMD_HDR_CH_SRC_HDR_BYTES_LBN           33
+#define DPU_CMD_HDR_CH_SRC_HDR_BYTES_WIDTH         10
+#define DPU_CMD_HDR_CH_SRC_PAYLOAD_BYTES_LBN       43
+#define DPU_CMD_HDR_CH_SRC_PAYLOAD_BYTES_WIDTH     14
+#define DPU_CMD_HDR_CH_SRC_PAYLOAD_OFF_LBN         57
+#define DPU_CMD_HDR_CH_SRC_PAYLOAD_OFF_WIDTH       14
+#define DPU_CMD_HDR_CH_SRC_DCHAN_LBN               71
+#define DPU_CMD_HDR_CH_SRC_DCHAN_WIDTH             5
+#define DPU_CMD_HDR_CH_SRC_BUF_LBN                 76
+#define DPU_CMD_HDR_CH_SRC_BUF_WIDTH               15
+#define DPU_CMD_HDR_CH_SRC_BUF_FREE_LBN            91
+#define DPU_CMD_HDR_CH_SRC_BUF_FREE_WIDTH          1
+#define DPU_CMD_HDR_CH_SRC_DMA_NUM_DESC_LBN        76
+#define DPU_CMD_HDR_CH_SRC_DMA_NUM_DESC_WIDTH      6
+#define DPU_CMD_HDR_CH_DST_BUF_WRITE_CUR_LEN_LBN   76
+#define DPU_CMD_HDR_CH_DST_BUF_WRITE_CUR_LEN_WIDTH 14
+#define DPU_CMD_HDR_CH_DST_TYPE_LBN                92
+#define DPU_CMD_HDR_CH_DST_TYPE_WIDTH              3
+#define DPU_CMD_HDR_CH_DST_BUF_POOL_LBN            95
+#define DPU_CMD_HDR_CH_DST_BUF_POOL_WIDTH          5
+#define DPU_CMD_HDR_CH_DST_DMA_NUM_DESC_LBN        100
+#define DPU_CMD_HDR_CH_DST_DMA_NUM_DESC_WIDTH      6
+#define DPU_CMD_HDR_CH_DST_NET_TX_CHAN_LBN         100
+#define DPU_CMD_HDR_CH_DST_NET_TX_CHAN_WIDTH       4
+#define DPU_CMD_HDR_CH_DST_REMOTE_EV_CHAN_LBN      100
+#define DPU_CMD_HDR_CH_DST_REMOTE_EV_CHAN_WIDTH    4
+#define DPU_CMD_HDR_CH_DST_DCHAN_LBN               100
+#define DPU_CMD_HDR_CH_DST_DCHAN_WIDTH             5
+#define DPU_CMD_HDR_CH_DST_DCHAN_MAX_WORDS_LBN     105
+#define DPU_CMD_HDR_CH_DST_DCHAN_MAX_WORDS_WIDTH   10
+#define DPU_CMD_HDR_CH_DST_BUF_APPEND_LBN          100
+#define DPU_CMD_HDR_CH_DST_BUF_APPEND_WIDTH        15
+#define DPU_CMD_HDR_CH_DST_BUF_APPEND_OFF_LBN      115
+#define DPU_CMD_HDR_CH_DST_BUF_APPEND_OFF_WIDTH    8
+#define DPU_CMD_HDR_CH_DST_BUF_WRITE_BUF_LBN       100
+#define DPU_CMD_HDR_CH_DST_BUF_WRITE_BUF_WIDTH     15
+#define DPU_CMD_HDR_CH_SRC_BUF_POOL_LBN            123
+#define DPU_CMD_HDR_CH_SRC_BUF_POOL_WIDTH          5
+#define DPU_CMD_HDR_CH_RESERVED2_LBN               123
+#define DPU_CMD_HDR_CH_RESERVED2_WIDTH             5
+
+/* struct dpu_pcie_pasid_t */
+#define DPU_PCIE_PASID_WIDTH 19
+#define DPU_PCIE_PASID_ENABLE_LBN               0
+#define DPU_PCIE_PASID_ENABLE_WIDTH             1
+#define DPU_PCIE_PASID_PASID_LBN                1
+#define DPU_PCIE_PASID_PASID_WIDTH              16
+#define DPU_PCIE_PASID_EXECUTE_RQ_LBN           17
+#define DPU_PCIE_PASID_EXECUTE_RQ_WIDTH         1
+#define DPU_PCIE_PASID_PRIVILEGED_MODE_RQ_LBN   18
+#define DPU_PCIE_PASID_PRIVILEGED_MODE_RQ_WIDTH 1
+
+/* struct dpu_pcie_attr_t */
+#define DPU_PCIE_ATTR_WIDTH 3
+#define DPU_PCIE_ATTR_NO_SNOOP_LBN   0
+#define DPU_PCIE_ATTR_NO_SNOOP_WIDTH 1
+#define DPU_PCIE_ATTR_RO_LBN         1
+#define DPU_PCIE_ATTR_RO_WIDTH       1
+#define DPU_PCIE_ATTR_IDO_LBN        2
+#define DPU_PCIE_ATTR_IDO_WIDTH      1
+
+/* struct dpu_pcie_tph_t */
+#define DPU_PCIE_TPH_WIDTH 11
+#define DPU_PCIE_TPH_TH_LBN   0
+#define DPU_PCIE_TPH_TH_WIDTH 1
+#define DPU_PCIE_TPH_PH_LBN   1
+#define DPU_PCIE_TPH_PH_WIDTH 2
+#define DPU_PCIE_TPH_ST_LBN   3
+#define DPU_PCIE_TPH_ST_WIDTH 8
+
+/* struct dpu_addr_spc */
+#define DPU_ADDR_SPC_WIDTH 36
+#define DPU_ADDR_SPC_DST_LBN        0
+#define DPU_ADDR_SPC_DST_WIDTH      4
+#define DPU_ADDR_SPC_RESERVED_LBN   4
+#define DPU_ADDR_SPC_RESERVED_WIDTH 1
+#define DPU_ADDR_SPC_FUNC_ID_LBN    5
+#define DPU_ADDR_SPC_FUNC_ID_WIDTH  12
+#define DPU_ADDR_SPC_PASID_LBN      17
+#define DPU_ADDR_SPC_PASID_WIDTH    19
+
+/* struct dpu_dma_desc */
+#define DPU_DMA_DESC_WIDTH 128
+#define DPU_DMA_DESC_DD_ADDR_LBN               0
+#define DPU_DMA_DESC_DD_ADDR_WIDTH             64
+#define DPU_DMA_DESC_DD_LENGTH_LBN             64
+#define DPU_DMA_DESC_DD_LENGTH_WIDTH           12
+#define DPU_DMA_DESC_DD_ADDR_SPACE_LBN         76
+#define DPU_DMA_DESC_DD_ADDR_SPACE_WIDTH       36
+#define DPU_DMA_DESC_DD_ADDR_TRANSLATED_LBN    112
+#define DPU_DMA_DESC_DD_ADDR_TRANSLATED_WIDTH  1
+#define DPU_DMA_DESC_DD_ATTR_LBN               113
+#define DPU_DMA_DESC_DD_ATTR_WIDTH             3
+#define DPU_DMA_DESC_DD_TPH_LBN                116
+#define DPU_DMA_DESC_DD_TPH_WIDTH              11
+#define DPU_DMA_DESC_DD_WR_PAD_LBN             127
+#define DPU_DMA_DESC_DD_WR_PAD_WIDTH           1
+#define DPU_DMA_DESC_DD_RD_RELAXED_ORDER_LBN   127
+#define DPU_DMA_DESC_DD_RD_RELAXED_ORDER_WIDTH 1
+
+
+#define DPUEX_CMD_REG_CMD_SIDE_OFFSET 0x00004000
+#define  DPUEX_CMD_REG_CMD_SIDE_STEP 4
+
+#define DPUEX_CMD_REG_CMD_SIDE_CMD_TLAST_LBN 4
+#define DPUEX_CMD_REG_CMD_SIDE_CMD_TLAST_WIDTH 1
+
+enum dpu_cmd_buf_subtype_t {
+  DPU_CMD_BUF_ST_ALLOC = 0,
+  DPU_CMD_BUF_ST_FREE  = 1,
+  DPU_CMD_BUF_ST_SEND  = 2,
+};
+
+/* struct dpu_cmd_buf_hdr */
+#define DPU_CMD_BUF_HDR_WIDTH 128
+#define DPU_CMD_BUF_HDR_CH_CMD_WORDS_LBN        0
+#define DPU_CMD_BUF_HDR_CH_CMD_WORDS_WIDTH      6
+#define DPU_CMD_BUF_HDR_CH_TYPE_LBN             6
+#define DPU_CMD_BUF_HDR_CH_TYPE_WIDTH           3
+#define DPU_CMD_BUF_HDR_CH_PATH_LBN             9
+#define DPU_CMD_BUF_HDR_CH_PATH_WIDTH           1
+#define DPU_CMD_BUF_HDR_CH_EV_CHAN_LBN          10
+#define DPU_CMD_BUF_HDR_CH_EV_CHAN_WIDTH        4
+#define DPU_CMD_BUF_HDR_CH_COOKIE_LBN           14
+#define DPU_CMD_BUF_HDR_CH_COOKIE_WIDTH         16
+#define DPU_CMD_BUF_HDR_CB_SUBTYPE_LBN          30
+#define DPU_CMD_BUF_HDR_CB_SUBTYPE_WIDTH        3
+#define DPU_CMD_BUF_HDR_ALLOC_POOL_LBN          33
+#define DPU_CMD_BUF_HDR_ALLOC_POOL_WIDTH        5
+#define DPU_CMD_BUF_HDR_ALLOC_BYTES_LBN         38
+#define DPU_CMD_BUF_HDR_ALLOC_BYTES_WIDTH       15
+#define DPU_CMD_BUF_HDR_FREE_BUF_LBN            33
+#define DPU_CMD_BUF_HDR_FREE_BUF_WIDTH          15
+#define DPU_CMD_BUF_HDR_FREE_BUF_POOL_LBN       48
+#define DPU_CMD_BUF_HDR_FREE_BUF_POOL_WIDTH     5
+#define DPU_CMD_BUF_HDR_SEND_BUF_LBN            33
+#define DPU_CMD_BUF_HDR_SEND_BUF_WIDTH          15
+#define DPU_CMD_BUF_HDR_SEND_BYTES_LBN          48
+#define DPU_CMD_BUF_HDR_SEND_BYTES_WIDTH        14
+#define DPU_CMD_BUF_HDR_SEND_OFFSET_LBN         62
+#define DPU_CMD_BUF_HDR_SEND_OFFSET_WIDTH       14
+#define DPU_CMD_BUF_HDR_SEND_FREE_LBN           76
+#define DPU_CMD_BUF_HDR_SEND_FREE_WIDTH         1
+#define DPU_CMD_BUF_HDR_SEND_FREE_POOL_LBN      77
+#define DPU_CMD_BUF_HDR_SEND_FREE_POOL_WIDTH    5
+#define DPU_CMD_BUF_HDR_SEND_DST_TYPE_LBN       82
+#define DPU_CMD_BUF_HDR_SEND_DST_TYPE_WIDTH     3
+#define DPU_CMD_BUF_HDR_CH_DST_POOL_LBN         85
+#define DPU_CMD_BUF_HDR_CH_DST_POOL_WIDTH       5
+#define DPU_CMD_BUF_HDR_CH_REMOTE_EV_CHAN_LBN   90
+#define DPU_CMD_BUF_HDR_CH_REMOTE_EV_CHAN_WIDTH 4
+#define DPU_CMD_BUF_HDR_DST_CHAN_LBN            85
+#define DPU_CMD_BUF_HDR_DST_CHAN_WIDTH          5
+#define DPU_CMD_BUF_HDR_CB_RESERVED_LBN         94
+#define DPU_CMD_BUF_HDR_CB_RESERVED_WIDTH       34
+
+/* struct dpu_err_info */
+#define DPU_ERR_INFO_WIDTH 15
+#define DPU_ERR_INFO_WHERE_LBN        0
+#define DPU_ERR_INFO_WHERE_WIDTH      5
+
+#endif

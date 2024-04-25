@@ -1,0 +1,7 @@
+config KSB
+	tristate "KSB test driver"
+	default m
+	select PCI_DOE
+	select PCI_IDE
+	help
+	 Test driver.
