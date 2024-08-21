@@ -2268,8 +2268,7 @@ static void pdom_detach_iommu(struct amd_iommu *iommu,
  * If a device is not yet associated with a domain, this function makes the
  * device visible in the domain
  */
-static int attach_device(struct device *dev,
-			 struct protection_domain *domain)
+int __amd_iommu_attach_device(struct device *dev, struct protection_domain *domain)
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
@@ -2331,7 +2330,7 @@ out:
 /*
  * Removes a device from a protection domain (with devtable_lock held)
  */
-static void detach_device(struct device *dev)
+void amd_iommu_detach_device(struct device *dev)
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
@@ -2619,7 +2618,7 @@ static int blocked_domain_attach_device(struct iommu_domain *domain,
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 
 	if (dev_data->domain)
-		detach_device(dev);
+		amd_iommu_detach_device(dev);
 
 	/* Clear DTE and flush the entry */
 	mutex_lock(&dev_data->mutex);
@@ -2672,8 +2671,7 @@ static struct iommu_domain release_domain = {
 	}
 };
 
-static int amd_iommu_attach_device(struct iommu_domain *dom,
-				   struct device *dev)
+static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev)
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct protection_domain *domain = to_pdomain(dom);
@@ -2697,9 +2695,9 @@ static int amd_iommu_attach_device(struct iommu_domain *dom,
 		return -EINVAL;
 
 	if (dev_data->domain)
-		detach_device(dev);
+		amd_iommu_detach_device(dev);
 
-	ret = attach_device(dev, domain);
+	ret = __amd_iommu_attach_device(dev, domain);
 
 #ifdef CONFIG_IRQ_REMAP
 	if (AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir)) {
