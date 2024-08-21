@@ -537,7 +537,7 @@ static u32 pdev_get_caps(struct pci_dev *pdev)
 	return flags;
 }
 
-static inline int pdev_enable_cap_ats(struct pci_dev *pdev)
+int amd_iommu_pdev_enable_cap_ats(struct pci_dev *pdev)
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(&pdev->dev);
 	int ret = -EINVAL;
@@ -634,7 +634,7 @@ static inline void pdev_disable_cap_pasid(struct pci_dev *pdev)
 
 static void pdev_enable_caps(struct pci_dev *pdev)
 {
-	pdev_enable_cap_ats(pdev);
+	amd_iommu_pdev_enable_cap_ats(pdev);
 	pdev_enable_cap_pasid(pdev);
 	pdev_enable_cap_pri(pdev);
 }
@@ -2309,7 +2309,7 @@ int __amd_iommu_attach_device(struct device *dev, struct protection_domain *doma
 		if (amd_iommu_iopf_add_device(iommu, dev_data))
 			pdev_disable_cap_pri(pdev);
 	} else if (pdev) {
-		pdev_enable_cap_ats(pdev);
+		amd_iommu_pdev_enable_cap_ats(pdev);
 	}
 
 	/* Update data structures */
@@ -2529,7 +2529,7 @@ static inline u64 dma_max_address(enum protection_domain_mode pgtable)
 	return ((1ULL << PM_LEVEL_SHIFT(amd_iommu_gpt_level)) - 1);
 }
 
-static bool amd_iommu_hd_support(struct amd_iommu *iommu)
+bool amd_iommu_hd_support(struct amd_iommu *iommu)
 {
 	return iommu && (iommu->features & FEATURE_HDSUP);
 }
