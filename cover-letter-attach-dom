@@ -1,0 +1,15 @@
+iommu/amd: Improve domain allocator and device attach code path
+
+This series aims to improve domain allocator and attach device code path.
+  - Replace custom domain ID allocator with IDA allocator.
+  - Improve protection domain data structure
+  - Improve attach device code path and replace dev_data spinlock with mutex
+
+This series is on top of iommu/next and cleanup series [1].
+
+[1] https://lore.kernel.org/linux-iommu/20240828111029.5429-1-vasant.hegde@amd.com/T/#t
+
+This is also available at github :
+  https://github.com/AMDESE/linux-iommu/tree/iommu_rework_attach_dev_v1
+
+-Vasant
