@@ -1,0 +1,38 @@
+iommu/amd: Improve domain allocator and device attach code path
+
+This series aims to improve domain allocator and attach device code path.
+  - Replace custom domain ID allocator with IDA allocator.
+  - Improve protection domain data structure
+  - Improve attach device code path and replace dev_data spinlock with mutex
+  - Add ops->release_domain() support
+
+This series is on top of v6.12-rc3.
+
+This is also available at github :
+  https://github.com/AMDESE/linux-iommu/tree/iommu_rework_attach_dev_v4
+
+
+Changes from v3 - v4:
+  - Added release domain support
+  - Added new patch to fix missign lock in pgtbl_v2 code path
+  - Reworked protection domain ID allocation code
+  - Fixed missing lock in TLB flush code path
+  - Improved amd_iommu_release_device()
+
+V3 : https://lore.kernel.org/linux-iommu/20241016053501.97497-1-vasant.hegde@amd.com/T/#u
+
+Changes from v2 -> v3:
+  - Rebased on top of v6.12-rc3
+  - Added Reviewed-by tags
+  - Updated patch description
+
+V2 : https://lore.kernel.org/linux-iommu/20240910065812.6091-1-vasant.hegde@amd.com/T/#t
+
+Changes from v1 -> v2:
+  - Rebased on top of iommu/next
+  - Minor fixes.
+
+
+V1 : https://lore.kernel.org/linux-iommu/20240828134317.6239-1-vasant.hegde@amd.com/T/#t
+
+-Vasant
