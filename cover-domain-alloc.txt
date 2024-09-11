@@ -1,0 +1,37 @@
+iommu: Domain allocation enhancements
+
+This series adds iommu_paging_domain_alloc_flags() which takes flags to
+pass additional details for domain allocation (like domain with PASID
+support).
+
+Also updates AMD IOMMU driver domain allocation code. With this by
+default it will allocate domain with V2 page table for PASID capable
+device and v1 page table for rest of the devices.
+
+@Baolu,
+  With this changes (patch 1), to allocate PASID capable device core
+  will call domain_alloc_user() interface. Do we need any changes to
+  intel driver?
+
+@Jason,
+  Do we need any changes to arm-smm-v3 driver?
+
+
+Thanks everyone who reviewed previous version and provided valuable feedbacks.
+
+This series is based on top of iommu/next and protection domain free fix [1].
+[1] https://lore.kernel.org/linux-iommu/0-v1-ad9884ee5f5b+da-amd_iopgtbl_fix_jgg@nvidia.com/
+
+This is also available at github :
+  https://github.com/AMDESE/linux-iommu/tree/iommu_paging_domain_v2
+
+Changes from v1 -> v2:
+  - Rebased on top of iommu/next
+  - Split patches into smaller patches
+  - Added global static identity domain support
+
+V1 : https://lore.kernel.org/linux-iommu/20240821133554.7405-1-vasant.hegde@amd.com/
+
+RFC v2: https://lore.kernel.org/linux-iommu/fc8715e4-fb44-433b-a42a-7804118ebc57@amd.com/T/#t
+
+RFC v1 : https://lore.kernel.org/linux-iommu/7e249bc6-c578-40f0-aca7-835149a0ad39@amd.com/
