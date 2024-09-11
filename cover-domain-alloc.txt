@@ -1,0 +1,64 @@
+iommu: Domain allocation enhancements
+
+This series adds iommu_paging_domain_alloc_flags() which takes flags to
+pass additional details for domain allocation (like domain with PASID
+support). Also adjusts core code to handler variuos domain allocations.
+
+Also updates AMD IOMMU driver domain allocation code. With this by
+default it will allocate domain with V2 page table for PASID capable
+device and v1 page table for rest of the devices.
+
+
+TODO:
+@Jason, @Kevin, @Baolu,
+  With this series if driver implements domain_alloc_user() then we assume
+  IOMMU always supports PASID. If IOMMU doesn't support PASID (ex: AMD driver
+  not supporting V2 page table) and device is PASID capable, then driver will
+  return error. Device probe will fail.
+
+  I think if driver return error, core layer should retry without
+  IOMMU_HWPT_ALLOC_PASID flag. Other option is indivisual driver in error path
+  of domain_alloc_user allocating non-PASID capable domain.
+
+  I prefer first option. Just wanted to discuss before implementing. Any preferred
+  option here? OR any other better way to solve this?
+
+
+Note :
+  vt-d specific changes is handled in separate series [1].
+
+[1] https://lore.kernel.org/linux-iommu/20241011042722.73930-8-baolu.lu@linux.intel.com/
+
+@Baolu,
+  Do you want me to include above patch in this series so that it doesn't break intel driver?
+
+Thanks everyone who reviewed previous version and provided valuable feedbacks.
+
+
+This series is based on top of v6.12-rc3.
+
+This is also available at github :
+  https://github.com/AMDESE/linux-iommu/tree/iommu_paging_domain_v3
+
+
+Changes from V2 -> v3:
+  - Added Review-by tags
+  - Fixed warnings reported by 0-DAY CI
+  - Added patch to enhance arm_smmu_domain_alloc_user() to support IOMMU_HWPT_ALLOC_PASID flag
+  - Added new patch to check GIOSUP/GTSUP
+  - Added patch to move V2 page table check to early_amd_iommu_init()
+  - Added patch to adjust blocked/identity domain allocation in core layer
+  - Dropped "iommu/amd: Add iommu_ops->domain_alloc_paging support"
+
+V2 : https://lore.kernel.org/linux-iommu/20240911101911.6269-1-vasant.hegde@amd.com/T/#t
+
+Changes from v1 -> v2:
+  - Rebased on top of iommu/next
+  - Split patches into smaller patches
+  - Added global static identity domain support
+
+V1 : https://lore.kernel.org/linux-iommu/20240821133554.7405-1-vasant.hegde@amd.com/
+
+RFC v2: https://lore.kernel.org/linux-iommu/fc8715e4-fb44-433b-a42a-7804118ebc57@amd.com/T/#t
+
+RFC v1 : https://lore.kernel.org/linux-iommu/7e249bc6-c578-40f0-aca7-835149a0ad39@amd.com/
