@@ -1,0 +1,47 @@
+iommu: Domain allocation enhancements
+
+This series adds iommu_paging_domain_alloc_flags() which takes flags to
+pass additional details for domain allocation (like domain with PASID
+support). Also adjusts core code to handler variuos domain allocations.
+
+Also updates AMD IOMMU driver domain allocation code. With this by
+default it will allocate domain with V2 page table for PASID capable
+device and v1 page table for rest of the devices.
+
+Thanks everyone who reviewed previous version and provided valuable feedbacks.
+
+This series is based on top of v6.12-rc3.
+
+This is also available at github :
+  https://github.com/AMDESE/linux-iommu/tree/iommu_paging_domain_v4
+
+Changes from v3 -> v4:
+  - Added Review-by tags
+  - Updated Patch3 to handle -EOPNOTSUPP and allocate non-PASID domain
+  - Updated amd_iommu_domain_alloc_user() to do flags check first
+  - Few other minor fixes based on review comment
+
+
+V3 : https://lore.kernel.org/linux-iommu/20241017140137.6028-1-vasant.hegde@amd.com/T/#t
+
+Changes from V2 -> v3:
+  - Added Review-by tags
+  - Fixed warnings reported by 0-DAY CI
+  - Added patch to enhance arm_smmu_domain_alloc_user() to support IOMMU_HWPT_ALLOC_PASID flag
+  - Added new patch to check GIOSUP/GTSUP
+  - Added patch to move V2 page table check to early_amd_iommu_init()
+  - Added patch to adjust blocked/identity domain allocation in core layer
+  - Dropped "iommu/amd: Add iommu_ops->domain_alloc_paging support"
+
+V2 : https://lore.kernel.org/linux-iommu/20240911101911.6269-1-vasant.hegde@amd.com/T/#t
+
+Changes from v1 -> v2:
+  - Rebased on top of iommu/next
+  - Split patches into smaller patches
+  - Added global static identity domain support
+
+V1 : https://lore.kernel.org/linux-iommu/20240821133554.7405-1-vasant.hegde@amd.com/
+
+RFC v2: https://lore.kernel.org/linux-iommu/fc8715e4-fb44-433b-a42a-7804118ebc57@amd.com/T/#t
+
+RFC v1 : https://lore.kernel.org/linux-iommu/7e249bc6-c578-40f0-aca7-835149a0ad39@amd.com/
