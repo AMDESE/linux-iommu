@@ -2315,7 +2315,7 @@ static void clear_dte_entry(struct amd_iommu *iommu, struct iommu_dev_data *dev_
 }
 
 /* Update and flush DTE for the given device */
-static void dev_update_dte(struct iommu_dev_data *dev_data, bool set)
+void amd_iommu_dev_update_dte(struct iommu_dev_data *dev_data, bool set)
 {
 	struct amd_iommu *iommu = get_amd_iommu_from_dev(dev_data->dev);
 
@@ -2506,7 +2506,7 @@ int __amd_iommu_attach_device(struct device *dev, struct protection_domain *doma
 	spin_unlock_irqrestore(&domain->lock, flags);
 
 	/* Update device table */
-	dev_update_dte(dev_data, true);
+	amd_iommu_dev_update_dte(dev_data, true);
 
 out:
 	mutex_unlock(&dev_data->mutex);
@@ -2545,7 +2545,7 @@ void amd_iommu_detach_device(struct device *dev)
 		pdev_disable_caps(to_pci_dev(dev));
 
 	/* Clear DTE and flush the entry */
-	dev_update_dte(dev_data, false);
+	amd_iommu_dev_update_dte(dev_data, false);
 
 	/* Flush IOTLB and wait for the flushes to finish */
 	spin_lock_irqsave(&domain->lock, flags);
@@ -2833,7 +2833,7 @@ static int blocked_domain_attach_device(struct iommu_domain *domain,
 
 	/* Clear DTE and flush the entry */
 	mutex_lock(&dev_data->mutex);
-	dev_update_dte(dev_data, false);
+	amd_iommu_dev_update_dte(dev_data, false);
 	mutex_unlock(&dev_data->mutex);
 
 	return 0;
