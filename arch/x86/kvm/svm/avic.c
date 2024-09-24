@@ -244,7 +244,6 @@ static void avic_deactivate_vmcb(struct vcpu_svm *svm)
  */
 static int avic_ga_log_notifier(u32 ga_tag)
 {
-	unsigned long flags;
 	struct kvm_svm *kvm_svm;
 	struct kvm_vcpu *vcpu = NULL;
 	u32 vm_id = AVIC_GATAG_TO_VMID(ga_tag);
@@ -253,14 +252,14 @@ static int avic_ga_log_notifier(u32 ga_tag)
 	pr_debug("SVM: %s: vm_id=%#x, vcpu_idx=%#x\n", __func__, vm_id, vcpu_idx);
 	trace_kvm_avic_ga_log(vm_id, vcpu_idx);
 
-	spin_lock_irqsave(&svm_vm_data_hash_lock, flags);
-	hash_for_each_possible(svm_vm_data_hash, kvm_svm, hnode, vm_id) {
+	rcu_read_lock();
+	hash_for_each_possible_rcu(svm_vm_data_hash, kvm_svm, hnode, vm_id) {
 		if (kvm_svm->avic_vm_id != vm_id)
 			continue;
 		vcpu = kvm_get_vcpu(&kvm_svm->kvm, vcpu_idx);
 		break;
 	}
-	spin_unlock_irqrestore(&svm_vm_data_hash_lock, flags);
+	rcu_read_unlock();
 
 	/* Note:
 	 * At this point, the IOMMU should have already set the pending
@@ -310,8 +309,10 @@ void avic_vm_destroy(struct kvm *kvm)
 		   avic_get_physical_id_table_order(kvm));
 
 	spin_lock_irqsave(&svm_vm_data_hash_lock, flags);
-	hash_del(&kvm_svm->hnode);
+	hash_del_rcu(&kvm_svm->hnode);
 	spin_unlock_irqrestore(&svm_vm_data_hash_lock, flags);
+
+	synchronize_rcu();
 }
 
 int avic_vm_init(struct kvm *kvm)
@@ -344,7 +345,8 @@ int avic_vm_init(struct kvm *kvm)
 		}
 	}
 	kvm_svm->avic_vm_id = vm_id;
-	hash_add(svm_vm_data_hash, &kvm_svm->hnode, kvm_svm->avic_vm_id);
+
+	hash_add_rcu(svm_vm_data_hash, &kvm_svm->hnode, kvm_svm->avic_vm_id);
 	spin_unlock_irqrestore(&svm_vm_data_hash_lock, flags);
 
 	return 0;
