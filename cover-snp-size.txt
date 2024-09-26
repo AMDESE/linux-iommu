@@ -1,0 +1,11 @@
+iommu/amd: Use MAX buffer size when SNP is enabled on Family 0x19
+
+This series addresses CVE-2023-20585 [1] by increasing the AMD IOMMU
+Event log and PPR log buffer sizes to the maximum supported value (512K)
+on affected CPU families when SNP is enabled.
+
+Use MAX buffer size when SNP is enabled on Milan/Genoa. Impacted buffers:
+  - Milan : Event log (PPR/GALog is not supported when SNP is enabled)
+  - Genoa : Event and PPR log (GALog is not supported when SNP is enabled)
+
+[1] https://www.amd.com/en/resources/product-security/bulletin/amd-sb-3016.html
