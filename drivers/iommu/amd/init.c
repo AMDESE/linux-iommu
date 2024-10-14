@@ -294,6 +294,11 @@ static __init void get_global_efr(void)
 	pr_info("Using global IVHD EFR:%#llx, EFR2:%#llx\n", amd_iommu_efr, amd_iommu_efr2);
 }
 
+static bool __used check_ext_feature_on_all_iommus(u64 mask)
+{
+	return !!(amd_iommu_efr2 & mask);
+}
+
 /*
  * For IVHD type 0x11/0x40, EFR is also available via IVHD.
  * Default to IVHD EFR since it is available sooner
@@ -4058,3 +4063,39 @@ bool amd_iommu_sev_tio_supported(void)
 }
 EXPORT_SYMBOL_GPL(amd_iommu_sev_tio_supported);
 #endif
+
+int amd_iommu_tmpm_enable(void)
+{
+	struct amd_iommu *iommu;
+
+	if (!check_ext_feature_on_all_iommus(FEATURE_TMPM_SUP)) {
+		pr_info("DEBUG: TMPM feature is not supported\n");
+		return -EINVAL;
+	}
+
+	pr_info("DEBUG: %s\n", __func__);
+
+	for_each_iommu(iommu) {
+		iommu_feature_enable(iommu, CONTROL_TMPM_EN);
+		amd_iommu_flush_all_caches(iommu);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(amd_iommu_tmpm_enable);
+
+void amd_iommu_tmpm_disable(void)
+{
+	struct amd_iommu *iommu;
+
+	if (!check_ext_feature_on_all_iommus(FEATURE_TMPM_SUP))
+		return;
+
+	pr_info("DEBUG: %s\n", __func__);
+
+	for_each_iommu(iommu) {
+		iommu_feature_disable(iommu, CONTROL_TMPM_EN);
+		amd_iommu_flush_all_caches(iommu);
+	}
+}
+EXPORT_SYMBOL_GPL(amd_iommu_tmpm_disable);
