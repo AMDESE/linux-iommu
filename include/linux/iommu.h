@@ -189,6 +189,9 @@ enum iommu_domain_cookie_type {
 #define __IOMMU_DOMAIN_NESTED	(1U << 6)  /* User-managed address space nested
 					      on a stage-2 translation        */
 
+//SURAVEE
+#define __IOMMU_DOMAIN_BLOCKED	(1U << 7)  /* Blocked domain */
+
 #define IOMMU_DOMAIN_ALLOC_FLAGS ~__IOMMU_DOMAIN_DMA_FQ
 /*
  * This are the possible domain-types
@@ -208,7 +211,8 @@ enum iommu_domain_cookie_type {
  *	IOMMU_DOMAIN_PLATFORM	- Legacy domain for drivers that do their own
  *				  dma_api stuff. Do not use in new drivers.
  */
-#define IOMMU_DOMAIN_BLOCKED	(0U)
+//#define IOMMU_DOMAIN_BLOCKED	(0U)
+#define IOMMU_DOMAIN_BLOCKED	(__IOMMU_DOMAIN_BLOCKED)
 #define IOMMU_DOMAIN_IDENTITY	(__IOMMU_DOMAIN_PT)
 #define IOMMU_DOMAIN_UNMANAGED	(__IOMMU_DOMAIN_PAGING)
 #define IOMMU_DOMAIN_DMA	(__IOMMU_DOMAIN_PAGING |	\

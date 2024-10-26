@@ -931,6 +931,7 @@ static void amd_iommu_report_page_fault(struct amd_iommu *iommu,
 				pr_err_ratelimited("  device=%04x:%02x:%02x.%x domain=0x%04x\n",
 						   iommu->pci_seg->id, PCI_BUS_NUM(devid), PCI_SLOT(devid),
 						   PCI_FUNC(devid), domain_id);
+				dump_dte_entry(iommu, devid);
 				goto out;
 			}
 
@@ -2327,6 +2328,7 @@ static void clear_dte_entry(struct amd_iommu *iommu, struct iommu_dev_data *dev_
 	struct dev_table_entry new = {};
 	struct dev_table_entry *dte = &get_dev_table(iommu)[dev_data->devid];
 
+printk("DEBUG: %s: devid=%#x\n", __func__, dev_data->devid);
 	make_clear_dte(dev_data, dte, &new);
 	update_dte256(iommu, dev_data, &new);
 }
