@@ -392,6 +392,143 @@ static int iova_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_STORE_ATTRIBUTE(iova);
 
+static inline void dump_pgtable_walk_v1(struct seq_file *m, u64 *path, int *index,
+					int *printed, int mode, unsigned long page_size,
+					unsigned long cnt, int last_level)
+{
+	int indent, i, j;
+
+	for (i = mode - 1; i >= last_level ; i--) {
+		if (printed[i])
+			continue;
+		printed[i] = 1;
+		indent = mode - i - 1;
+		for (j = indent ; j > 0 ; j--)
+			seq_puts(m, "\t");
+		switch (i) {
+		case 0:
+			seq_puts(m, "PTE");
+			break;
+		default:
+			seq_puts(m, "PDE");
+		}
+		seq_printf(m, "[L:%d]%03d:0x%016llx", i + 1, index[i], path[i]);
+		seq_printf(m, " PR=%llx", path[i] & IOMMU_PTE_PR);
+		seq_printf(m, " A=%llx", (path[i] & IOMMU_PTE_A) >> 5);
+		seq_printf(m, " IR=%llx", (path[i] & IOMMU_PTE_IR) >> 61);
+		seq_printf(m, " IW=%llx", (path[i] & IOMMU_PTE_IW) >> 62);
+		seq_printf(m, " NL=%llx", (path[i] & IOMMU_V1_PTE_NL) >> 9);
+		seq_printf(m, " N_ADDR=%010llx", (path[i] & IOMMU_PAGE_MASK) >> 12);
+		if (i == last_level) {
+			seq_printf(m, " D=%llx", (path[i] & IOMMU_PTE_HD) >> 6);
+			seq_printf(m, " U=%llx", (path[i] & IOMMU_PTE_U) >> 59);
+			seq_printf(m, " FC=%llx", (path[i] & IOMMU_PTE_FC) >> 60);
+			seq_printf(m, " Pg=%ld & ptes = %ld", page_size, cnt);
+		}
+		seq_puts(m, "\n");
+	}
+}
+
+static void pgtable_walk_v1(struct seq_file *m, u64 *pde, int mode, int level,
+			    u64 *path, int *index, int *printed)
+{
+	int i, start = 0, end = BIT_ULL((9));
+	unsigned long pte_mask, cnt;
+	unsigned long page_size;
+	u64 *pte;
+
+	if (iova_valid) {
+		if (iova >= (1ULL << (mode * 9 + 12)))
+			return;
+		start = PM_LEVEL_INDEX(level, iova);
+		end = start + 1;
+	}
+
+	for (i = start; i < end; i++) {
+		pte  = &pde[i];
+
+		if (!IOMMU_PTE_PRESENT(*pte))
+			continue;
+		if (PM_PTE_LEVEL(*pte) == PAGE_MODE_7_LEVEL) {
+			page_size = PTE_PAGE_SIZE(*pte);
+			cnt      = PAGE_SIZE_PTE_COUNT(page_size);
+			pte_mask = ~((cnt << 3) - 1);
+			pte     = (u64 *)(((unsigned long)pte) & pte_mask);
+			index[level] = i;
+			path[level] = *pte;
+			printed[level] = 0;
+			dump_pgtable_walk_v1(m, path, index, printed, mode, page_size,
+					     cnt, level);
+		} else if (PM_PTE_LEVEL(*pte) == PAGE_MODE_NONE) {
+			index[level] = i;
+			path[level] = *pte;
+			printed[level] = 0;
+			page_size = PTE_LEVEL_PAGE_SIZE(level);
+			dump_pgtable_walk_v1(m, path, index, printed, mode, page_size,
+					     1, level);
+		} else {
+			index[level] = i;
+			path[level] = *pte;
+			printed[level] = 0;
+			pte        = IOMMU_PTE_PAGE(*pte);
+			pgtable_walk_v1(m, pte, mode, level-1, path, index, printed);
+		}
+	}
+}
+
+static int iommu_pgtbl_show(struct seq_file *m, void *unused)
+{
+	struct amd_iommu_pci_seg *pci_seg;
+	struct dev_table_entry *dev_table;
+	struct amd_iommu *iommu;
+	int printed[6] = { 1 };
+	int index[6] = { 0 };
+	u64 path[6] = { 0 };
+	u16 seg, devid;
+	u64 *root;
+	int mode;
+
+	if (amd_iommu_pgtable == AMD_IOMMU_V2) {
+		seq_puts(m, "System is not booted in Iommu v1 page table mode\n");
+		return 0;
+	}
+
+	if (sbdf < 0) {
+		seq_puts(m, "Please provide valid device id input\n");
+		return 0;
+	}
+	seg = PCI_SBDF_TO_SEGID(sbdf);
+	devid = PCI_SBDF_TO_DEVID(sbdf);
+
+	for_each_pci_segment(pci_seg) {
+		if (pci_seg->id != seg)
+			continue;
+		break;
+	}
+
+	iommu = pci_seg->rlookup_table[devid];
+	if (!iommu)
+		return 0;
+
+	dev_table = get_dev_table(iommu);
+	if (!dev_table) {
+		seq_puts(m, "Device table not found\n");
+		return 0;
+	}
+
+	root = iommu_phys_to_virt((dev_table[devid].data[0]) & (((1ULL << 52) - 1) & ~0xfffULL));
+	mode = (dev_table[devid].data[0] >> 9) & (BIT_ULL((3)) - 1);
+	if(mode == 0) {
+		seq_puts(m, "Translation disabled\n");
+		return 0;
+	}
+
+	pgtable_walk_v1(m, root, mode, mode - 1, path, index, printed);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(iommu_pgtbl);
+
 void amd_iommu_debugfs_setup(void)
 {
 	struct amd_iommu *iommu;
@@ -422,4 +559,6 @@ void amd_iommu_debugfs_setup(void)
 			    &iommu_irqtbl_fops);
 	debugfs_create_file("iova", 0644, amd_iommu_debugfs, NULL,
 			    &iova_fops);
+	debugfs_create_file("pgtbl", 0444, amd_iommu_debugfs, NULL,
+			    &iommu_pgtbl_fops);
 }

@@ -398,6 +398,9 @@
 #define IOMMU_PTE_FC	BIT_ULL(60)
 #define IOMMU_PTE_IR	BIT_ULL(61)
 #define IOMMU_PTE_IW	BIT_ULL(62)
+#define	IOMMU_PTE_A	BIT_ULL(5)
+
+#define	IOMMU_V1_PTE_NL	(((1ULL << 12) - 1) & ~0xffULL)
 
 /*
  * Bit value definition for DTE fields
