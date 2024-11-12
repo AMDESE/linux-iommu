@@ -18,10 +18,13 @@ static struct dentry *amd_iommu_debugfs;
 #define	MAX_NAME_LEN	20
 #define	OFS_IN_SZ	8
 #define	DEVID_IN_SZ	16
+#define	IOVA_IN_SZ	70
 
 static int mmio_offset = -1;
 static int cap_offset = -1;
 static int sbdf = -1;
+static bool iova_valid = false;
+static u64 iova;
 
 static ssize_t iommu_mmio_write(struct file *filp, const char __user *ubuf,
 				size_t cnt, loff_t *ppos)
@@ -359,6 +362,36 @@ static int iommu_irqtbl_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(iommu_irqtbl);
 
+static ssize_t iova_write(struct file *filp, const char __user *ubuf,
+			   size_t cnt, loff_t *ppos)
+{
+	int ret;
+
+	if (cnt >= IOVA_IN_SZ)
+		return -EINVAL;
+
+	iova_valid = false;
+
+	ret = kstrtou64_from_user(ubuf, cnt, 0, &iova);
+	if (ret)
+		return ret;
+
+	iova_valid = true;
+
+	return cnt;
+}
+
+static int iova_show(struct seq_file *m, void *unused)
+{
+	if(iova_valid)
+		seq_printf(m, "0x%llx", iova);
+	else
+		seq_puts(m, "No or Invalid input provided\n");
+
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(iova);
+
 void amd_iommu_debugfs_setup(void)
 {
 	struct amd_iommu *iommu;
@@ -387,4 +420,6 @@ void amd_iommu_debugfs_setup(void)
 			    &iommu_devtbl_fops);
 	debugfs_create_file("irqtbl", 0444, amd_iommu_debugfs, NULL,
 			    &iommu_irqtbl_fops);
+	debugfs_create_file("iova", 0644, amd_iommu_debugfs, NULL,
+			    &iova_fops);
 }
