@@ -36,6 +36,71 @@
 #include "cpuid.h"
 #include "trace.h"
 
+#if 1
+struct __rmpentry_raw {
+	u64 lo;
+	u64 hi;
+} __packed;
+
+static int __get_rmpentry(u64 pfn, struct __rmpentry_raw *e)
+{
+	if (cpu_feature_enabled(X86_FEATURE_RMPREAD)) {
+		int ret;
+
+		/* Binutils version 2.44 supports the RMPREAD mnemonic. */
+		asm volatile(".byte 0xf2, 0x0f, 0x01, 0xfd"
+			     : "=a" (ret)
+			     : "a" (pfn << PAGE_SHIFT), "c" (e)
+			     : "memory", "cc");
+
+		return ret;
+	}
+	WARN_ONCE(1, "No RMPREAD => old CPU, not interested");
+
+	return 0;
+}
+
+static void rmptrace(u64 pfn, int n)
+{
+	struct __rmpentry_raw e = { 0 };
+
+	__get_rmpentry(pfn, &e);
+
+	trace_kvm_rmp_update(pfn << PAGE_SHIFT, e.lo, e.hi, n);
+}
+
+static int __rmp_make_private(u64 pfn, u64 gpa, enum pg_level level, u32 asid, bool immutable, const char *f, int n)
+{
+	int ret = rmp_make_private(pfn, gpa, level, asid, immutable);
+	rmptrace(pfn, n);
+	return ret;
+}
+
+static int __rmp_make_private_mmio(u64 pfn, u64 gpa, u32 asid, const char *f, int n)
+{
+	int ret = rmp_make_private_mmio(pfn, gpa, asid);
+	rmptrace(pfn, n);
+	return ret;
+}
+
+static int __rmp_make_shared(u64 pfn, enum pg_level level, const char *f, int n)
+{
+	int ret = rmp_make_shared(pfn, level);
+	rmptrace(pfn, n);
+	return ret;
+}
+static int __rmp_make_shared_mmio(u64 pfn, const char *f, int n)
+{
+	int ret = rmp_make_shared_mmio(pfn);
+	rmptrace(pfn, n);
+	return ret;
+}
+#define rmp_make_private(a, b, c, d, e) __rmp_make_private((a), (b), (c), (d), (e), __func__, __LINE__)
+#define rmp_make_private_mmio(a, b, c) __rmp_make_private_mmio((a), (b), (c), __func__, __LINE__)
+#define rmp_make_shared(a, b) __rmp_make_shared((a), (b), __func__, __LINE__)
+#define rmp_make_shared_mmio(a) __rmp_make_shared_mmio((a), __func__, __LINE__)
+#endif
+
 #define GHCB_VERSION_MAX	2ULL
 #define GHCB_VERSION_MIN	1ULL
 

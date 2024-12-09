@@ -1965,6 +1965,30 @@ TRACE_EVENT(kvm_rmp_fault,
 		  __entry->error_code, __entry->rmp_level, __entry->psmash_ret)
 );
 
+TRACE_EVENT(
+	kvm_rmp_update,
+	TP_PROTO(phys_addr_t hpa, u64 rmplo, u64 rmphi, int n),
+	TP_ARGS(hpa, rmplo, rmphi, n),
+
+	TP_STRUCT__entry(
+		__field(phys_addr_t, hpa)
+		__field(u64, rmplo)
+		__field(u64, rmphi)
+		__field(int, n)
+	),
+
+	TP_fast_assign(
+		__entry->hpa = hpa;
+		__entry->rmplo  = rmplo;
+		__entry->rmphi  = rmphi;
+		__entry->n = n;
+	),
+
+	TP_printk("hpa %llx rmp %llx %llx %d",
+		  __entry->hpa, __entry->rmplo, __entry->rmphi, __entry->n
+	)
+);
+
 #endif /* _TRACE_KVM_H */
 
 #undef TRACE_INCLUDE_PATH
