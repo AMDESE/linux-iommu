@@ -34,6 +34,10 @@
 /* Max data object length is 2^18 dwords */
 #define PCI_DOE_MAX_LENGTH	(1 << 18)
 
+static uint doe_delay_ms = 0;
+module_param_named(delay, doe_delay_ms, uint, 0660);
+MODULE_PARM_DESC(delay, "(Debug) Delay sending/receiving DOE object in ms");
+
 /**
  * struct pci_doe_mb - State for a single DOE mailbox
  *
@@ -494,6 +498,8 @@ static void doe_statemachine_work(struct work_struct *work)
 	}
 
 	/* Send request */
+	if (doe_delay_ms)
+		msleep(doe_delay_ms);
 	rc = pci_doe_send_req(doe_mb, task);
 	if (rc) {
 		/*
@@ -532,6 +538,8 @@ retry_resp:
 		goto retry_resp;
 	}
 
+	if (doe_delay_ms)
+		msleep(doe_delay_ms);
 	rc  = pci_doe_recv_resp(doe_mb, task);
 	if (rc < 0) {
 		signal_task_abort(task, rc);
