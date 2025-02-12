@@ -3377,8 +3377,8 @@ static int __modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
 	return 0;
 }
 
-static int modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
-			  struct irte_ga *irte)
+int modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
+		   struct irte_ga *irte)
 {
 	int ret;
 

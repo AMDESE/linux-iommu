@@ -9,8 +9,11 @@
 #define _ASM_X86_AMD_IOMMU_H
 
 #include <linux/types.h>
+#include <asm/hw_irq.h>
 
 struct amd_iommu;
+struct amd_ir_data;
+
 
 #ifdef CONFIG_AMD_IOMMU
 
