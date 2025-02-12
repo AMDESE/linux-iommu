@@ -45,6 +45,10 @@ extern int amd_iommu_gpt_level;
 extern u8 amd_iommu_hpt_level;
 extern unsigned long amd_iommu_pgsize_bitmap;
 extern bool amd_iommu_hatdis;
+int modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index, struct irte_ga *irte);
+
+/* GAPPI */
+int gappi_init_irqdomain(void);
 
 /* Protection domain ops */
 void amd_iommu_init_identity_domain(void);
