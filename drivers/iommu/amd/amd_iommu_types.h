@@ -20,6 +20,8 @@
 #include <linux/irqreturn.h>
 #include <linux/io-pgtable.h>
 
+#include <uapi/linux/iommufd.h>
+
 /*
  * Maximum number of IOMMUs supported
  */
@@ -600,6 +602,9 @@ struct protection_domain {
 
 	struct mmu_notifier mn;	/* mmu notifier for the SVA domain */
 	struct list_head dev_data_list; /* List of pdom_dev_data */
+
+	struct protection_domain *parent; /* Nested parent domain */
+	struct iommu_hwpt_amd_v2 guest_hwpt;
 };
 
 /*
