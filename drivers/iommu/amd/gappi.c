@@ -148,3 +148,90 @@ int gappi_init_irqdomain(void)
 
 	return 0;
 }
+
+static irqreturn_t gappi_handler(int irq, void *data)
+{
+	return IRQ_WAKE_THREAD;
+}
+
+static irqreturn_t gappi_thread_fn(int irq, void *data)
+{
+	int ret;
+	struct amd_ir_data *host_ir_data = (struct amd_ir_data *)data;
+	struct amd_iommu *iommu = host_ir_data->iommu;
+
+	if (!iommu_ga_log_notifier)
+		return IRQ_HANDLED;
+
+	pr_debug("%s: iommu=%#x, irq=%d, devid=%#x\n",
+		 __func__, iommu->devid, irq, host_ir_data->irq_2_irte.devid);
+
+	ret = iommu_ga_log_notifier(host_ir_data->ga_tag);
+	if (ret)
+		pr_err("GAPPI: fail to wake up vcpu (%#x)\n", host_ir_data->ga_tag);
+
+	return IRQ_HANDLED;
+}
+
+int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
+{
+	int irq, ret;
+	struct irq_data *irqd;
+	struct irq_alloc_info *irq_info;
+	struct amd_ir_data *host_ir_data = pi_data->ir_data;
+	struct gappi_info *gappi = &host_ir_data->gappi;
+
+	if (!gappi_irqdomain || !pi_data->is_guest_mode)
+		return 0;
+
+	if (gappi->irq >= 0)
+		return 0;
+
+	irq_info = &gappi->irq_info;
+	irq = irq_domain_alloc_irqs(gappi_irqdomain, 1, 0, irq_info);
+	if (irq < 0)
+		return irq;
+
+	irqd = irq_domain_get_irq_data(gappi_irqdomain, irq);
+	ret = irq_domain_activate_irq(irqd, 0);
+
+	if (ret) {
+		irq_domain_free_irqs(irq, 1);
+		return ret;
+	}
+
+	gappi->irq = irq;
+	gappi->cfg = irq_cfg(gappi->irq);
+	snprintf(gappi->irq_name, sizeof(gappi->irq_name),
+		 "GAPPI-%#x-%u", host_ir_data->irq_2_irte.devid, irq);
+
+	pr_debug("%s: irq=%d\n", __func__, gappi->irq);
+
+	return request_threaded_irq(gappi->irq, gappi_handler, gappi_thread_fn,
+			IRQF_ONESHOT, gappi->irq_name, host_ir_data);
+}
+EXPORT_SYMBOL(gappi_setup_irq);
+
+void gappi_destroy_irq(struct amd_iommu_pi_data *pi_data)
+{
+	struct amd_ir_data *host_ir_data = pi_data->ir_data;
+	struct gappi_info *gappi = &host_ir_data->gappi;
+	struct irq_data *irqd;
+
+	if (!gappi_irqdomain)
+		return;
+
+	if (!gappi || gappi->irq < 0)
+		return;
+
+	pr_debug("%s: irq=%d\n", __func__, gappi->irq);
+
+	free_irq(gappi->irq, host_ir_data);
+	irqd = irq_domain_get_irq_data(gappi_irqdomain, gappi->irq);
+	irq_domain_deactivate_irq(irqd);
+	irq_domain_free_irqs(gappi->irq, 1);
+
+	gappi->irq = -1;
+	gappi->cfg = NULL;
+}
+EXPORT_SYMBOL(gappi_destroy_irq);

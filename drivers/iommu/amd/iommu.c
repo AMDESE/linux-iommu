@@ -999,7 +999,7 @@ static void iommu_poll_events(struct amd_iommu *iommu)
 }
 
 #ifdef CONFIG_IRQ_REMAP
-static int (*iommu_ga_log_notifier)(u32);
+int (*iommu_ga_log_notifier)(u32);
 
 int amd_iommu_register_ga_log_notifier(int (*notifier)(u32))
 {

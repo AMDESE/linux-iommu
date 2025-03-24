@@ -10,6 +10,7 @@
 
 #include <linux/types.h>
 #include <asm/hw_irq.h>
+#include <asm/irq_remapping.h>
 
 struct amd_iommu;
 struct amd_ir_data;
@@ -37,6 +38,8 @@ extern int amd_iommu_update_ga(void *data, int cpu, bool ga_log_intr);
 extern int amd_iommu_activate_guest_mode(void *data, int cpu, bool ga_log_intr);
 extern int amd_iommu_deactivate_guest_mode(void *data);
 
+int gappi_setup_irq(struct amd_iommu_pi_data *pi_data);
+void gappi_destroy_irq(struct amd_iommu_pi_data *pi_data);
 #else /* defined(CONFIG_AMD_IOMMU) && defined(CONFIG_IRQ_REMAP) */
 
 static inline int
@@ -59,6 +62,13 @@ static inline int amd_iommu_deactivate_guest_mode(void *data)
 {
 	return 0;
 }
+
+int gappi_setup_irq(struct amd_iommu_pi_data *pi_data);
+{
+	return 0;
+}
+
+void gappi_destroy_irq(struct amd_iommu_pi_data *pi_data) { }
 #endif /* defined(CONFIG_AMD_IOMMU) && defined(CONFIG_IRQ_REMAP) */
 
 int amd_iommu_get_num_iommus(void);
