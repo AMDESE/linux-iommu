@@ -49,6 +49,7 @@ int modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index, struct irte_ga
 
 /* GAPPI */
 int gappi_init_irqdomain(void);
+extern int (*iommu_ga_log_notifier)(u32);
 
 /* Protection domain ops */
 void amd_iommu_init_identity_domain(void);
