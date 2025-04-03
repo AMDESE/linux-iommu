@@ -14,6 +14,7 @@
 #include <linux/tracepoint.h>
 
 struct device;
+struct iopt_pages;
 
 DECLARE_EVENT_CLASS(iommu_group_event,
 
@@ -97,6 +98,62 @@ TRACE_EVENT(map,
 	TP_printk("IOMMU: iova=0x%016llx - 0x%016llx paddr=0x%016llx size=%zu",
 		  __entry->iova, __entry->iova + __entry->size, __entry->paddr,
 		  __entry->size
+	)
+);
+
+TRACE_EVENT(memfdtr,
+
+	TP_PROTO(int i, phys_addr_t paddr, size_t size, unsigned long ua, int r, int max_order),
+
+	TP_ARGS(i, paddr, size, ua, r, max_order),
+
+	TP_STRUCT__entry(
+		__field(int, i)
+		__field(u64, paddr)
+		__field(size_t, size)
+		__field(u64, ua)
+		__field(int, r)
+		__field(int, max_order)
+	),
+
+	TP_fast_assign(
+		__entry->i = i;
+		__entry->paddr = paddr;
+		__entry->size = size;
+		__entry->ua = ua;
+		__entry->r = r;
+		__entry->max_order = max_order;
+	),
+
+	TP_printk("#%d: pa=0x%012llx sz=%zu ua=%llx r=%d max_order=%d",
+		  __entry->i, __entry->paddr,
+		  __entry->size, __entry->ua, __entry->r, __entry->max_order
+	)
+);
+
+TRACE_EVENT(iopt_pages_npinned,
+
+	TP_PROTO(struct iopt_pages *pages, long npages, long np),
+
+	TP_ARGS(pages, npages, np),
+
+	TP_STRUCT__entry(
+		__field(struct iopt_pages *, pages)
+		__field(long, npages)
+		__field(long, npinned)
+		__field(long, np)
+	),
+
+	TP_fast_assign(
+		__entry->pages = pages;
+		__entry->npages = npages;
+		__entry->npinned = __entry->pages->npinned;
+		__entry->np = np;
+	),
+
+	TP_printk("@%lx %ld => %ld / %ld / %ld",
+		  (unsigned long) __entry->pages,
+		  __entry->npages, __entry->pages->npinned, __entry->npinned, __entry->np
 	)
 );
 

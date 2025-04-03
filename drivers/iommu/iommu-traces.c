@@ -8,6 +8,7 @@
 
 #include <linux/string.h>
 #include <linux/types.h>
+#include "iommufd/io_pagetable.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/iommu.h>
@@ -21,6 +22,8 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(attach_device_to_domain);
 
 /* iommu_map_unmap */
 EXPORT_TRACEPOINT_SYMBOL_GPL(map);
+EXPORT_TRACEPOINT_SYMBOL_GPL(memfdtr);
+EXPORT_TRACEPOINT_SYMBOL_GPL(iopt_pages_npinned);
 EXPORT_TRACEPOINT_SYMBOL_GPL(unmap);
 
 /* iommu_error */
