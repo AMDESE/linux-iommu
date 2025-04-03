@@ -63,6 +63,8 @@
 #include "double_span.h"
 #include "io_pagetable.h"
 
+#include <trace/events/iommu.h>
+
 #ifndef CONFIG_IOMMUFD_TEST
 #define TEMP_MEMORY_LIMIT 65536
 #else
@@ -176,6 +178,7 @@ static void iopt_pages_add_npinned(struct iopt_pages *pages, size_t npages)
 	rc = check_add_overflow(pages->npinned, npages, &pages->npinned);
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
 		WARN_ON(rc || pages->npinned > pages->npages);
+	trace_iopt_pages_npinned(pages, npages, pages->npinned);
 }
 
 static void iopt_pages_sub_npinned(struct iopt_pages *pages, size_t npages)
@@ -185,6 +188,7 @@ static void iopt_pages_sub_npinned(struct iopt_pages *pages, size_t npages)
 	rc = check_sub_overflow(pages->npinned, npages, &pages->npinned);
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
 		WARN_ON(rc || pages->npinned > pages->npages);
+	trace_iopt_pages_npinned(pages, -npages, pages->npinned);
 }
 
 static void iopt_pages_err_unpin(struct iopt_pages *pages,
@@ -366,6 +370,8 @@ static bool batch_add_pfn_num(struct pfn_batch *batch, unsigned long pfn,
 			      u32 nr, enum batch_kind kind)
 {
 	unsigned int end = batch->end;
+
+	trace_printk("end=%x pfn=%lx num=%d\n", end, pfn, nr);
 
 	if (batch->kind != kind) {
 		/* One kind per batch */
@@ -680,6 +686,9 @@ static int batch_from_folios(struct pfn_batch *batch, struct folio ***folios_p,
 		nr = min(nr, npages);
 		npages -= nr;
 
+		trace_printk("PIN %d npages=%ld/%ld offset=%lx folio=%llx %lx\n",
+			     do_pin, nr, npages, offset, (u64)folio, folio_pfn(folio));
+
 		if (!batch_add_pfn_num(batch, pfn, nr, BATCH_CPU_MEMORY))
 			break;
 		if (nr > 1 && do_pin) {
@@ -714,6 +723,7 @@ static void batch_unpin(struct pfn_batch *batch, struct iopt_pages *pages,
 	}
 
 	while (npages) {
+		struct page *pg = pfn_to_page(batch->pfns[cur] + first_page_off);
 		size_t to_unpin = min_t(size_t, npages,
 					batch->npfns[cur] - first_page_off);
 
@@ -723,10 +733,20 @@ static void batch_unpin(struct pfn_batch *batch, struct iopt_pages *pages,
 				pfn_to_page(batch->pfns[cur] + first_page_off),
 				to_unpin, pages->writable);
 
+		trace_printk("UNPIN %d %lx %d tounpin=%ld/%ld pfn=%lx cnt=%d\n",
+			do_unpin,
+			batch->pfns[cur] + first_page_off, pages->type, to_unpin, npages,
+				page_to_pfn(pg) << PAGE_SHIFT,
+				page_ref_count(pg));
+
+		trace_memfdtr(-1, page_to_pfn(pg) << PAGE_SHIFT,
+			      to_unpin << PAGE_SHIFT, -1,
+			      page_ref_count(pg), -1);
 		iopt_pages_sub_npinned(pages, to_unpin);
 		cur++;
 		first_page_off = 0;
 		npages -= to_unpin;
+
 	}
 }
 
@@ -889,6 +909,8 @@ static long pin_guest_memfd_pages(struct pfn_reader_user *user, loff_t start, un
 	loff_t uptr = start;
 	long rc = 0;
 
+	trace_printk("PINFFF pages=%ld start=%llx upages=%llx\n", npages, start, (u64)upages);
+
 	for (unsigned long i = 0; (uptr - start) < (npages << PAGE_SHIFT); ++i) {
 		unsigned long gfn = 0, pfn = 0;
 		int max_order = 0;
@@ -913,6 +935,12 @@ static long pin_guest_memfd_pages(struct pfn_reader_user *user, loff_t start, un
 			offset = offset_in_folio(folio, start) >> PAGE_SHIFT;
 
 		user->ufolios[i] = folio;
+		struct page *pg = &folio->page;
+
+		trace_memfdtr(i, page_to_pfn(pg) << PAGE_SHIFT,
+			      1UL << (max_order + PAGE_SHIFT), uptr,
+			      page_ref_count(pg), max_order);
+		trace_printk("#%ld: folio=%llx %lx\n", i, (u64)folio, folio_pfn(folio));
 
 		if (upages) {
 			unsigned long np = (1UL << (max_order + PAGE_SHIFT)) - offset_in_folio(folio, uptr);
@@ -929,6 +957,8 @@ static long pin_guest_memfd_pages(struct pfn_reader_user *user, loff_t start, un
 		user->ufolios_next = user->ufolios;
 		user->ufolios_offset = offset;
 	}
+	trace_printk("PINFdone %ld pages, offset=%lx upages=%lx %lx rc=%ld\n",
+		npages, user->ufolios_offset, user->upages_start, user->upages_end, rc);
 
 	return rc;
 }
@@ -995,10 +1025,12 @@ static int pfn_reader_user_pin(struct pfn_reader_user *user,
 		}
 	} else if (!remote_mm) {
 		uptr = (uintptr_t)(pages->uptr + start_index * PAGE_SIZE);
+		pr_err("PINL ua=%lx sz=%lx", uptr, npages << PAGE_SHIFT);
 		rc = pin_user_pages_fast(uptr, npages, user->gup_flags,
 					 user->upages);
 	} else {
 		uptr = (uintptr_t)(pages->uptr + start_index * PAGE_SIZE);
+		pr_err("PINR ua=%lx sz=%lx", uptr, npages << PAGE_SHIFT);
 		if (!user->locked) {
 			mmap_read_lock(pages->source_mm);
 			user->locked = 1;
@@ -1008,6 +1040,7 @@ static int pfn_reader_user_pin(struct pfn_reader_user *user,
 					   &user->locked);
 	}
 	if (rc <= 0) {
+		pr_err("PINret_err rc=%ld", rc);
 		if (WARN_ON(!rc))
 			return -EFAULT;
 		return rc;
