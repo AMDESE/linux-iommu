@@ -845,7 +845,7 @@ static bool kvm_arch_gmem_invalidate_range(struct kvm *kvm, struct inode *inode,
 		for (i = 0; i < folio_batch_count(&fbatch); ++i) {
 			struct folio *folio = fbatch.folios[i];
 
-			kvm_arch_gmem_invalidate(folio_pfn(folio), folio_pfn(folio) + folio_nr_pages(folio));
+			kvm_arch_gmem_invalidate(NULL, folio_pfn(folio), folio_pfn(folio) + folio_nr_pages(folio));
 
 //			struct gmemfd_notifier *notifier;
 //			size_t npages = folio_nr_pages(folio);
@@ -1123,7 +1123,7 @@ static void kvm_gmem_free_folio(struct folio *folio)
 	folio_clear_uptodate(folio);
 
 #ifdef CONFIG_HAVE_KVM_ARCH_GMEM_INVALIDATE
-	kvm_arch_gmem_invalidate(folio_pfn(folio),
+	kvm_arch_gmem_invalidate(NULL, folio_pfn(folio),
 				 folio_pfn(folio) + folio_nr_pages(folio));
 #endif
 }
