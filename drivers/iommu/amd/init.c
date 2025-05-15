@@ -2430,6 +2430,12 @@ static void print_iommu_info(void)
 		if (check_feature2(FEATURE_SEVSNPIO_SUP))
 			pr_cont(" SEV-TIO");
 
+		if (check_feature(FEATURE_VIOMMU))
+			pr_cont(" vIOMMU");
+
+		if (check_feature(FEATURE_VMGUARDIO))
+			pr_cont(" svIOMMU");
+
 		pr_cont("\n");
 	}
 
@@ -4247,6 +4253,41 @@ bool amd_iommu_sev_tio_supported(void)
 	return check_feature2(FEATURE_SEVSNPIO_SUP);
 }
 EXPORT_SYMBOL_GPL(amd_iommu_sev_tio_supported);
+
+/*
+ * Check to see if secure viommu is supported system-wide.
+ * Currently, we assume all IOMMUs must support secure-viommu.
+ */
+static bool amd_sviommu_supported(struct amd_iommu *iommu)
+{
+	bool ret = false;
+
+	if (check_feature(FEATURE_VIOMMU) &&
+	    check_feature(FEATURE_VMGUARDIO) &&
+	    check_feature(FEATURE_SNP) &&
+	    check_feature2(FEATURE_SEVSNPIO_SUP))
+		ret = true;
+
+	return ret;
+}
+
+bool amd_iommu_sviommu_supported(void)
+{
+	struct amd_iommu *iommu;
+
+	for_each_iommu(iommu) {
+		if (!amd_iommu_viommu_enabled(iommu))
+			return false;
+	}
+
+	for_each_iommu(iommu) {
+		if (!amd_sviommu_supported(iommu))
+			return false;
+	}
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(amd_iommu_sviommu_supported);
 #endif
 
 int amd_iommu_tmpm_enable(void)
