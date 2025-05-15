@@ -84,9 +84,11 @@ struct amd_iommu *get_amd_iommu(unsigned int idx);
 #ifdef CONFIG_KVM_AMD_SEV
 int amd_iommu_snp_disable(void);
 extern bool amd_iommu_sev_tio_supported(void);
+bool amd_iommu_sviommu_supported(void);
 #else
 static inline int amd_iommu_snp_disable(void) { return 0; }
 static inline bool amd_iommu_sev_tio_supported(void) { return false; }
+static inline bool amd_iommu_sviommu_supported(void) { return false; }
 #endif
 
 int amd_iommu_tmpm_enable(void);
