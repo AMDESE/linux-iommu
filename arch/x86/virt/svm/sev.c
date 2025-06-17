@@ -774,6 +774,20 @@ int snp_lookup_rmpentry(u64 pfn, bool *assigned, int *level)
 }
 EXPORT_SYMBOL_GPL(snp_lookup_rmpentry);
 
+u64 rmp_get_gpa(u64 hpa)
+{
+	struct rmpentry e;
+	int ret, level;
+
+	ret = __snp_lookup_rmpentry(PHYS_PFN(hpa), &e, &level);
+	if (ret)
+		return ret;
+	if (!e.assigned)
+		return -EINVAL;
+	return e.gpa;
+}
+EXPORT_SYMBOL_GPL(rmp_get_gpa);
+
 /*
  * Dump the raw RMP entry for a particular PFN. These bits are documented in the
  * PPR for a particular CPU model and provide useful information about how a
