@@ -675,6 +675,7 @@ static inline u64 savic_ghcb_msr_read(u32 reg) { return 0; }
 bool snp_probe_rmptable_info(void);
 int snp_rmptable_init(void);
 int snp_lookup_rmpentry(u64 pfn, bool *assigned, int *level);
+u64 rmp_get_gpa(u64 hpa);
 void snp_dump_hva_rmpentry(unsigned long address);
 int psmash(u64 pfn);
 int rmp_make_private(u64 pfn, u64 gpa, enum pg_level level, u32 asid, bool immutable);
