@@ -1,0 +1,8 @@
+config AMD_TMPM
+	tristate "AMD TMPM Page Migration DMA Engine"
+	depends on X86_64 && ACPI
+	default m
+	help
+	  Enable support for the AMD TMPM DMA engine.
+	  The TMPM is to be used for page migration, not for
+	  general purpose peripheral DMA.
