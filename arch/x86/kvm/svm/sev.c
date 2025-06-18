@@ -5321,6 +5321,14 @@ void sev_handle_rmp_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u64 error_code)
 		return;
 	}
 
+	/*
+	 * IOMMU MMIO regions are backed by IOMMU BAR (e.g. iommufd mmap).
+	 * Their RMP entries are managed by the PSP host IOMMU driver,
+	 * not by KVM. Skip the PSMASH logic here.
+	 */
+	if (kvm_slot_is_iommu_mmio(slot))
+		return;
+
 	ret = kvm_gmem_get_pfn(kvm, slot, gfn, &pfn, &page, &order);
 	if (ret) {
 		pr_warn_ratelimited("SEV: Unexpected RMP fault, no backing page for private GPA 0x%llx\n",

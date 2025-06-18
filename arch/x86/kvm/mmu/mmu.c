@@ -4600,6 +4600,14 @@ static int __kvm_mmu_faultin_pfn(struct kvm_vcpu *vcpu,
 {
 	unsigned int foll = fault->write ? FOLL_WRITE : 0;
 
+	/*
+	 * IOMMU MMIO slots (KVM_MEM_IOMMU_MMIO) maps 4K region from host IOMMU
+	 * VF BAR to guest. PSP handles RMP update. For secure guest, its always
+	 * the private memory. KVM must always map this into NPT.
+	 */
+	if (kvm_slot_is_iommu_mmio(fault->slot))
+		goto iommu_private;
+
 	if (fault->is_private || kvm_memslot_is_gmem_only(fault->slot))
 		return kvm_mmu_faultin_pfn_gmem(vcpu, fault);
 
@@ -4619,6 +4627,7 @@ static int __kvm_mmu_faultin_pfn(struct kvm_vcpu *vcpu,
 		return RET_PF_CONTINUE;
 	}
 
+iommu_private:
 	foll |= FOLL_NOWAIT;
 	fault->pfn = __kvm_faultin_pfn(fault->slot, fault->gfn, foll,
 				       &fault->map_writable, &fault->refcounted_page);
@@ -4679,9 +4688,16 @@ static int kvm_mmu_faultin_pfn(struct kvm_vcpu *vcpu,
 	 * Now that we have a snapshot of mmu_invalidate_seq we can check for a
 	 * private vs. shared mismatch.
 	 */
+
 	if (fault->is_private != kvm_mem_is_private(kvm, fault->gfn)) {
-		kvm_mmu_prepare_memory_fault_exit(vcpu, fault);
-		return -EFAULT;
+		if (kvm_slot_is_iommu_mmio(fault->slot)) {
+			pr_info("%s : SVIOMMU GFN=0x%llx fault_priv=%d mem_priv=%d\n",
+				__func__, (unsigned long long)fault->gfn, fault->is_private,
+				kvm_mem_is_private(kvm, fault->gfn));
+		} else {
+			kvm_mmu_prepare_memory_fault_exit(vcpu, fault);
+			return -EFAULT;
+		}
 	}
 
 	if (unlikely(!slot))
@@ -4834,12 +4850,20 @@ static int direct_page_fault(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	r = RET_PF_RETRY;
 	write_lock(&vcpu->kvm->mmu_lock);
 
-	if (is_page_fault_stale(vcpu, fault))
+	if (is_page_fault_stale(vcpu, fault)) {
+		if (kvm_slot_is_iommu_mmio(fault->slot)) {
+			pr_err("%s : SVIOMMU Range GFN 0x%llx retrurn 2 r %d\n", __func__, fault->gfn, r);
+		}
 		goto out_unlock;
+	}
 
 	r = make_mmu_pages_available(vcpu);
-	if (r)
+	if (r) {
+		if (kvm_slot_is_iommu_mmio(fault->slot)) {
+			pr_err("%s : SVIOMMU Range GFN 0x%llx retrurn 2 r %d\n", __func__, fault->gfn, r);
+		}
 		goto out_unlock;
+	}
 
 	r = direct_map(vcpu, fault);
 

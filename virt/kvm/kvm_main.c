@@ -965,7 +965,7 @@ static void kvm_destroy_dirty_bitmap(struct kvm_memory_slot *memslot)
 /* This does not remove the slot from struct kvm_memslots data structures */
 static void kvm_free_memslot(struct kvm *kvm, struct kvm_memory_slot *slot)
 {
-	if (slot->flags & KVM_MEM_GUEST_MEMFD)
+	if (slot->flags & (KVM_MEM_GUEST_MEMFD | KVM_MEM_IOMMU_MMIO))
 		kvm_gmem_unbind(slot);
 	else if (slot->flags & KVM_MEM_VFIO_DMABUF)
 		kvm_vfio_dmabuf_unbind(slot);
@@ -1609,7 +1609,7 @@ static void kvm_replace_memslot(struct kvm *kvm,
 static int check_memory_region_flags(struct kvm *kvm,
 				     const struct kvm_userspace_memory_region2 *mem)
 {
-	u32 private_mask = KVM_MEM_GUEST_MEMFD | KVM_MEM_VFIO_DMABUF;
+	u32 private_mask = KVM_MEM_GUEST_MEMFD | KVM_MEM_VFIO_DMABUF | KVM_MEM_IOMMU_MMIO;
 	u32 private_flag = mem->flags & private_mask;
 	u32 valid_flags = KVM_MEM_LOG_DIRTY_PAGES;
 
@@ -2164,6 +2164,25 @@ static int kvm_set_memory_region(struct kvm *kvm,
 		r = kvm_vfio_dmabuf_bind(kvm, new, mem->guest_memfd);
 		if (r)
 			goto out;
+	} else if (mem->flags & KVM_MEM_IOMMU_MMIO) {
+		/*
+		 * IOMMU MMIO slots use a KVM-created guest_memfd for private
+		 * page fault resolution and KVM_SET_MEMORY_ATTRIBUTES2 attribute
+		 * tracking. The userspace_addr (e.g. iommufd mmap) backs shared
+		 * access. Bind the gmem so kvm_slot_has_gmem() and
+		 * kvm_gmem_get_pfn() work for private faults.
+		 * guest_memfd_offset must be zero for device MMIO regions.
+		 */
+		if (mem->guest_memfd_offset) {
+			r = -EINVAL;
+			goto out;
+		}
+		if (mem->guest_memfd >= 0) {
+			r = kvm_gmem_bind(kvm, new, mem->guest_memfd,
+					  mem->guest_memfd_offset);
+			if (r)
+				goto out;
+		}
 	}
 
 	r = kvm_set_memslot(kvm, old, new, change);
@@ -2173,7 +2192,7 @@ static int kvm_set_memory_region(struct kvm *kvm,
 	return 0;
 
 out_unbind:
-	if (mem->flags & KVM_MEM_GUEST_MEMFD)
+	if (mem->flags & (KVM_MEM_GUEST_MEMFD | KVM_MEM_IOMMU_MMIO))
 		kvm_gmem_unbind(new);
 	else if (mem->flags & KVM_MEM_VFIO_DMABUF)
 		kvm_vfio_dmabuf_unbind(new);

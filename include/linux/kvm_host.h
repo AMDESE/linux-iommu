@@ -623,12 +623,18 @@ struct kvm_memory_slot {
 
 static inline bool kvm_slot_has_gmem(const struct kvm_memory_slot *slot)
 {
-	return slot && (slot->flags & (KVM_MEM_GUEST_MEMFD | KVM_MEM_VFIO_DMABUF));
+	return slot && (slot->flags & (KVM_MEM_GUEST_MEMFD | KVM_MEM_VFIO_DMABUF |
+				       KVM_MEM_IOMMU_MMIO));
 }
 
 static inline bool kvm_slot_is_vfio_dmabuf(const struct kvm_memory_slot *slot)
 {
 	return slot && (slot->flags & KVM_MEM_VFIO_DMABUF);
+}
+
+static inline bool kvm_slot_is_iommu_mmio(const struct kvm_memory_slot *slot)
+{
+	return slot && (slot->flags & KVM_MEM_IOMMU_MMIO);
 }
 
 static inline bool kvm_slot_dirty_track_enabled(const struct kvm_memory_slot *slot)
