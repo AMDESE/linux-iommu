@@ -1192,7 +1192,7 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 				   false, fault->map_writable, &new_spte);
 
 	if (new_spte == iter->old_spte)
-		ret = RET_PF_SPURIOUS;
+		ret = RET_PF_FIXED;
 	else if (tdp_mmu_set_spte_atomic(vcpu->kvm, iter, new_spte))
 		return RET_PF_RETRY;
 	else if (is_shadow_present_pte(iter->old_spte) &&
