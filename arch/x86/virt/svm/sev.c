@@ -794,7 +794,8 @@ EXPORT_SYMBOL_GPL(rmp_get_gpa);
  * particular PFN is being utilized by the kernel/firmware at the time certain
  * unexpected events occur, such as RMP faults.
  */
-static void dump_rmpentry(u64 pfn)
+void dump_rmpentry(u64 pfn);
+void dump_rmpentry(u64 pfn)
 {
 	struct rmpentry_raw *e_raw;
 	u64 pfn_i, pfn_end;
