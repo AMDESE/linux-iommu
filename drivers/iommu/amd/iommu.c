@@ -923,6 +923,15 @@ out:
 		pci_dev_put(pdev);
 }
 
+static void iommu_print_event_raw(struct amd_iommu *iommu, void *__evt)
+{
+	volatile u32 *event = __evt;
+	struct device *dev = iommu->iommu.dev;
+
+	dev_err(dev, "evt[0] : 0x%x, evt[1] : 0x%x evt[2] : 0x%x, evt[3] : 0x%x\n",
+		event[0], event[1], event[2], event[3]);
+}
+
 static void iommu_print_event(struct amd_iommu *iommu, void *__evt)
 {
 	struct device *dev = iommu->iommu.dev;
@@ -950,6 +959,9 @@ retry:
 		udelay(1);
 		goto retry;
 	}
+
+	/* Print Raw event */
+	iommu_print_event_raw(iommu, __evt);
 
 	if (type == EVENT_TYPE_IO_FAULT) {
 		u8 vflags = FIELD_GET(IO_PAGE_FAULT_VFLAGS_MASK, event[0]);
