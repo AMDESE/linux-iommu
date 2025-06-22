@@ -1066,6 +1066,15 @@ static void iommu_restart_cmd_buffer(struct amd_iommu *iommu)
 			     head, tail, new_head);
 }
 
+static void iommu_print_event_raw(struct amd_iommu *iommu, void *__evt)
+{
+	volatile u32 *event = __evt;
+	struct device *dev = iommu->iommu.dev;
+
+	dev_err(dev, "evt[0] : 0x%x, evt[1] : 0x%x evt[2] : 0x%x, evt[3] : 0x%x\n",
+		event[0], event[1], event[2], event[3]);
+}
+
 /*
  * Decode one event-log slot (or a GUEST_EVENT_FAULT pair).
  * Returns the number of slots consumed.
@@ -1099,6 +1108,9 @@ retry:
 		udelay(1);
 		goto retry;
 	}
+
+	/* Print Raw event */
+	iommu_print_event_raw(iommu, __evt);
 
 	vflags = FIELD_GET(EVENT_VFLAGS_MASK, event[0]);
 
