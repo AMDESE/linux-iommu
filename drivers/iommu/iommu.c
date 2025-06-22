@@ -1006,6 +1006,40 @@ static IOMMU_GROUP_ATTR(reserved_regions, 0444,
 static IOMMU_GROUP_ATTR(type, 0644, iommu_group_show_type,
 			iommu_group_store_type);
 
+
+
+extern void dump_rmpentry(int pfn);
+
+static ssize_t iommu_group_show_rmpentry(struct iommu_group *group, char *buf)
+{
+	return sysfs_emit(buf, "Enter SPA to dump RMP entry\n");
+}
+
+static ssize_t iommu_group_store_rmpentry(struct iommu_group *group,
+					  const char *buf, size_t count)
+{
+	long addr;
+	int ret;
+
+	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP)) {
+		pr_info("CC_ATTR_HOST_SEV_SNP not enabled\n");
+		return count;
+	}
+
+	/* Dump RMP entry  */
+	ret = kstrtol(buf, 16, &addr);
+	if (!ret) {
+		pr_info("%s : printing RMP entry for 0x%lx\n", __func__, addr);
+		dump_rmpentry(addr >> 12);
+		dump_rmpentry((addr + 0x1000) >> 12);
+	}
+
+	return count;
+
+}
+static IOMMU_GROUP_ATTR(rmpentry, 0644, iommu_group_show_rmpentry, iommu_group_store_rmpentry);
+
+
 static void iommu_group_release(struct kobject *kobj)
 {
 	struct iommu_group *group = to_iommu_group(kobj);
@@ -1091,6 +1125,12 @@ struct iommu_group *iommu_group_alloc(void)
 	}
 
 	ret = iommu_group_create_file(group, &iommu_group_attr_type);
+	if (ret) {
+		kobject_put(group->devices_kobj);
+		return ERR_PTR(ret);
+	}
+
+	ret = iommu_group_create_file(group, &iommu_group_attr_rmpentry);
 	if (ret) {
 		kobject_put(group->devices_kobj);
 		return ERR_PTR(ret);
