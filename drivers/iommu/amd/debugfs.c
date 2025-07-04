@@ -111,6 +111,25 @@ static int iommu_capability_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_STORE_ATTRIBUTE(iommu_capability);
 
+static ssize_t iommu_cmdbuf_write(struct file *filp, const char __user *ubuf,
+				size_t cnt, loff_t *ppos)
+{
+	int ret;
+	u32 input;
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+
+	if (cnt > OFS_IN_SZ)
+		return -EINVAL;
+
+	ret = kstrtou32_from_user(ubuf, cnt, 0, &input);
+	if (ret)
+		return ret;
+
+	amd_iommu_reset_cmd_buffer(iommu);
+	return cnt;
+}
+
 static int iommu_cmdbuf_show(struct seq_file *m, void *unused)
 {
 	struct amd_iommu *iommu = m->private;
@@ -133,7 +152,50 @@ static int iommu_cmdbuf_show(struct seq_file *m, void *unused)
 
 	return 0;
 }
-DEFINE_SHOW_ATTRIBUTE(iommu_cmdbuf);
+DEFINE_SHOW_STORE_ATTRIBUTE(iommu_cmdbuf);
+
+static ssize_t iommu_evtlog_write(struct file *filp, const char __user *ubuf,
+				size_t cnt, loff_t *ppos)
+{
+	int ret;
+	u32 evtid;
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+
+	if (cnt > OFS_IN_SZ)
+		return -EINVAL;
+
+	ret = kstrtou32_from_user(ubuf, cnt, 0, &evtid);
+	if (ret)
+		return ret;
+
+	amd_iommu_inject_event(iommu, evtid);
+	return cnt;
+}
+
+static int iommu_evtlog_show(struct seq_file *m, void *unused)
+{
+	struct amd_iommu *iommu = m->private;
+	struct iommu_cmd *cmd;
+	unsigned long flag;
+	u32 head, tail;
+	int i;
+
+	raw_spin_lock_irqsave(&iommu->lock, flag);
+	head = readl(iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
+	tail = readl(iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
+	seq_printf(m, "EVT Log Head Offset:%#x Tail Offset:%#x\n",
+		   (head >> 4) & 0x7fff, (tail >> 4) & 0x7fff);
+	for (i = 0; i < EVT_BUFFER_ENTRIES; i++) {
+		cmd = (struct iommu_cmd *)(iommu->evt_buf + i * sizeof(*cmd));
+		seq_printf(m, "%3d: %08x %08x %08x %08x\n", i, cmd->data[0],
+			   cmd->data[1], cmd->data[2], cmd->data[3]);
+	}
+	raw_spin_unlock_irqrestore(&iommu->lock, flag);
+
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(iommu_evtlog);
 
 static ssize_t devid_write(struct file *filp, const char __user *ubuf,
 			   size_t cnt, loff_t *ppos)
@@ -361,6 +423,35 @@ static int iommu_irqtbl_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(iommu_irqtbl);
 
+/*
+ * INSERT GUEST EVENT
+ */
+static ssize_t guest_event_write(struct file *filp, const char __user *ubuf,
+				size_t cnt, loff_t *ppos)
+{
+	int ret;
+	u16 gid;
+	u32 event[4] = {0xDEADBEE0, 0xDEADBEE1, 0xDEADBEE2, 0xDEADBEE3};
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+
+	if (cnt > OFS_IN_SZ)
+		return -EINVAL;
+
+	ret = kstrtou16_from_user(ubuf, cnt, 0, &gid);
+	if (ret)
+		return ret;
+
+	amd_iommu_insert_guest_event(iommu, gid, event);
+	return cnt;
+}
+
+static int guest_event_show(struct seq_file *m, void *unused)
+{
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(guest_event);
+
 void amd_iommu_debugfs_setup(void)
 {
 	struct amd_iommu *iommu;
@@ -381,6 +472,10 @@ void amd_iommu_debugfs_setup(void)
 				    &iommu_capability_fops);
 		debugfs_create_file("cmdbuf", 0444, iommu->debugfs, iommu,
 				    &iommu_cmdbuf_fops);
+		debugfs_create_file("evtlog", 0444, iommu->debugfs, iommu,
+				    &iommu_evtlog_fops);
+		debugfs_create_file("guest_event", 0444, iommu->debugfs, iommu,
+				    &guest_event_fops);
 	}
 
 	debugfs_create_file("devid", 0644, amd_iommu_debugfs, NULL,
