@@ -813,7 +813,7 @@ void amd_iommu_restart_ga_log(struct amd_iommu *iommu)
  * This function resets the command buffer if the IOMMU stopped fetching
  * commands from it.
  */
-static void amd_iommu_reset_cmd_buffer(struct amd_iommu *iommu)
+void amd_iommu_reset_cmd_buffer(struct amd_iommu *iommu)
 {
 	iommu_feature_disable(iommu, CONTROL_CMDBUF_EN);
 
