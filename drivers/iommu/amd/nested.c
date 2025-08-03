@@ -10,6 +10,7 @@
 #include <uapi/linux/iommufd.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 
 static const struct iommu_domain_ops nested_domain_ops;
 
@@ -183,13 +184,16 @@ out_err:
 	return ERR_PTR(ret);
 }
 
-static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
-			   struct iommu_dev_data *dev_data, struct dev_table_entry *new)
+static int set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
+			  struct iommu_dev_data *dev_data, struct dev_table_entry *new)
 {
+	int ret;
+	u16 gid;
 	struct protection_domain *parent;
 	struct nested_domain *ndom = to_ndomain(dom);
 	struct iommu_hwpt_amd_guest *gdte = &ndom->gdte;
 	struct pt_iommu_amdv1_hw_info pt_info;
+	unsigned long gDevId;
 
 	/*
 	 * The nest parent domain is attached during the call to the
@@ -197,9 +201,15 @@ static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 	 * of the struct amd_iommu_viommu.parent.
 	 */
 	if (WARN_ON(!ndom->viommu || !ndom->viommu->parent))
-		return;
+		return -EINVAL;
 
+	gid = ndom->viommu->gid;
 	parent = ndom->viommu->parent;
+
+	ret = iommufd_viommu_get_vdev_id(&ndom->viommu->core, dev_data->dev, &gDevId);
+	if (ret)
+		return ret;
+
 	amd_iommu_make_clear_dte(iommu, dev_data->devid, new);
 
 	/* Retrieve the current pagetable info via the IOMMU PT API. */
@@ -227,6 +237,17 @@ static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 
 	/* Guest paging mode */
 	new->data[2] |= gdte->dte[2] & DTE_GPT_LEVEL_MASK;
+
+	/* vImuEn */
+	new->data[3] |= 1ULL << DTE_VIOMMU_EN_SHIFT;
+
+	/* GDeviceID */
+	new->data[3] |= FIELD_PREP(DTE_VIOMMU_GDEVICEID_MASK, (u16)gDevId);
+
+	/* GuestID */
+	new->data[3] |= FIELD_PREP(DTE_VIOMMU_GUESTID_MASK, gid);
+
+	return 0;
 }
 
 static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
