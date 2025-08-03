@@ -547,6 +547,14 @@ struct amd_iommu_viommu {
 	u64 *devid_table;
 	u64 *domid_table;
 
+	/*
+	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells
+	 * (DevID and DomID table updates) for this gid. Those registers
+	 * are shared by every vDevice on this vIOMMU; igroup locks are
+	 * not. Do not nest with trans_devid_lock.
+	 */
+	struct mutex vfctrl_lock;
+
 	/* Offset for mmap() of guest VF MMIO; set after iommufd_viommu_alloc_mmap(). */
 	unsigned long vfmmio_mmap_offset;
 };
@@ -1111,6 +1119,10 @@ struct amd_irte_ops {
 	void (*set_allocated)(struct irq_remap_table *, int);
 	bool (*is_allocated)(struct irq_remap_table *, int);
 	void (*clear_allocated)(struct irq_remap_table *, int);
+};
+
+struct amd_iommu_vdevice {
+	struct iommufd_vdevice core;
 };
 
 #ifdef CONFIG_IRQ_REMAP
