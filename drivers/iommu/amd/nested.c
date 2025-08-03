@@ -186,6 +186,7 @@ out_err:
 static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 			   struct iommu_dev_data *dev_data, struct dev_table_entry *new)
 {
+	u64 tmp;
 	struct protection_domain *parent;
 	struct nested_domain *ndom = to_ndomain(dom);
 	struct iommu_hwpt_amd_guest *gdte = &ndom->gdte;
@@ -227,6 +228,17 @@ static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 
 	/* Guest paging mode */
 	new->data[2] |= gdte->dte[2] & DTE_GPT_LEVEL_MASK;
+
+	/* vImuEn */
+	new->data[3] |= 1ULL << DTE_VIOMMU_EN_SHIFT;
+
+	/* GDeviceID */
+	tmp = dev_data->gDevId & DTE_VIOMMU_GDEVICEID_MASK;
+	new->data[3] |= tmp << DTE_VIOMMU_GDEVICEID_SHIFT;
+
+	/* GuestID */
+	tmp = dev_data->gid & DTE_VIOMMU_GUESTID_MASK;
+	new->data[3] |= tmp << DTE_VIOMMU_GUESTID_SHIFT;
 }
 
 static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
