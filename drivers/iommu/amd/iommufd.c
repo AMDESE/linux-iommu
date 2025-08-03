@@ -9,6 +9,7 @@
 #include "amd_iommu.h"
 #include "amd_viommu.h"
 #include "amd_iommu_types.h"
+#include "../iommufd/iommufd_private.h"
 
 static const struct iommufd_viommu_ops amd_viommu_ops;
 
@@ -124,10 +125,42 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 }
 
 /*
+ * Called from drivers/iommu/iommufd/viommu.c: iommufd_vdevice_alloc_ioctl()
+ */
+static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
+{
+	struct iommu_dev_data *dev_data;
+	struct pci_dev *pdev = to_pci_dev(vdev->idev->dev);
+	struct iommufd_viommu *viommu = vdev->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+
+	if (!pdev) {
+		pr_err();
+		return -EINVAL;
+	}
+
+	dev_data = dev_iommu_priv_get(&pdev->dev);
+	if (!dev_data) {
+		pr_err("%s: Device not found (devid=%#x)\n",
+		       __func__, pci_dev_id(pdev));
+		return -EINVAL;
+	}
+
+	dev_data->gid = aviommu->gid;
+	dev_data->gDevId = vdev->virt_id;
+	pr_debug("%s: gid=%#x, hdev_id=%#x, gdev_id=%#x\n", __func__,
+			 dev_data->gid, pci_dev_id(pdev), dev_data->gDevId);
+
+	return 0;
+}
+
+/*
  * See include/linux/iommufd.h
  * struct iommufd_viommu_ops - vIOMMU specific operations
  */
 static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.alloc_domain_nested = amd_iommu_alloc_domain_nested,
 	.destroy = amd_iommufd_viommu_destroy,
+	.vdevice_size = VDEVICE_STRUCT_SIZE(struct amd_iommu_vdevice, core),
+	.vdevice_init = _amd_viommu_vdevice_init,
 };
