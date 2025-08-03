@@ -6,6 +6,7 @@
 #define pr_fmt(fmt)     "AMD-Vi: " fmt
 #define dev_fmt(fmt)    pr_fmt(fmt)
 
+#include <linux/delay.h>
 #include <linux/iommu.h>
 #include <linux/iommufd.h>
 #include <uapi/linux/iommufd.h>
@@ -29,7 +30,6 @@
  * VIOMMU_MAX_GDEVID / VIOMMU_MAX_GDOMID are 16-bit guest DevID
  * and DomID table indices (hardware mapping-table width), not GID.
  */
-#define VIOMMU_MAX_GDEVID		0xFFFF
 #define VIOMMU_DEVID_MAPPING_BASE	0x1000000000ULL
 #define VIOMMU_DEVID_MAPPING_ENTRY_SIZE	(1 << 20)
 
@@ -44,6 +44,8 @@ static_assert(VIOMMU_DEVID_MAPPING_ENTRY_SIZE >=
 	      (VIOMMU_MAX_GDEVID + 1ULL) * sizeof(u64));
 static_assert(VIOMMU_DOMID_MAPPING_ENTRY_SIZE >=
 	      (VIOMMU_MAX_GDOMID + 1ULL) * sizeof(u64));
+
+#define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET	0x00
 
 static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 {
@@ -437,6 +439,75 @@ static void __maybe_unused free_private_vm_region(struct amd_iommu *iommu, u64 *
 	viommu_priv_unmap_free(iommu, addr, size, *entry);
 
 	*entry = NULL;
+}
+
+#define DEVID_ENTRY_GDEVID_MASK		GENMASK_ULL(61, 46)
+#define DEVID_ENTRY_HDEVID_MASK		GENMASK_ULL(29, 14)
+#define DEVID_ENTRY_WRITE		BIT_ULL(63)
+#define DEVID_ENTRY_VALID		BIT_ULL(0)
+
+/*
+ * CONTROL0/CONTROL1 bit 63 (WRITE) is a doorbell: hardware copies one
+ * entry into the IPA-backed table and clears WRITE when that DMA write
+ * retires. This is not a command-buffer operation;
+ * iommu_completion_wait() does not drain it. A readq() of CONTROL_EN
+ * is also unrelated. Poll WRITE=0 before ringing a new doorbell and
+ * after each write so the table update is retired before the caller
+ * proceeds (DTE commit, unmap/free).
+ */
+static void vfctrl_wait_write_clear(struct amd_iommu *iommu, u16 gid,
+				    unsigned int offset)
+{
+	u8 __iomem *reg = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) + offset;
+	int i;
+
+	for (i = 0; i < LOOP_TIMEOUT; i++) {
+		if (!(readq(reg) & DEVID_ENTRY_WRITE))
+			return;
+		udelay(1);
+	}
+	pr_err("%s: WRITE timeout gid=%#x offset=%#x val=%#llx\n",
+	       __func__, gid, offset, readq(reg));
+}
+
+/*
+ * Guest DevID table update via VFCTRL CONTROL0.
+ */
+static void set_device_mapping_unlocked(struct amd_iommu *iommu, u16 gid,
+					u16 hdev_id, u16 gdev_id)
+{
+	u64 val;
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	val = FIELD_PREP(DEVID_ENTRY_GDEVID_MASK, gdev_id) |
+	      FIELD_PREP(DEVID_ENTRY_HDEVID_MASK, hdev_id) |
+	      DEVID_ENTRY_WRITE | DEVID_ENTRY_VALID;
+
+	vfctrl_wait_write_clear(iommu, gid,
+			VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET);
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET);
+	vfctrl_wait_write_clear(iommu, gid,
+			VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET);
+}
+
+/*
+ * Program the DevID via VFCTRL CONTROL0. Waits for WRITE to clear so
+ * the IPA table DMA has retired before return. Serialized by
+ * aviommu->vfctrl_lock: CONTROL0 is shared by all vDevices on this gid.
+ */
+void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
+				   u16 hdev_id, u16 gdev_id)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, hdev_id=%#x, gdev_id=%#x\n",
+		 __func__, pci_dev_id(iommu->dev), aviommu->gid, hdev_id,
+		 gdev_id);
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	set_device_mapping_unlocked(iommu, aviommu->gid, hdev_id, gdev_id);
+	mutex_unlock(&aviommu->vfctrl_lock);
 }
 
 void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu)
