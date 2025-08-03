@@ -619,9 +619,62 @@ static void set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
 }
 
 /*
+ * Called from drivers/iommu/iommufd/viommu.c: iommufd_vdevice_alloc_ioctl()
+ */
+static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
+{
+	unsigned long flags;
+	struct iommu_domain *dom;
+	struct protection_domain *pdom;
+	struct iommufd_viommu *viommu = vdev->viommu;
+	struct amd_iommu_vminfo *vminfo = container_of(viommu, struct amd_iommu_vminfo, core);
+	struct amd_iommu *iommu = get_amd_iommu_from_devid(vminfo->iommu_devid);
+	struct pci_dev *pdev = to_pci_dev(vdev->dev);
+	u16 hdev_id = pci_dev_id(pdev);
+	u16 gdev_id = vdev->virt_id;
+	struct iommu_dev_data *dev_data;
+
+	if (!iommu || !pdev) {
+		pr_err();
+		return -EINVAL;
+	}
+
+	dev_data = dev_iommu_priv_get(&pdev->dev);
+	if (!dev_data) {
+		pr_err("%s: Device not found (devid=%#x)\n",
+		       __func__, pci_dev_id(pdev));
+		return -EINVAL;
+	}
+
+	dom = iommu_get_domain_for_dev(&pdev->dev);
+	if (!dom) {
+		pr_err("%s: Domain not found (devid=%#x)\n",
+		       __func__, pci_dev_id(pdev));
+		return -EINVAL;
+	}
+
+	pr_debug("%s: gid=%#x, iommu_devid=%#x, hdev_id=%#x, gdev_id=%#x\n",
+		 __func__, vminfo->gid, vminfo->iommu_devid, hdev_id, gdev_id);
+
+	/* TODO: Hardcode queueid to 0 for now */
+	set_device_mapping(iommu, hdev_id, vminfo->gid, 0, gdev_id);
+
+	set_dev_data_viommu(iommu, dev_data->devid, vminfo->gid, gdev_id);
+
+	pdom = to_pdomain(dom);
+	spin_lock_irqsave(&pdom->lock, flags);
+	amd_iommu_domain_flush_all(pdom);
+	spin_unlock_irqrestore(&pdom->lock, flags);
+
+	return 0;
+}
+
+/*
  * See include/linux/iommufd.h
  * struct iommufd_viommu_ops - vIOMMU specific operations
  */
 const struct iommufd_viommu_ops amd_viommu_ops = {
 	.destroy = _amd_viommu_destroy,
+	.vdevice_size = VDEVICE_STRUCT_SIZE(struct amd_iommu_vdevice, core),
+	.vdevice_init = _amd_viommu_vdevice_init,
 };
