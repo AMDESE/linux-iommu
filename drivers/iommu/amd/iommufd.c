@@ -200,6 +200,112 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	return 0;
 }
 
+static size_t _amd_viommu_get_hw_queue_size(struct iommufd_viommu *viommu,
+					    enum iommu_hw_queue_type queue_type)
+{
+	/* Currently do not support Eventlog B and PPRlog B */
+	if ((queue_type != IOMMU_HW_QUEUE_TYPE_AMD_CMD) &&
+	    (queue_type != IOMMU_HW_QUEUE_TYPE_AMD_EVT) &&
+	    (queue_type != IOMMU_HW_QUEUE_TYPE_AMD_PPR))
+		return 0;
+
+	return HW_QUEUE_STRUCT_SIZE(struct amd_iommu_hw_queue, core);
+}
+
+static int _amd_viommu_hw_queue_init(struct iommufd_hw_queue *hw_queue, u32 index)
+{
+	int ret = 0;
+	u64 val, vfctrl_mask, base;
+	u8 __iomem *vfctrl, *vf;
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	int gid = aviommu->gid;
+
+	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	switch (hw_queue->type) {
+	case IOMMU_HW_QUEUE_TYPE_AMD_CMD:
+	{
+		/*
+		 * Capture base and length from guest Command Buffer control register.
+		 * and program onto VF Ctrl MMIO Command Buffer Control register.
+		 *
+		 * Command Buffer Control register field mapping :
+		 * - ComBase[51:12] = vfctrl[51:12]
+		 * - ComLen[3:0] = vfctrl[3:0]
+		 *
+		 * Guest Command Buffer Control Register field mapping :
+		 * - ComBase[51:12] = vfctrl[51:12]
+		 * - ComLen[3:0] = vfctrl[3:0]
+		 */
+		vfctrl_mask = GENMASK_ULL(51, 12) | GENMASK_ULL(3, 0);
+		val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET) &
+		      (~vfctrl_mask);
+		base = FIELD_GET(GENMASK_ULL(51, 12), hw_queue->base_addr);
+		val |= FIELD_PREP(GENMASK_ULL(51, 12), base) |
+		       FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
+		writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
+		break;
+	}
+	case IOMMU_HW_QUEUE_TYPE_AMD_EVT:
+	{
+		/*
+		 * Capture base and length from guest Event Buffer control register.
+		 * and program onto VF Ctrl MMIO Event Buffer Control register.
+		 *
+		 * Event Buffer Control register field mapping :
+		 * - EvtBase[51:12] = vfctrl[51:12]
+		 * - EvtLen[3:0] = vfctrl[3:0]
+		 *
+		 * Guest Event Buffer Control Register field mapping :
+		 * - EvtBase[51:12] = vfctrl[51:12]
+		 * - EvtLen[3:0] = vfctrl[3:0]
+		 */
+		vfctrl_mask = GENMASK_ULL(51, 12) | GENMASK_ULL(3, 0);
+		val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET) &
+		      (~vfctrl_mask);
+		base = FIELD_GET(GENMASK_ULL(51, 12), hw_queue->base_addr);
+		val |= FIELD_PREP(GENMASK_ULL(51, 12), base) |
+		       FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
+		writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+		break;
+	}
+	case IOMMU_HW_QUEUE_TYPE_AMD_PPR:
+	{
+		/*
+		 * Capture base and length from guest PPR Buffer control register.
+		 * and program onto VF Ctrl MMIO PPR Buffer Control register.
+		 *
+		 * PPR Buffer Control register field mapping :
+		 * - PPRBase[51:12] = vfctrl[55:16]
+		 * - PPRLen[3:0] = vfctrl[3:0]
+		 *
+		 * Guest PPR Buffer Control Register field mapping :
+		 * - PPRBase[51:12] = vfctrl[55:16]
+		 * - PPRLen[3:0] = vfctrl[3:0]
+		 */
+		vfctrl_mask = GENMASK_ULL(55, 16) | GENMASK_ULL(3, 0);
+		val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET) & (~vfctrl_mask);
+		base = FIELD_GET(GENMASK_ULL(51, 12), hw_queue->base_addr);
+		val |= FIELD_PREP(GENMASK_ULL(55, 16), base) |
+		       FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
+		writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+		break;
+	}
+	default:
+		pr_err("%s: Invalid type (%#x)\n", __func__, hw_queue->type);
+		return -EINVAL;
+	}
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, val=%#llx\n",
+		 __func__, iommu->devid, gid, hw_queue->type,
+		 hw_queue->base_addr, hw_queue->length, val);
+
+	return ret;
+}
+
 /*
  * See include/linux/iommufd.h
  * struct iommufd_viommu_ops - vIOMMU specific operations
@@ -209,4 +315,6 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.destroy = amd_iommufd_viommu_destroy,
 	.vdevice_size = VDEVICE_STRUCT_SIZE(struct amd_iommu_vdevice, core),
 	.vdevice_init = _amd_viommu_vdevice_init,
+	.get_hw_queue_size = _amd_viommu_get_hw_queue_size,
+	.hw_queue_init = _amd_viommu_hw_queue_init,
 };
