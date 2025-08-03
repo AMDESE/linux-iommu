@@ -70,6 +70,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		return ret;
 
+	mutex_init(&aviommu->vfctrl_lock);
 	xa_init_flags(&aviommu->gdomid_array, XA_FLAGS_ALLOC1);
 	aviommu->parent = pdom;
 
@@ -121,6 +122,7 @@ err_init:
 err_mmap:
 	amd_iommu_gid_free(iommu, aviommu->gid);
 err_gid:
+	mutex_destroy(&aviommu->vfctrl_lock);
 	return ret;
 }
 
@@ -140,6 +142,54 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	iommufd_viommu_destroy_mmap(&aviommu->core, aviommu->vfmmio_mmap_offset);
 	amd_viommu_uninit_one(iommu, aviommu);
 	amd_iommu_gid_free(iommu, aviommu->gid);
+	mutex_destroy(&aviommu->vfctrl_lock);
+}
+
+/*
+ * Called from drivers/iommu/iommufd/viommu.c: iommufd_vdevice_abort()
+ *
+ * Restore an idle DevID map entry for this virt_id. Every DevID mapping
+ * table slot must have V=1 for both active and non-active devices. A
+ * non-valid entry raises INVALID_DEVICE_REQUEST when the IOMMU processes
+ * INVALIDATE_IOMMU_ALL. Use host device ID 0: that RID is the IOMMU PCI
+ * function and does not normally host an endpoint.
+ */
+static void _amd_viommu_vdevice_destroy(struct iommufd_vdevice *vdev)
+{
+	struct iommufd_viommu *viommu = vdev->viommu;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+
+	amd_viommu_set_device_mapping(aviommu, 0, (u16)vdev->virt_id);
+}
+
+/*
+ * Called from drivers/iommu/iommufd/viommu.c: iommufd_vdevice_alloc_ioctl()
+ */
+static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
+{
+	struct device *dev = iommufd_vdevice_to_device(vdev);
+	struct pci_dev *pdev;
+	struct iommufd_viommu *viommu = vdev->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+
+	if (!dev_is_pci(dev))
+		return -EINVAL;
+	pdev = to_pci_dev(dev);
+
+	if (vdev->virt_id > VIOMMU_MAX_GDEVID) {
+		pr_err("%s: Invalid virtual ID (virt_id=%#llx)\n", __func__, vdev->virt_id);
+		return -EINVAL;
+	}
+
+	pr_debug("%s: gid=%#x, hdev_id=%#x, gdev_id=%#llx\n", __func__,
+		 aviommu->gid, pci_dev_id(pdev), vdev->virt_id);
+
+	amd_viommu_set_device_mapping(aviommu, pci_dev_id(pdev),
+				      (u16)vdev->virt_id);
+	vdev->destroy = _amd_viommu_vdevice_destroy;
+
+	return 0;
 }
 
 /*
@@ -149,4 +199,6 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.alloc_domain_nested = amd_iommu_alloc_domain_nested,
 	.destroy = amd_iommufd_viommu_destroy,
+	.vdevice_size = VDEVICE_STRUCT_SIZE(struct amd_iommu_vdevice, core),
+	.vdevice_init = _amd_viommu_vdevice_init,
 };
