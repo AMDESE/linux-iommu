@@ -54,6 +54,8 @@
 
 extern const struct iommufd_viommu_ops amd_viommu_ops;
 
+extern u64 amd_viommu_get_vfmmio_addr(struct iommu_viommu_amd *data);
+
 extern int amd_viommu_init(struct amd_iommu *iommu);
 
 extern int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_vminfo *vminfo);

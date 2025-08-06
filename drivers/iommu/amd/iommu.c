@@ -3321,6 +3321,7 @@ int amd_iommu_viommu_init(struct iommufd_viommu *viommu,
 				 const struct iommu_user_data *user_data)
 {
 	int ret;
+	phys_addr_t page_base;
 	struct amd_iommu *iommu;
 	struct iommu_viommu_amd data;
 	struct protection_domain *pdom = to_pdomain(parent);
@@ -3369,15 +3370,29 @@ int amd_iommu_viommu_init(struct iommufd_viommu *viommu,
 	pr_debug("%s: gid=%#x, iommu_devid=%#x, trans_devid=%#x\n", __func__,
 		 vminfo->gid, vminfo->iommu_devid, vminfo->trans_devid);
 
+	page_base = amd_viommu_get_vfmmio_addr(&data);
+	if (page_base <= 0) {
+		return -ENODEV;
+	}
+
+	ret = iommufd_viommu_alloc_mmap(&vminfo->core,
+					page_base, SZ_4K,
+					(unsigned long *)&data.out_vfmmio_mmap_offset);
+	if (ret)
+		goto err_out;
+
 	ret = iommu_copy_struct_to_user(user_data, &data,
 					IOMMU_VIOMMU_TYPE_AMD,
 					reserved);
 	if (ret)
-		goto err_out;
+		goto free_mmap;
 
 	viommu->ops = &amd_viommu_ops;
 
 	return ret;
+
+free_mmap:
+	iommufd_viommu_destroy_mmap(&vminfo->core, data.out_vfmmio_mmap_offset);
 
 err_out:
 	/* TODO: Clear translate dte */
