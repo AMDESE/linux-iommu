@@ -10,6 +10,7 @@
 
 int amd_viommu_init(struct amd_iommu *iommu);
 
+u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid);
 #else
 
 static inline int amd_viommu_init(struct amd_iommu *iommu)
@@ -17,6 +18,10 @@ static inline int amd_viommu_init(struct amd_iommu *iommu)
 	return 0;
 }
 
+u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid);
+{
+	return 0;
+}
 #endif /* CONFIG_AMD_IOMMU_IOMMUFD */
 
 #endif /* AMD_VIOMMU_H */
