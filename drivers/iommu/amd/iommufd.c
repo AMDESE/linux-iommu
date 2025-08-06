@@ -7,6 +7,7 @@
 
 #include "iommufd.h"
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 #include "amd_iommu_types.h"
 
 static const struct iommufd_viommu_ops amd_viommu_ops;
@@ -44,9 +45,11 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 			    const struct iommu_user_data *user_data)
 {
 	int ret;
+	phys_addr_t page_base;
 	unsigned long flags;
 	struct iommu_viommu_amd data;
 	struct protection_domain *pdom = to_pdomain(parent);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
 
 	xa_init_flags(&aviommu->gdomid_array, XA_FLAGS_ALLOC1);
@@ -68,6 +71,14 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	}
 	pr_debug("%s: gid=%#x", __func__, aviommu->gid);
 
+	page_base = amd_viommu_get_vfmmio_addr(iommu, aviommu->gid);
+
+	ret = iommufd_viommu_alloc_mmap(&aviommu->core,
+					page_base, SZ_4K,
+					(unsigned long *)&data.out_vfmmio_mmap_offset);
+	if (ret)
+		goto err_mmap;
+
 	ret = iommu_copy_struct_to_user(user_data, &data,
 					IOMMU_VIOMMU_TYPE_AMD,
 					reserved);
@@ -82,6 +93,8 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 
 	return 0;
 err_init:
+	iommufd_viommu_destroy_mmap(&aviommu->core, data.out_vfmmio_mmap_offset);
+err_mmap:
 	amd_iommu_gid_free(aviommu->gid);
 err_gid:
 	return ret;
