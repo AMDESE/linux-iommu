@@ -213,4 +213,14 @@ int amd_iommu_vminfo_alloc(struct amd_iommu *iommu, struct amd_iommu_vminfo *vmi
 void amd_iommu_vminfo_free(struct amd_iommu *iommu, struct amd_iommu_vminfo *vminfo);
 struct amd_iommu_vminfo *amd_iommu_get_vminfo(int gid);
 
+static inline struct amd_iommu *get_amd_iommu_from_devid(u16 devid)
+{
+	struct amd_iommu *iommu;
+
+	for_each_iommu(iommu)
+		if (iommu->devid == devid)
+			return iommu;
+	return NULL;
+}
+
 #endif /* AMD_IOMMU_H */
