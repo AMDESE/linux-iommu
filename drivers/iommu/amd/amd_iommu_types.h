@@ -17,6 +17,7 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/pci.h>
+#include <linux/iommufd.h>
 #include <linux/irqreturn.h>
 #include <linux/io-pgtable.h>
 #include <linux/hashtable.h>
@@ -1146,10 +1147,16 @@ struct amd_irte_ops {
 };
 
 struct amd_iommu_vminfo {
+	struct iommufd_viommu core;
+	unsigned long mmap_offset;
 	u16 gid;
 	struct hlist_node hnode;
 	u64 *devid_table;
 	u64 *domid_table;
+	u32 iommu_devid;
+	u32 features;
+	u16 trans_devid;
+	u32 viommu_devid;
 };
 
 #ifdef CONFIG_IRQ_REMAP

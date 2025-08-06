@@ -52,6 +52,7 @@
 #define VIOMMU_GUEST_EVT_B_LOG_BASE	0x4800000000ULL
 #define VIOMMU_GUEST_EVT_B_LOG_SIZE	(1 << 19)
 
+extern const struct iommufd_viommu_ops amd_viommu_ops;
 
 extern int amd_viommu_init(struct amd_iommu *iommu);
 

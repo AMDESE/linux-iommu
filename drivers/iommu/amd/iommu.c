@@ -42,6 +42,7 @@
 #include <uapi/linux/iommufd.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 #include "../dma-iommu.h"
 #include "../irq_remapping.h"
 #include "../iommu-pages.h"
@@ -3265,6 +3266,127 @@ static void *amd_iommu_hw_info(struct device *dev, u32 *length, u32 *type)
 	return hwinfo;
 }
 
+/*
+ * TODO:
+ *   - Implement clear_translate_dte()
+ *   - Currently dev_data structure is not allocated for translation DTE
+ *     We may want to allocate dev_data structure for this one
+ *   - Consider passing vminfo directly instead of gid
+ *   - Move this function to top so that we can avoid forward declaration
+ */
+static int set_translate_dte(struct amd_iommu *iommu, u16 gid, struct protection_domain *pdom, u32 trans_devid)
+{
+	u64 val, tmp0, tmp1;
+	u8 __iomem *vfctrl;
+	struct dev_table_entry *dev_table = get_dev_table(iommu);
+
+	pr_debug("%s: gid=%#x, iommu_devid=%#x, trans_devid=%#x\n",
+		 __func__, gid, iommu->devid, trans_devid);
+
+	/* Setup DTE for trans_devid */
+	tmp0 = iommu_virt_to_phys(pdom->iop.root);
+	tmp0 |= (pdom->iop.mode & 0x7ULL) << 9;
+	tmp0 |= (DTE_FLAG_IR | DTE_FLAG_IW | DTE_FLAG_TV | DTE_FLAG_V);
+	tmp0 |= 1ULL << DEV_ENTRY_PPR;
+	tmp1 = DTE_FLAG_IOTLB;
+
+	dev_table[trans_devid].data[0] = tmp0;
+	dev_table[trans_devid].data[1] = tmp1;
+
+	iommu_flush_dte(iommu, trans_devid);
+	iommu_completion_wait(iommu);
+
+	val = trans_devid & 0xFFFFULL;
+	val = val << 16;
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
+
+	return 0;
+}
+
+static size_t amd_iommu_get_viommu_size(struct device *dev, enum iommu_viommu_type viommu_type)
+{
+	if (viommu_type != IOMMU_VIOMMU_TYPE_AMD)
+		return 0;
+
+	return VIOMMU_STRUCT_SIZE(struct amd_iommu_vminfo, core);
+}
+
+/*
+ * This is called from the drivers/iommu/iommufd/viommu.c: iommufd_viommu_alloc_ioctl
+ */
+int amd_iommu_viommu_init(struct iommufd_viommu *viommu,
+				 struct iommu_domain *parent,
+				 const struct iommu_user_data *user_data)
+{
+	int ret;
+	struct amd_iommu *iommu;
+	struct iommu_viommu_amd data;
+	struct protection_domain *pdom = to_pdomain(parent);
+	struct amd_iommu_vminfo *vminfo = container_of(viommu, struct amd_iommu_vminfo, core);
+
+	if (!user_data)
+		return -EINVAL;
+
+	ret = iommu_copy_struct_from_user(&data, user_data,
+					  IOMMU_VIOMMU_TYPE_AMD,
+					  reserved);
+	if (ret)
+		return ret;
+
+	iommu = get_amd_iommu_from_devid(data.iommu_devid);
+	if (!iommu)
+		return -ENODEV;
+
+//	vminfo->trans_domid = pdom->id;
+//	vminfo->trans_iop = &pdom->iop;
+	vminfo->iommu_devid = data.iommu_devid;
+	vminfo->viommu_devid = data.viommu_devid;
+	vminfo->trans_devid = data.trans_devid;
+	vminfo->features = data.features;
+
+	/*
+	 * TODO:
+	 *   - amd_iommu_vminfo_alloc mixes two things. With new flow we may
+	 *     want to call get_vmid from here and move hash update logic to
+	 *     this function.
+	 *   - Add support to free guest ID
+	 */
+	if(amd_iommu_vminfo_alloc(iommu, vminfo))
+		return -EINVAL;
+
+	ret = set_translate_dte(iommu, vminfo->gid, pdom, data.trans_devid);
+	if (ret)
+		goto err_out;
+
+	ret = amd_viommu_init_one(iommu, vminfo);
+	if (ret)
+		goto err_out;
+
+	data.gid = vminfo->gid;
+
+	pr_debug("%s: gid=%#x, iommu_devid=%#x, trans_devid=%#x\n", __func__,
+		 vminfo->gid, vminfo->iommu_devid, vminfo->trans_devid);
+
+	ret = iommu_copy_struct_to_user(user_data, &data,
+					IOMMU_VIOMMU_TYPE_AMD,
+					reserved);
+	if (ret)
+		goto err_out;
+
+	viommu->ops = &amd_viommu_ops;
+
+	return ret;
+
+err_out:
+	/* TODO: Clear translate dte */
+
+	amd_iommu_vminfo_free(iommu, vminfo);
+	kfree(vminfo);
+	return ret;
+}
+
 const struct iommu_ops amd_iommu_ops = {
 	.capable = amd_iommu_capable,
 	.hw_info = amd_iommu_hw_info,
@@ -3291,7 +3413,11 @@ const struct iommu_ops amd_iommu_ops = {
 		.iotlb_sync	= amd_iommu_iotlb_sync,
 		.free		= amd_iommu_domain_free,
 		.enforce_cache_coherency = amd_iommu_enforce_cache_coherency,
-	}
+	},
+
+	/* For VIOMMU */
+	.get_viommu_size = amd_iommu_get_viommu_size,
+	.viommu_init = amd_iommu_viommu_init,
 };
 
 #ifdef CONFIG_IRQ_REMAP

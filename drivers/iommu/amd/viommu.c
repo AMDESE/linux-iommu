@@ -295,3 +295,30 @@ err_out:
 	viommu_uninit_one(iommu, vminfo);
 	return -ENOMEM;
 }
+
+static void _amd_viommu_destroy(struct iommufd_viommu *viommu)
+{
+	struct amd_iommu_vminfo *vminfo = container_of(viommu, struct amd_iommu_vminfo, core);
+	struct amd_iommu *iommu = get_amd_iommu_from_devid(vminfo->iommu_devid);
+
+	pr_debug("DEBUG: %s: gid:%#x, iommu_devid=%#x\n", __func__,
+		 vminfo->gid, vminfo->iommu_devid);
+
+	if (!iommu) {
+		pr_err("%s: Invalid iommu devid=%#x\n",
+		       __func__, vminfo->iommu_devid);
+		return;
+	}
+
+	viommu_uninit_one(iommu, vminfo);
+
+	amd_iommu_vminfo_free(iommu, vminfo);
+}
+
+/*
+ * See include/linux/iommufd.h
+ * struct iommufd_viommu_ops - vIOMMU specific operations
+ */
+const struct iommufd_viommu_ops amd_viommu_ops = {
+	.destroy = _amd_viommu_destroy,
+};
