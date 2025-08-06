@@ -131,6 +131,16 @@ err_out:
 	return -ENOMEM;
 }
 
+/*
+ * Returns VF MMIO BAR offset for the give guest ID which will be
+ * mapped to guest vIOMMU 3rd 4K MMIO address
+ */
+u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
+{
+	/* TODO: Add check for sVIOMMU and set gid[bit 15] */
+	return iommu->vf_base_phys + gid * VIOMMU_VF_MMIO_ENTRY_SIZE;
+}
+
 int __init amd_viommu_init(struct amd_iommu *iommu)
 {
 	int ret;
