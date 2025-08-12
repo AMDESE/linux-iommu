@@ -4029,26 +4029,26 @@ static int iommu_make_shared(void *va, size_t size)
 int amd_iommu_snp_disable(void)
 {
 	struct amd_iommu *iommu;
-	int ret;
+	int ret, ret2 = 0;
 
 	if (!amd_iommu_snp_en)
 		return 0;
 
 	for_each_iommu(iommu) {
 		ret = iommu_make_shared(iommu->evt_buf, EVT_BUFFER_SIZE);
-		if (ret)
-			return ret;
+		if (ret && !ret2)
+			ret2 = ret;
 
 		ret = iommu_make_shared(iommu->ppr_log, PPR_LOG_SIZE);
-		if (ret)
-			return ret;
+		if (ret && !ret2)
+			ret2 = ret;
 
 		ret = iommu_make_shared((void *)iommu->cmd_sem, PAGE_SIZE);
-		if (ret)
-			return ret;
+		if (ret && !ret2)
+			ret2 = ret;
 	}
 
-	return 0;
+	return ret2;
 }
 EXPORT_SYMBOL_GPL(amd_iommu_snp_disable);
 

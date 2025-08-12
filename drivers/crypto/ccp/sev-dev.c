@@ -1565,6 +1565,18 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 	if (rc) {
 		dev_err(sev->dev, "SEV-SNP: SNP_DF_FLUSH failed rc %d, error %#x\n",
 			rc, *error);
+
+		int error2 = 0;
+		struct sev_data_snp_shutdown_ex data = { .len = sizeof(data), .iommu_snp_shutdown = 1 };
+		int rc2 = __sev_do_cmd_locked(SEV_CMD_SNP_SHUTDOWN_EX, &data, &error2);
+
+		if (rc2 || error2)
+			dev_err(sev->dev, "SEV-SNP: SEV_CMD_SNP_SHUTDOWN_EX failed rc %d, error %#x\n",
+				rc2, error2);
+		rc2 = amd_iommu_snp_disable();
+		if (rc2)
+			dev_err(sev->dev, "SNP IOMMU shutdown failed, rc=%d\n", rc2);
+
 		return rc;
 	}
 
@@ -2200,7 +2212,6 @@ static int __sev_snp_shutdown_locked(int *error, bool panic)
 	ret = amd_iommu_snp_disable();
 	if (ret) {
 		dev_err(sev->dev, "SNP IOMMU shutdown failed\n");
-		return ret;
 	}
 
 	snp_leak_hv_fixed_pages();
@@ -2514,8 +2525,9 @@ static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
 	 * left in Firmware state in failure. Use snp_reclaim_pages() to
 	 * transition either case back to Hypervisor-owned state.
 	 */
-	if (snp_reclaim_pages(__pa(data), 1, true))
-		return -EFAULT;
+	int ret1 = snp_reclaim_pages(__pa(data), 1, true);
+	if (ret1 && !ret)
+		ret = ret1;
 
 	if (ret)
 		goto cleanup;
