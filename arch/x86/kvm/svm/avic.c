@@ -274,6 +274,9 @@ static int avic_ga_log_notifier(u32 ga_tag)
 		return -EINVAL;
 	vcpu = kvm_get_vcpu_by_id(&kvm_svm->kvm, vcpu_idx);
 
+	if (sev_snp_guest(&kvm_svm->kvm))
+		kvm_make_request(KVM_REQ_EVENT, vcpu);
+
 	/* Note:
 	 * At this point, the IOMMU should have already set the pending
 	 * bit in the vAPIC backing page. So, we just need to schedule
@@ -1354,6 +1357,8 @@ const struct amd_iommu_svm_ops avic_svm_ops = {
  */
 bool __init avic_hardware_setup(void)
 {
+	amd_iommu_register_svm_ops(&avic_svm_ops);
+
 	avic = avic_want_avic_enabled();
 	if (!avic)
 		return false;
@@ -1379,8 +1384,6 @@ bool __init avic_hardware_setup(void)
 	 * failing to see a software update to clear IsRunning.
 	 */
 	enable_ipiv = enable_ipiv && boot_cpu_data.x86 != 0x17;
-
-	amd_iommu_register_svm_ops(&avic_svm_ops);
 
 	return true;
 }
