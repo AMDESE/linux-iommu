@@ -19,6 +19,8 @@
 #include <linux/misc_cgroup.h>
 #include <linux/processor.h>
 #include <linux/trace_events.h>
+#include <linux/iommu.h>
+#include <linux/pci-tsm.h>
 #include <uapi/linux/sev-guest.h>
 
 #include <asm/pkru.h>
@@ -3788,11 +3790,72 @@ static void set_ghcb_msr(struct vcpu_svm *svm, u64 value)
 	svm->vmcb->control.ghcb_gpa = value;
 }
 
-static int snp_rmptable_psmash(kvm_pfn_t pfn)
+static int rmp_psio(void *snp_context, struct iommu_domain *domain,
+		    unsigned long pa)
+{
+	return -ENODEV;
+}
+
+DEFINE_STATIC_CALL(psmash_io, rmp_psio);
+
+static int call_psmash_io(struct kvm *kvm, u64 pfn, u64 gfn)
+{
+	struct kvm_sev_info *sev;
+	struct pci_dev *pdev = NULL;
+	bool found = false, printed_one_dom_warning = false;
+	/* The psmash_io stub returns ENODEV by default, do the same here to fallback to psmash() */
+	int ret = -ENODEV;
+
+	if (!kvm)
+		return ret;
+
+	sev = &to_kvm_svm(kvm)->sev_info;
+	if (!sev->es_active)
+		return ret;
+
+	for_each_pci_dev(pdev) {
+		struct pci_tdi *tdi = (pdev)->tsm ? (pdev)->tsm->tdi : NULL;
+
+		if (!tdi)
+			continue;
+
+		if (tdi->kvm != kvm)
+			continue;
+
+		if (found) {
+			if (!printed_one_dom_warning)
+				pci_err(pdev, "TMPM does not like multiple domains");
+			printed_one_dom_warning = true;
+			goto put_continue;
+		}
+
+		struct iommu_domain *domain = iommu_get_domain_for_dev(&pdev->dev);
+
+		if (!domain) {
+			pci_err(pdev, "Passed through device must have a domain assigned");
+			goto put_continue;
+		}
+
+		found = true;
+		ret = static_call(psmash_io)(sev->snp_context, domain, pfn << PAGE_SHIFT);
+put_continue:
+		if (ret == -ENODEV)
+			break;
+		continue;
+	}
+
+	return ret;
+}
+
+static int snp_rmptable_psmash(struct kvm *kvm, kvm_pfn_t pfn, gfn_t gfn)
 {
 	int ret;
 
 	pfn = pfn & ~(KVM_PAGES_PER_HPAGE(PG_LEVEL_2M) - 1);
+
+	ret = call_psmash_io(kvm, pfn, gfn);
+	if (!ret)
+		return 0;
 
 	/*
 	 * PSMASH_FAIL_INUSE indicates another processor is modifying the
@@ -5189,6 +5252,43 @@ struct page *snp_safe_alloc_page_node(int node, gfp_t gfp)
 	return p;
 }
 
+static void srcu_cb(struct rcu_head *head)
+{
+	static_call_query(psmash_io);
+}
+
+DEFINE_STATIC_SRCU(psmash_io_srcu);
+
+/* serialize operation updaters */
+DEFINE_MUTEX(psmash_io_mut);
+
+static struct rmp_io_ops rmp_io_ops = {
+	.name = "rmp-nop",
+	.rmp_psmash_io = rmp_psio,
+	.owner = NULL,
+};
+
+int rmp_update_io_ops(struct rmp_io_ops *ops)
+{
+	int index;
+
+	mutex_lock(&psmash_io_mut);
+	index = srcu_read_lock(&psmash_io_srcu);
+	strscpy_pad(rmp_io_ops.name, ops ? ops->name : "rmp-nop", RMP_IO_OPS_NAME_LEN);
+	static_call_update(psmash_io, ops ? ops->rmp_psmash_io : rmp_psio);
+	if (READ_ONCE(rmp_io_ops.owner))
+		module_put(rmp_io_ops.owner);
+	xchg(&rmp_io_ops.owner, ops ? ops->owner : NULL);
+	if (READ_ONCE(rmp_io_ops.owner))
+		try_module_get(rmp_io_ops.owner);
+	mutex_unlock(&psmash_io_mut);
+	srcu_read_unlock(&psmash_io_srcu, index);
+	call_srcu(&psmash_io_srcu, &rmp_io_ops.srcu_head, srcu_cb);
+	srcu_barrier(&psmash_io_srcu);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rmp_update_io_ops);
+
 void sev_handle_rmp_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u64 error_code)
 {
 	struct kvm_memory_slot *slot;
@@ -5260,7 +5360,7 @@ void sev_handle_rmp_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u64 error_code)
 	if (rmp_level == PG_LEVEL_4K)
 		goto out;
 
-	ret = snp_rmptable_psmash(pfn);
+	ret = snp_rmptable_psmash(kvm, pfn, gfn & ~((1ULL << order) - 1));
 	if (ret) {
 		/*
 		 * Look it up again. If it's 4K now then the PSMASH may have
@@ -5436,7 +5536,7 @@ void sev_gmem_invalidate(struct kvm *kvm, kvm_pfn_t start, kvm_pfn_t end)
 			 * still try to update RMP entry to shared and pray this
 			 * was a spurious error that can be addressed later.
 			 */
-			rc = snp_rmptable_psmash(pfn);
+			rc = snp_rmptable_psmash(NULL, pfn, 0);
 			WARN_ONCE(rc, "SEV: Failed to PSMASH RMP entry for PFN 0x%llx error %d\n",
 				  pfn, rc);
 		}

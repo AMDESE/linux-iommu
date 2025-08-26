@@ -1080,6 +1080,11 @@ void sev_platform_shutdown(void);
 bool sev_is_snp_ciphertext_hiding_supported(void);
 u64 sev_get_snp_policy_bits(void);
 
+struct iommu_domain;
+typedef int (* psmash_io_fn)(void *snp_context, struct iommu_domain *domain, unsigned long iova);
+struct kvm;
+int tio_psmash_io(struct kvm *kvm, u64 pfn, u64 gfn, psmash_io_fn fn);
+
 #else	/* !CONFIG_CRYPTO_DEV_SP_PSP */
 
 static inline int
@@ -1123,6 +1128,11 @@ static inline void sev_platform_shutdown(void) { }
 static inline bool sev_is_snp_ciphertext_hiding_supported(void) { return false; }
 
 static inline int rmp_make_hv_fixed(u64 pfn, unsigned int pages)
+{
+	return -ENODEV;
+}
+
+static inline int tio_psmash_io(struct kvm *kvm, u64 pfn, u64 gfn, psmash_io_fn fn)
 {
 	return -ENODEV;
 }
