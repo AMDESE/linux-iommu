@@ -671,7 +671,17 @@ static inline u64 savic_ghcb_msr_read(u32 reg) { return 0; }
 
 #endif	/* CONFIG_AMD_MEM_ENCRYPT */
 
+#define RMP_IO_OPS_NAME_LEN 32
+struct iommu_domain;
+struct rmp_io_ops {
+	char name[RMP_IO_OPS_NAME_LEN];
+	int (*rmp_psmash_io)(void *, struct iommu_domain *, unsigned long);
+	struct rcu_head srcu_head;
+	struct module *owner;
+};
+
 #ifdef CONFIG_KVM_AMD_SEV
+int rmp_update_io_ops(struct rmp_io_ops *ops);
 bool snp_probe_rmptable_info(void);
 int snp_rmptable_init(void);
 int snp_lookup_rmpentry(u64 pfn, bool *assigned, int *level);
@@ -690,6 +700,10 @@ static inline void snp_leak_pages(u64 pfn, unsigned int pages)
 	__snp_leak_pages(pfn, pages, true);
 }
 #else
+static inline int rmp_update_io_ops(struct rmp_io_ops *ops)
+{
+	return -ENODEV;
+}
 static inline bool snp_probe_rmptable_info(void) { return false; }
 static inline int snp_rmptable_init(void) { return -ENOSYS; }
 static inline int snp_lookup_rmpentry(u64 pfn, bool *assigned, int *level) { return -ENODEV; }
