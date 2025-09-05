@@ -2809,6 +2809,18 @@ static int iommu_init_irq(struct amd_iommu *iommu)
 	if (iommu->int_enabled)
 		goto enable_faults;
 
+	/*
+	 * For secure vIOMMU guest, IOMMU MMIO BAR (except 3rd 4K) is not
+	 * acceleted. Therefore, use the MSI BAR to program IOMMU interrupts.
+	 */
+	if (amd_iommu_sviommu_guest()) {
+		ret = iommu_setup_msi(iommu);
+		if (ret)
+			return ret;
+		iommu->int_enabled = true;
+		goto enable_faults;
+	}
+
 	if (amd_iommu_xt_mode == IRQ_REMAP_X2APIC_MODE)
 		ret = iommu_setup_intcapxt(iommu);
 	else if (iommu->dev->msi_cap)
