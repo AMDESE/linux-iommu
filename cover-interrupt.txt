@@ -1,0 +1,25 @@
+IOMMU interrupt support
+-----------------------
+Currently IOMMU interrupts are not accelerated for secure (SNP) guests. It will
+use default mechanism (event inject / secure AVIC) to deliver interrupt to
+guest. This is same as delivering TIO device interrupt.
+
+High level flow:
+----------------
+  - During guest boot, qemu will create MSI BAR for svIOMMU
+    Currently single interrupt is supported.
+  - Guest IOMMU will program MSI BAR
+  - MSI BAR is trapped by qemu
+  - Qemu will pass vCPU/vector details to host via ioctl
+    It will use IOMMU MMIO register 0x170 format so that we can use existing flow
+  - Host IOMMU will program IRTE with vCPU APIC backing page and vector details
+  - IOMMU HW will generate interrupt. It will update IRR in backing page and generates
+    GALog interrupt.
+  - Host will wake up destination vCPU.
+
+TODO:
+  Add support for Secure AVIC
+    Current implementation supports event injection mechasim ONLY as IOMMU driver uses
+    vCPU APIC backing page. To support Secure AVIC flow, IOMMU driver needs to create
+    separate backing page and in interrupt handler path it should read the backing page
+    and wake up appropriate vCPU.
