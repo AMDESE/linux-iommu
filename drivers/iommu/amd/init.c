@@ -3534,11 +3534,10 @@ static int amd_iommu_enable_interrupts(void)
 			goto out;
 	}
 
-	/*
-	 * Interrupt handler is ready to process interrupts. Enable
-	 * PPR and GA log interrupt for all IOMMUs.
-	 */
-	enable_iommus_vapic();
+	/* Skip GA log init for guests as AVIC is not supported inside guest */
+	if (likely(!amd_iommu_np_cache))
+		enable_iommus_vapic();
+
 	enable_iommus_ppr();
 
 out:
