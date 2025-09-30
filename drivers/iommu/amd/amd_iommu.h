@@ -217,6 +217,7 @@ void amd_iommu_domain_set_pgtable(struct protection_domain *domain,
 				  u64 *root, int mode);
 struct dev_table_entry *get_dev_table(struct amd_iommu *iommu);
 struct iommu_dev_data *search_dev_data(struct amd_iommu *iommu, u16 devid);
+int amd_iommu_completion_wait(struct amd_iommu *iommu);
 
 void amd_iommu_set_dte_v1(struct iommu_dev_data *dev_data,
 			  struct protection_domain *domain,
