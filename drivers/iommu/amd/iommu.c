@@ -3318,7 +3318,7 @@ static int set_translate_dte(struct amd_iommu *iommu, u16 gid, struct protection
 	tmp0 |= (pdom->iop.mode & 0x7ULL) << 9;
 	tmp0 |= (DTE_FLAG_IR | DTE_FLAG_IW | DTE_FLAG_TV | DTE_FLAG_V);
 	tmp0 |= 1ULL << DEV_ENTRY_PPR;
-	tmp1 = DTE_FLAG_IOTLB;
+	tmp1 = FIELD_PREP(DTE_DOMID_MASK, pdom->id);
 
 	dev_table[trans_devid].data[0] = tmp0;
 	dev_table[trans_devid].data[1] = tmp1;
