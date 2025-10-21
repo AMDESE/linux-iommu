@@ -186,7 +186,6 @@ viommu_domain_alloc(struct amd_iommu *iommu)
 {
 	struct protection_domain *domain;
 	struct io_pgtable_ops *pgtbl_ops;
-	int ret;
 
 	domain = protection_domain_alloc();
 	if (!domain)
@@ -198,8 +197,6 @@ viommu_domain_alloc(struct amd_iommu *iommu)
 
 	domain->pd_mode = PD_MODE_V1;
 	domain->iop.pgtbl.cfg.amd.nid = dev_to_node(&iommu->dev->dev);
-	if (ret)
-		goto err_out;
 
 	domain->domain.geometry.aperture_start = 0;
 	domain->domain.geometry.aperture_end   = ~0ULL;
