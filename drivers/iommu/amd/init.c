@@ -459,8 +459,10 @@ static void iommu_disable(struct amd_iommu *iommu)
  * mapping and unmapping functions for the IOMMU MMIO space. Each AMD IOMMU in
  * the system has one.
  */
-static u8 __iomem * __init iommu_map_mmio_space(u64 address, u64 end)
+u8 __iomem * __init iommu_map_mmio_space(u64 address, u64 end)
 {
+	u8 __iomem *base;
+
 	if (!request_mem_region(address, end, "amd_iommu")) {
 		pr_err("Can not reserve memory region %llx-%llx for mmio\n",
 			address, end);
@@ -468,10 +470,14 @@ static u8 __iomem * __init iommu_map_mmio_space(u64 address, u64 end)
 		return NULL;
 	}
 
-	return (u8 __iomem *)ioremap(address, end);
+	base = ioremap(address, end);
+	if (!base)
+		release_mem_region(address, end);
+
+	return base;
 }
 
-static void __init iommu_unmap_mmio_space(struct amd_iommu *iommu)
+void __init iommu_unmap_mmio_space(struct amd_iommu *iommu)
 {
 	if (iommu->mmio_base)
 		iounmap(iommu->mmio_base);
@@ -1792,6 +1798,8 @@ static void __init free_sysfs(struct amd_iommu *iommu)
 static void __init free_iommu_one(struct amd_iommu *iommu)
 {
 	free_sysfs(iommu);
+	/* Tear down vIOMMU before IOMMU buffers and MMIO are released. */
+	amd_viommu_uninit(iommu);
 	free_iommu_buffers(iommu);
 	amd_iommu_free_ppr_log(iommu);
 	free_ga_log(iommu);
