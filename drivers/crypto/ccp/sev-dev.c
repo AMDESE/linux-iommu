@@ -966,15 +966,20 @@ int __sev_do_cmd_locked(int cmd, void *data, int *psp_ret)
 		 * case of nesting in the current code, so exactly one
 		 * additional command buffer is available for that purpose.
 		 */
-		if (!sev->cmd_buf_active) {
+		if (!sev->cmd) {
 			cmd_buf = sev->cmd_buf;
-			sev->cmd_buf_active = true;
-		} else if (!sev->cmd_buf_backup_active) {
+			sev->cmd = cmd;
+		} else if (!sev->cmd_backup) {
 			cmd_buf = sev->cmd_buf_backup;
-			sev->cmd_buf_backup_active = true;
+			sev->cmd_backup = cmd;
 		} else {
 			dev_err(sev->dev,
-				"SEV: too many firmware commands in progress, no command buffers available.\n");
+		"SEV: too many firmware commands in progress: 0x%x, 0x%x, 0x%x, no command buffers available.\n",
+				sev->cmd, sev->cmd_backup, cmd);
+
+			print_hex_dump(KERN_ERR, "CMD ", DUMP_PREFIX_OFFSET, 16, 1, sev->cmd_buf, 32, false);
+			print_hex_dump(KERN_ERR, "BCK ", DUMP_PREFIX_OFFSET, 16, 1, sev->cmd_buf_backup, 32, false);
+			print_hex_dump(KERN_ERR, "CUR ", DUMP_PREFIX_OFFSET, 16, 1, data, 32, false);
 			return -EBUSY;
 		}
 
@@ -1081,10 +1086,10 @@ int __sev_do_cmd_locked(int cmd, void *data, int *psp_ret)
 
 		memcpy(data, cmd_buf, buf_len);
 
-		if (sev->cmd_buf_backup_active)
-			sev->cmd_buf_backup_active = false;
+		if (sev->cmd_backup)
+			sev->cmd_backup = 0;
 		else
-			sev->cmd_buf_active = false;
+			sev->cmd = 0;
 
 		if (snp_unmap_cmd_buf_desc_list(desc_list))
 			return -EFAULT;

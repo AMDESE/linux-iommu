@@ -54,8 +54,8 @@ struct sev_device {
 
 	void *cmd_buf;
 	void *cmd_buf_backup;
-	bool cmd_buf_active;
-	bool cmd_buf_backup_active;
+	unsigned cmd;
+	unsigned cmd_backup;
 
 	bool snp_initialized;
 
