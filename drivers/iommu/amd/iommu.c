@@ -42,6 +42,7 @@
 #include <uapi/linux/iommufd.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 #include "iommufd.h"
 #include "../dma-iommu.h"
 #include "../irq_remapping.h"
