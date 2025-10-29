@@ -102,6 +102,20 @@ static int sev_tio_spdm_cmd(struct tio_dsm *dsm, int ret)
 	return ret;
 }
 
+/*
+ * 6.1-1.0-PUB — PCI Express® Base Specification Revision 6.1:
+ * "It is permitted, but strongly not recommended, to Set the Enable bit in
+ * the IDE Extended Capability entry for a Stream prior to the completion
+ * of key programming for that Stream".
+ */
+static bool ide_do_not_recommended(struct pci_dev *pdev)
+{
+	if (pdev->vendor == 0x10ee && pdev->device == 0x50a4)
+		return true;
+
+	return false;
+}
+
 static int stream_enable(struct pci_ide *ide)
 {
 	struct pci_dev *rp = pcie_find_root_port(ide->pdev);
@@ -113,11 +127,11 @@ static int stream_enable(struct pci_ide *ide)
 	}
 
 	ret = pci_ide_stream_enable(rp, ide);
-	if (ret)
+	if (ret && ret != -ENXIO)
 		return ret;
 
 	ret = pci_ide_stream_enable(ide->pdev, ide);
-	if (ret)
+	if (ret && ret != -ENXIO)
 		pci_ide_stream_disable(rp, ide);
 
 	return ret;
@@ -397,6 +411,11 @@ static int dsm_connect(struct pci_dev *pdev)
 
 	tc_mask = streams_setup(dev_data->ide, ids);
 
+	if (ide_do_not_recommended(pdev))
+		streams_enable(dev_data->ide);
+
+	pr_ide_states(pdev, dev_data->ide);
+
 	ret = sev_tio_dev_connect(dev_data, tc_mask, ids, dev_data->cert_slot);
 	ret = sev_tio_spdm_cmd(dsm, ret);
 	if (ret)
@@ -413,7 +432,8 @@ static int dsm_connect(struct pci_dev *pdev)
 			    SPDM_DOBJ_ID_MEASUREMENT, &meashdr))
 		dsm->tsm.base_tsm.meas_transcript = meashdr.type == TIO_SPDM_MEASUREMENTS_LOG;
 
-	streams_enable(dev_data->ide);
+	if (!ide_do_not_recommended(pdev))
+		streams_enable(dev_data->ide);
 
 	ret = streams_register(dev_data->ide);
 	if (ret)
