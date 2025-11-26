@@ -5323,6 +5323,14 @@ static __init int svm_hardware_setup(void)
 	if (boot_cpu_has(X86_FEATURE_AUTOIBRS))
 		kvm_enable_efer_bits(EFER_AUTOIBRS);
 
+	/*
+	 * The INVLPGB and TLBSYNC instructions consider additional input arguments
+	 * which allow INVLPGB to invalidate translations in the IOMMU and allow
+	 * TLBSYNC to sync with the IOMMU.
+	 */
+	if (boot_cpu_has(X86_FEATURE_AMD_ENHANCED_TLBI))
+		kvm_enable_efer_bits(EFER_ENHANCED_TLBI);
+
 	/* Check for pause filtering support */
 	if (!boot_cpu_has(X86_FEATURE_PAUSEFILTER)) {
 		pause_filter_count = 0;
