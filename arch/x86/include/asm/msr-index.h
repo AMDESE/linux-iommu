@@ -27,6 +27,7 @@
 #define _EFER_FFXSR		14 /* Enable Fast FXSAVE/FXRSTOR */
 #define _EFER_TCE		15 /* Enable Translation Cache Extensions */
 #define _EFER_AUTOIBRS		21 /* Enable Automatic IBRS */
+#define _EFER_ENHANCED_TLBI	24 /* Enable Enhanced TLB Invalidate Instructions */
 
 #define EFER_SCE		(1<<_EFER_SCE)
 #define EFER_LME		(1<<_EFER_LME)
@@ -37,6 +38,7 @@
 #define EFER_FFXSR		(1<<_EFER_FFXSR)
 #define EFER_TCE		(1<<_EFER_TCE)
 #define EFER_AUTOIBRS		(1<<_EFER_AUTOIBRS)
+#define EFER_ENHANCED_TLBI	(1<<_EFER_ENHANCED_TLBI)
 
 /*
  * Architectural memory types that are common to MTRRs, PAT, VMX MSRs, etc.
