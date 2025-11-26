@@ -40,6 +40,7 @@
 #define GHCB_VERSION_MIN	1ULL
 
 #define GHCB_HV_FT_SUPPORTED	(GHCB_HV_FT_SNP | GHCB_HV_FT_SNP_AP_CREATION |	\
+				GHCB_HV_FT_SNP_IOMMU_TLB_FLUSH |		\
 				GHCB_HV_FT_SNP_SEV_TIO)
 
 /* enable/disable SEV support */
@@ -61,6 +62,10 @@ static u64 sev_supported_vmsa_features;
 
 static unsigned int nr_ciphertext_hiding_asids;
 module_param_named(ciphertext_hiding_asids, nr_ciphertext_hiding_asids, uint, 0444);
+
+static bool sev_ghcb_iommutlb_flush = true;
+module_param_named(ghcb_iommutlb, sev_ghcb_iommutlb_flush, bool, 0644);
+MODULE_PARM_DESC(ghcb_iommutlb, "Enables GHCB protocol for flushing IOMMU TLB");
 
 #define AP_RESET_HOLD_NONE		0
 #define AP_RESET_HOLD_NAE_EVENT		1
@@ -3505,6 +3510,11 @@ static int sev_es_validate_vmgexit(struct vcpu_svm *svm)
 		    control->exit_info_1 == control->exit_info_2)
 			goto vmgexit_err;
 		break;
+	case SVM_VMGEXIT_IOMMU_TLB_FLUSH:
+		if (!sev_snp_guest(vcpu->kvm) ||
+		    !PAGE_ALIGNED(control->exit_info_1))
+			goto vmgexit_err;
+		break;
 	default:
 		reason = GHCB_ERR_INVALID_EVENT;
 		goto vmgexit_err;
@@ -4442,6 +4452,48 @@ static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t
 	return 0; /* Exit KVM */
 }
 
+static int snp_sev_tio_iommu_tlb_flush(struct kvm_vcpu *vcpu, gpa_t gpa)
+{
+	struct kvm_sev_info *sev = &to_kvm_svm(vcpu->kvm)->sev_info;
+	struct kvm_memory_slot *slot;
+	gfn_t gfn = gpa_to_gfn(gpa);
+	struct page *p = NULL;
+	int rc, max_order = 0;
+	kvm_pfn_t pfn = 0;
+	void *addr;
+
+	slot = gfn_to_memslot(vcpu->kvm, gfn);
+	if (!slot) {
+		pr_debug_ratelimited("Failed to find slot for gpa=%llx\n", gpa);
+		goto do_exit;
+	}
+
+	rc = kvm_gmem_get_pfn(vcpu->kvm, slot, gfn, &pfn, &p, &max_order);
+	if (rc) {
+		pr_debug_ratelimited("Failed to find pfn for gpa=%llx, rc=%d\n", gpa, rc);
+		goto do_exit;
+	}
+
+	rc = rmp_make_shared(pfn, PG_LEVEL_4K);
+	if (rc) {
+		pr_debug_ratelimited("Failed to share pfn=%llx, rc=%d\n", pfn, rc);
+		goto release_exit;
+	}
+
+	addr = __va(pfn << PAGE_SHIFT);
+	memset(addr, 0, 16);
+
+	rc = rmp_make_private(pfn, gpa, PG_LEVEL_4K, sev->asid, false);
+	if (rc)
+		pr_debug_ratelimited("Failed to make private pfn=%llx, rc=%d\n", pfn, rc);
+
+release_exit:
+	kvm_release_page_unused(p);
+
+do_exit:
+	return 1; /* Resume guest */
+}
+
 static int sev_handle_vmgexit_msr_protocol(struct vcpu_svm *svm)
 {
 	struct vmcb_control_area *control = &svm->vmcb->control;
@@ -4723,6 +4775,14 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 		break;
 	case SVM_VMGEXIT_SEV_TIO_OP:
 		ret = snp_sev_tio_op(vcpu, control->exit_info_1, control->exit_info_2);
+		break;
+	case SVM_VMGEXIT_IOMMU_TLB_FLUSH:
+		if (sev_ghcb_iommutlb_flush) {
+			ret = snp_sev_tio_iommu_tlb_flush(vcpu, control->exit_info_1);
+		} else {
+			svm_vmgexit_no_action(svm, SVM_VMGEXIT_IOMMU_TLB_FLUSH_NO_ACTION);
+			ret = 1;
+		}
 		break;
 	case SVM_VMGEXIT_UNSUPPORTED_EVENT:
 		vcpu_unimpl(vcpu,
