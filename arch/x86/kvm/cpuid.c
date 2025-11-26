@@ -1190,6 +1190,10 @@ void kvm_set_cpu_caps(void)
 		VENDOR_F(SVME_ADDR_CHK),
 	);
 
+	kvm_cpu_cap_init(CPUID_8000_000A_ECX,
+		SCATTERED_F(AMD_ENHANCED_TLBI),
+	);
+
 	kvm_cpu_cap_init(CPUID_8000_001F_EAX,
 		VENDOR_F(SME),
 		VENDOR_F(SEV),
@@ -1770,8 +1774,8 @@ static inline int __do_cpuid_func(struct kvm_cpuid_array *array, u32 function)
 		entry->eax = 1; /* SVM revision 1 */
 		entry->ebx = 8; /* Lets support 8 ASIDs in case we add proper
 				   ASID emulation to nested SVM */
-		entry->ecx = 0; /* Reserved */
 		cpuid_entry_override(entry, CPUID_8000_000A_EDX);
+		cpuid_entry_override(entry, CPUID_8000_000A_ECX);
 		break;
 	case 0x80000019:
 		entry->ecx = entry->edx = 0;

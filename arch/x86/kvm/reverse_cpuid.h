@@ -59,6 +59,8 @@
 #define KVM_X86_FEATURE_TSA_SQ_NO	KVM_X86_FEATURE(CPUID_8000_0021_ECX, 1)
 #define KVM_X86_FEATURE_TSA_L1_NO	KVM_X86_FEATURE(CPUID_8000_0021_ECX, 2)
 
+#define KVM_X86_FEATURE_AMD_ENHANCED_TLBI KVM_X86_FEATURE(CPUID_8000_000A_ECX, 5)
+
 struct cpuid_reg {
 	u32 function;
 	u32 index;
@@ -90,6 +92,7 @@ static const struct cpuid_reg reverse_cpuid[] = {
 	[CPUID_24_0_EBX]      = {      0x24, 0, CPUID_EBX},
 	[CPUID_8000_0021_ECX] = {0x80000021, 0, CPUID_ECX},
 	[CPUID_7_1_ECX]       = {         7, 1, CPUID_ECX},
+	[CPUID_8000_000A_ECX] = {0x8000000a, 0, CPUID_ECX},
 };
 
 /*
@@ -132,6 +135,7 @@ static __always_inline u32 __feature_translate(int x86_feature)
 	KVM_X86_TRANSLATE_FEATURE(TSA_SQ_NO);
 	KVM_X86_TRANSLATE_FEATURE(TSA_L1_NO);
 	KVM_X86_TRANSLATE_FEATURE(MSR_IMM);
+	KVM_X86_TRANSLATE_FEATURE(AMD_ENHANCED_TLBI);
 	default:
 		return x86_feature;
 	}
