@@ -189,6 +189,8 @@ extern u16 invlpgb_count_max;
 
 extern void initialize_tlbstate_and_flush(void);
 
+extern bool invlpgb_iommu_enable;
+
 /*
  * TLB flushing:
  *

@@ -533,7 +533,7 @@ static void broadcast_tlb_flush(struct flush_tlb_info *info)
 	finish_asid_transition(info);
 
 	/* Wait for the INVLPGBs kicked off above to finish. */
-	__tlbsync();
+	__tlbsync(0);
 }
 
 /*
@@ -1517,7 +1517,7 @@ static void invlpgb_kernel_range_flush(struct flush_tlb_info *info)
 
 		invlpgb_flush_addr_nosync(addr, nr);
 	}
-	__tlbsync();
+	__tlbsync(0);
 }
 
 static void do_kernel_range_flush(void *info)

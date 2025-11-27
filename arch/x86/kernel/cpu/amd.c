@@ -33,6 +33,9 @@
 
 u16 invlpgb_count_max __ro_after_init = 1;
 
+/* Cached MSR_EFER[_EFER_ENHANCED_TLBI] */
+bool invlpgb_iommu_enable __ro_after_init;
+
 static inline int rdmsrq_amd_safe(unsigned msr, u64 *p)
 {
 	u32 gprs[8] = { 0 };
@@ -1183,6 +1186,12 @@ static void init_amd(struct cpuinfo_x86 *c)
 	/* Enable Translation Cache Extension */
 	if (cpu_has(c, X86_FEATURE_TCE))
 		msr_set_bit(MSR_EFER, _EFER_TCE);
+
+	/* Enable Enhanced TLB Invalidate Instructions */
+	if (cpu_has(c, X86_FEATURE_AMD_ENHANCED_TLBI)) {
+		msr_set_bit(MSR_EFER, _EFER_ENHANCED_TLBI);
+		invlpgb_iommu_enable = true;
+	}
 }
 
 #ifdef CONFIG_X86_32

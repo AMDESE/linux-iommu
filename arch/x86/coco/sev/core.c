@@ -46,6 +46,7 @@
 #include <asm/cmdline.h>
 #include <asm/msr.h>
 #include <asm/archrandom.h>
+#include <asm/tlb.h>
 
 /* Bitmap of SEV features supported by the hypervisor */
 u64 sev_hv_features __ro_after_init;
@@ -717,9 +718,21 @@ static unsigned long __set_pages_state(struct snp_psc_desc *data, unsigned long 
 	if (!ghcb || vmgexit_psc(ghcb, data))
 		sev_es_terminate(SEV_TERM_SET_LINUX, GHCB_TERM_PSC);
 
-	if (device_cc_accepted_any())
-		WARN_ON_ONCE(iommu_tlb_flush_ghcb(ghcb,
-			this_cpu_read(iommu_tlb_flush_ghcb_page)));
+	if (device_cc_accepted_any()) {
+		/*
+		 * Cannot use cpu_feature_enabled(X86_FEATURE_AMD_ENHANCED_TLBI)
+		 * as this is called before init_amd().
+		 * Do not want to use rdmsrq(MSR_EFER, efer) as it is slow.
+		 */
+		bool force_enh_tlbi = invlpgb_iommu_enable;
+
+		if (!invlpgb_iommu_enable)
+			force_enh_tlbi = iommu_tlb_flush_ghcb(ghcb,
+					this_cpu_read(iommu_tlb_flush_ghcb_page));
+
+		if (force_enh_tlbi)
+			invlpgb_flush_all_iommu();
+	}
 
 	if (sev_cfg.ghcbs_initialized)
 		__sev_put_ghcb(&state);
@@ -1553,7 +1566,8 @@ static void __init alloc_runtime_data(int cpu)
 		per_cpu(svsm_caa_pa, cpu) = __pa(caa);
 	}
 
-	if (sev_hv_features & GHCB_HV_FT_SNP_IOMMU_TLB_FLUSH) {
+	if (!cpu_feature_enabled(X86_FEATURE_AMD_ENHANCED_TLBI) &&
+	    (sev_hv_features & GHCB_HV_FT_SNP_IOMMU_TLB_FLUSH)) {
 		u8 *b = memblock_alloc_node(PAGE_SIZE, PAGE_SIZE, cpu_to_node(cpu));
 
 		if (!b)
