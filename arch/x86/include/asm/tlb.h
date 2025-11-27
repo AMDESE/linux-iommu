@@ -50,6 +50,7 @@ enum addr_stride {
 #define INVLPGB_FLAG_INCLUDE_GLOBAL	BIT(3)
 #define INVLPGB_FLAG_FINAL_ONLY		BIT(4)
 #define INVLPGB_FLAG_INCLUDE_NESTED	BIT(5)
+#define INVLPGB_FLAG_FLUSH_IOMMU	BIT(6)
 
 /* The implied mode when all bits are clear: */
 #define INVLPGB_MODE_ALL_NONGLOBALS	0UL
@@ -98,7 +99,9 @@ static inline void __invlpgb_all(unsigned long asid, unsigned long pcid, u8 flag
 	__invlpgb(asid, pcid, 0, 1, 0, flags);
 }
 
-static inline void __tlbsync(void)
+#define TLBSYNC_FLAG_SYNC_IOMMU	BIT(0)
+
+static inline void __tlbsync(u64 flags)
 {
 	/*
 	 * TLBSYNC waits for INVLPGB instructions originating on the same CPU
@@ -109,7 +112,7 @@ static inline void __tlbsync(void)
 	cant_migrate();
 
 	/* TLBSYNC: supported in binutils >= 0.36. */
-	asm volatile(".byte 0x0f, 0x01, 0xff" ::: "memory");
+	asm volatile(".byte 0x0f, 0x01, 0xff" :: "a" (flags) : "memory");
 }
 #else
 /* Some compilers (I'm looking at you clang!) simply can't do DCE */
@@ -117,7 +120,7 @@ static inline void __invlpgb(unsigned long asid, unsigned long pcid,
 			     unsigned long addr, u16 nr_pages,
 			     enum addr_stride s, u8 flags) { }
 static inline void __invlpgb_all(unsigned long asid, unsigned long pcid, u8 flags) { }
-static inline void __tlbsync(void) { }
+static inline void __tlbsync(u64 flags) { }
 #endif
 
 static inline void invlpgb_flush_user_nr_nosync(unsigned long pcid,
@@ -147,7 +150,15 @@ static inline void invlpgb_flush_all(void)
 	 */
 	guard(preempt)();
 	__invlpgb_all(0, 0, INVLPGB_FLAG_INCLUDE_GLOBAL);
-	__tlbsync();
+	__tlbsync(0);
+}
+
+/* Flush all mappings, including globals, for all PCIDs, including IOMMU. */
+static inline void invlpgb_flush_all_iommu(void)
+{
+	guard(preempt)();
+	__invlpgb_all(0, 0, INVLPGB_FLAG_INCLUDE_GLOBAL | INVLPGB_FLAG_FLUSH_IOMMU);
+	__tlbsync(TLBSYNC_FLAG_SYNC_IOMMU);
 }
 
 /* Flush addr, including globals, for all PCIDs. */
@@ -161,6 +172,7 @@ static inline void invlpgb_flush_all_nonglobals(void)
 {
 	guard(preempt)();
 	__invlpgb_all(0, 0, INVLPGB_MODE_ALL_NONGLOBALS);
-	__tlbsync();
+	__tlbsync(0);
 }
+
 #endif /* _ASM_X86_TLB_H */
