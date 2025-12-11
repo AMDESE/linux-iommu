@@ -335,6 +335,8 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 	 * will be released.
 	 */
 	ret = dma_buf_fd(priv->dmabuf, get_dma_buf.open_flags);
+	pci_err(vdev->pdev, "___K___ %s %u: %d ranges, region#%d, fd=%d\n", __func__, __LINE__,
+		get_dma_buf.nr_ranges, get_dma_buf.region_index, ret);
 	if (ret < 0)
 		goto err_dma_buf;
 	return ret;
