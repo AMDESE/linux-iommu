@@ -220,7 +220,7 @@ static inline void pt_entry_replace_bits64(u64 *entry, u64 value, u64 mask,
 
 #define PT_SUPPORTED_FEATURE(feature_nr) (PT_SUPPORTED_FEATURES & BIT(feature_nr))
 
-static inline bool pt_feature(const struct pt_common *common,
+static __always_inline bool pt_feature(const struct pt_common *common,
 			      unsigned int feature_nr)
 {
 	if (PT_FORCE_ENABLED_FEATURES & BIT(feature_nr))
@@ -230,7 +230,7 @@ static inline bool pt_feature(const struct pt_common *common,
 	return common->features & BIT(feature_nr);
 }
 
-static inline bool pts_feature(const struct pt_state *pts,
+static __always_inline bool pts_feature(const struct pt_state *pts,
 			       unsigned int feature_nr)
 {
 	return pt_feature(pts->range->common, feature_nr);
