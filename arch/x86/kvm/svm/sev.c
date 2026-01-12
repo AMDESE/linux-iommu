@@ -67,6 +67,10 @@ static bool sev_ghcb_iommutlb_flush = true;
 module_param_named(ghcb_iommutlb, sev_ghcb_iommutlb_flush, bool, 0644);
 MODULE_PARM_DESC(ghcb_iommutlb, "Enables GHCB protocol for flushing IOMMU TLB");
 
+static bool sev_iommutlb_flush_dbg = false;
+module_param_named(flush_dbg, sev_iommutlb_flush_dbg, bool, 0644);
+MODULE_PARM_DESC(psp_dmesg, "Enables tracing IOMMU GHCB flush");
+
 #define AP_RESET_HOLD_NONE		0
 #define AP_RESET_HOLD_NAE_EVENT		1
 #define AP_RESET_HOLD_MSR_PROTO		2
@@ -4461,6 +4465,7 @@ static int snp_sev_tio_iommu_tlb_flush(struct kvm_vcpu *vcpu, gpa_t gpa)
 	int rc, max_order = 0;
 	kvm_pfn_t pfn = 0;
 	void *addr;
+	char pfx[64];
 
 	slot = gfn_to_memslot(vcpu->kvm, gfn);
 	if (!slot) {
@@ -4481,11 +4486,23 @@ static int snp_sev_tio_iommu_tlb_flush(struct kvm_vcpu *vcpu, gpa_t gpa)
 	}
 
 	addr = __va(pfn << PAGE_SHIFT);
+
+	if (sev_iommutlb_flush_dbg) {
+		sprintf(pfx, "IOMMUTLBFL gfn=%llx pfn=%llx ", gfn, pfn);
+		print_hex_dump(KERN_ERR, pfx, DUMP_PREFIX_OFFSET, 16, 1, addr, 16, true);
+	}
+
 	memset(addr, 0, 16);
+
+	if (sev_iommutlb_flush_dbg)
+		print_hex_dump(KERN_ERR, pfx, DUMP_PREFIX_OFFSET, 16, 1, addr, 16, true);
 
 	rc = rmp_make_private(pfn, gpa, PG_LEVEL_4K, sev->asid, false);
 	if (rc)
 		pr_debug_ratelimited("Failed to make private pfn=%llx, rc=%d\n", pfn, rc);
+
+	if (sev_iommutlb_flush_dbg)
+		print_hex_dump(KERN_ERR, pfx, DUMP_PREFIX_OFFSET, 16, 1, addr + 2048, 16, true);
 
 release_exit:
 	kvm_release_page_unused(p);
