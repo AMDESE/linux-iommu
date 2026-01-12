@@ -176,6 +176,9 @@ int sev_tio_op(u32 guest_rid, unsigned int op, u64 *fw_err, u64 *tdi_id)
 }
 EXPORT_SYMBOL_GPL(sev_tio_op);
 
+bool sev_iommutlb_flush_dbg;
+EXPORT_SYMBOL_GPL(sev_iommutlb_flush_dbg);
+
 /*
  * SVSM related information:
  *   When running under an SVSM, the VMPL that Linux is executing at must be
@@ -623,12 +626,15 @@ out:
 	return ret;
 }
 
+extern bool sev_iommutlb_flush_dbg;
+
 bool iommu_tlb_flush_ghcb(struct ghcb *ghcb, void *p)
 {
 	/* AES encrypts with 16 byte blocks */
 	unsigned long s1[BITS_TO_LONGS(128)], s2[BITS_TO_LONGS(128)];
 	u8 *p2 = (u8 *) p + 2048;
 	struct es_em_ctxt ctxt;
+	char pfx[64];
 	int ret;
 
 	if (!p)
@@ -644,6 +650,14 @@ bool iommu_tlb_flush_ghcb(struct ghcb *ghcb, void *p)
 	memcpy(p, s1, sizeof(s1));
 	memcpy(p2, s2, sizeof(s2));
 
+	if (sev_iommutlb_flush_dbg) {
+		sprintf(pfx, "IOMMUTLBFL1 pfn=%lx ", __pa(p)>>PAGE_SHIFT);
+		print_hex_dump(KERN_INFO, pfx, DUMP_PREFIX_OFFSET, 16, 1, p,
+			       sizeof(s1), true);
+		print_hex_dump(KERN_INFO, pfx, DUMP_PREFIX_OFFSET, 16, 1, p2,
+			       sizeof(s2), true);
+	}
+
 	pvalidate((unsigned long) p, RMP_PG_SIZE_4K, false);
 	ret = sev_es_ghcb_hv_call(ghcb, &ctxt, SVM_VMGEXIT_IOMMU_TLB_FLUSH, __pa(p), 0);
 	pvalidate((unsigned long) p, RMP_PG_SIZE_4K, true);
@@ -653,11 +667,20 @@ bool iommu_tlb_flush_ghcb(struct ghcb *ghcb, void *p)
 	if (!ret && ghcb->save.sw_exit_info_2 == SVM_VMGEXIT_IOMMU_TLB_FLUSH_NO_ACTION)
 		return true;
 
+	if (!memcmp(p, s1, sizeof(s1)) || memcmp(p2, s2, sizeof(s2)) ||
+	    sev_iommutlb_flush_dbg) {
+		print_hex_dump(KERN_INFO, pfx, DUMP_PREFIX_OFFSET, 16, 1, p,
+			       sizeof(s1), true);
+		print_hex_dump(KERN_INFO, pfx, DUMP_PREFIX_OFFSET, 16, 1, p2,
+			       sizeof(s2), true);
+	}
+
 	if (!memcmp(p, s1, sizeof(s1)) || memcmp(p2, s2, sizeof(s2)))
 		panic("The HV failed to flush IOMMU TLB via RMPUPDATE");
 
 	return false;
 }
+
 static unsigned long __set_pages_state(struct snp_psc_desc *data, unsigned long vaddr,
 				       unsigned long vaddr_end, int op)
 {
@@ -732,6 +755,10 @@ static unsigned long __set_pages_state(struct snp_psc_desc *data, unsigned long 
 
 		if (force_enh_tlbi)
 			invlpgb_flush_all_iommu();
+
+		if (sev_iommutlb_flush_dbg)
+			pr_err("___K___ %s %u: %s tlbi\n", __func__, __LINE__,
+			       invlpgb_iommu_enable ? "enhanced" : "ghcb");
 	}
 
 	if (sev_cfg.ghcbs_initialized)
@@ -1577,6 +1604,10 @@ static void __init alloc_runtime_data(int cpu)
 		early_snp_set_memory_shared((unsigned long)b, __pa(b), 1);
 		early_snp_set_memory_private((unsigned long)b, __pa(b), 1);
 		per_cpu(iommu_tlb_flush_ghcb_page, cpu) = b;
+
+		if (sev_iommutlb_flush_dbg)
+			pr_info("___K___ %s %u: both cpu #%d = %#lx %lx\n", __func__, __LINE__,
+				cpu, (unsigned long) b, __pa(b));
 	}
 }
 

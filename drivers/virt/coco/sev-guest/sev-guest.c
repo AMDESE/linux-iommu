@@ -50,6 +50,10 @@ static bool tsm_enable = true;
 module_param(tsm_enable, bool, 0644);
 MODULE_PARM_DESC(tsm_enable, "Enable SEV TIO");
 
+extern bool sev_iommutlb_flush_dbg;
+module_param_named(flush_dbg, sev_iommutlb_flush_dbg, bool, 0644);
+MODULE_PARM_DESC(flush_dbg, "Enables tracing IOMMU GHCB flush hack");
+
 static inline struct snp_guest_dev *to_snp_dev(struct file *file)
 {
 	struct miscdevice *dev = file->private_data;

@@ -80,6 +80,9 @@ static inline int __flip_bit(u32 msr, u8 bit, bool set)
 	else
 		m1.q &= ~BIT_64(bit);
 
+	if (msr == MSR_EFER && bit == _EFER_ENHANCED_TLBI)
+		pr_err_once("___K___ %s %u: Enabling ENHANCED_TLBI %llx => %llx (once)\n",
+			    __func__, __LINE__, m.q, m1.q);
 	if (m1.q == m.q)
 		return 0;
 
