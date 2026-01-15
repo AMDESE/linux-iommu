@@ -3209,36 +3209,6 @@ static int amd_iommu_tsm_enable(struct iommu_domain *dom, struct device *dev)
 	return iommu_for_each(dom, amd_iommu_domain_ops_for_each_rmp_smash_fn, NULL);
 }
 
-static void amd_viommu_destroy(struct iommufd_viommu *viommu)
-{
-	dev_err(viommu->iommu_dev->dev, "___K___ %s %u\n", __func__, __LINE__);
-}
-
-static const struct iommufd_viommu_ops amd_viommu_ops = {
-	.destroy = amd_viommu_destroy,
-};
-
-static size_t amd_get_viommu_size(struct device *dev,
-				enum iommu_viommu_type viommu_type)
-{
-	if (viommu_type == IOMMU_VIOMMU_TYPE_AMD_TSM)
-		return sizeof(struct iommufd_viommu);
-
-	return 0;
-}
-
-static int amd_viommu_init(struct iommufd_viommu *viommu,
-			   struct iommu_domain *parent,
-			   const struct iommu_user_data *user_data)
-{
-	dev_err(viommu->iommu_dev->dev, "___K___ %s %u: viommu allocated: %pS, %pS, %pS, TYPE=%x\n",
-		__func__, __LINE__, parent->ops, parent->dirty_ops, parent->owner, parent->type);
-
-	viommu->ops = &amd_viommu_ops;
-
-	return 0;
-}
-
 const struct iommu_ops amd_iommu_ops = {
 	.capable = amd_iommu_capable,
 	.hw_info = amd_iommufd_hw_info,
@@ -3254,8 +3224,8 @@ const struct iommu_ops amd_iommu_ops = {
 	.is_attach_deferred = amd_iommu_is_attach_deferred,
 	.def_domain_type = amd_iommu_def_domain_type,
 	.page_response = amd_iommu_page_response,
-	.get_viommu_size = amd_get_viommu_size,
-	.viommu_init = amd_viommu_init,
+	.get_viommu_size = amd_iommufd_get_viommu_size,
+	.viommu_init = amd_iommufd_viommu_init,
 };
 
 #ifdef CONFIG_IRQ_REMAP
