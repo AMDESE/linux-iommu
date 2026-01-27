@@ -479,3 +479,21 @@ out_put_viommu:
 	iommufd_put_object(ucmd->ictx, &viommu->obj);
 	return rc;
 }
+
+int iommufd_viommu_option(struct iommufd_ucmd *ucmd)
+{
+	int ret = -EOPNOTSUPP;
+	struct iommu_option *cmd = ucmd->cmd;
+	struct iommufd_viommu *viommu = iommufd_get_viommu(ucmd, cmd->object_id);
+
+	if (cmd->op == IOMMU_OPTION_OP_SET) {
+		if (!viommu->ops->set_option)
+			return ret;
+		ret = viommu->ops->set_option(viommu, cmd->key, cmd->val64);
+	} else if (cmd->op == IOMMU_OPTION_OP_GET) {
+		if (!viommu->ops->get_option)
+			return ret;
+		ret = viommu->ops->get_option(viommu, cmd->key, &cmd->val64);
+	}
+	return ret;
+}

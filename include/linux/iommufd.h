@@ -189,6 +189,9 @@ struct iommufd_hw_queue {
  *                 guest VM, for a multi-queue model.
  *                 If driver has a deinit function to revert what this op
  *                 does, it should set it to the @hw_queue->destroy pointer
+ * @set_option: Set the key-value option for the specified vIOMMU.
+ * @get_option: Get the key-value option for the specified vIOMMU.
+ *              On success, the value is returned via the provided value.
  */
 struct iommufd_viommu_ops {
 	void (*destroy)(struct iommufd_viommu *viommu);
@@ -204,6 +207,8 @@ struct iommufd_viommu_ops {
 	int (*hw_queue_init_phys)(struct iommufd_hw_queue *hw_queue, u32 index,
 				  phys_addr_t base_addr_pa);
 	int (*hw_queue_init)(struct iommufd_hw_queue *hw_queue, u32 index);
+	int (*set_option)(struct iommufd_viommu *viommu, u16 key, u64 value);
+	int (*get_option)(struct iommufd_viommu *viommu, u16 key, u64 *value);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
