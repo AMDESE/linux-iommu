@@ -391,15 +391,15 @@ static int iommufd_option(struct iommufd_ucmd *ucmd)
 	struct iommu_option *cmd = ucmd->cmd;
 	int rc;
 
-	if (cmd->__reserved)
-		return -EOPNOTSUPP;
-
 	switch (cmd->option_id) {
 	case IOMMU_OPTION_RLIMIT_MODE:
 		rc = iommufd_option_rlimit_mode(cmd, ucmd->ictx);
 		break;
 	case IOMMU_OPTION_HUGE_PAGES:
 		rc = iommufd_ioas_option(ucmd);
+		break;
+	case IOMMU_OPTION_VIOMMU:
+		rc = iommufd_viommu_option(ucmd);
 		break;
 	default:
 		return -EOPNOTSUPP;

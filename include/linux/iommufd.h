@@ -183,6 +183,9 @@ struct iommufd_hw_queue {
  * @hw_queue_init: Similar to hw_queue_init_phys, but driver providing this op
  *                 indicates that HW accesses the guest queue memory via
  *                 @hw_queue->baseaddr.
+ * @set_option: Set the key-value option for the specified vIOMMU.
+ * @get_option: Get the key-value option for the specified vIOMMU.
+ *              On success, the value is returned via the provided value.
  */
 struct iommufd_viommu_ops {
 	void (*destroy)(struct iommufd_viommu *viommu);
@@ -198,6 +201,8 @@ struct iommufd_viommu_ops {
 	int (*hw_queue_init_phys)(struct iommufd_hw_queue *hw_queue, u32 index,
 				  phys_addr_t base_addr_pa);
 	int (*hw_queue_init)(struct iommufd_hw_queue *hw_queue, u32 index);
+	int (*set_option)(struct iommufd_viommu *viommu, u16 key, u64 value);
+	int (*get_option)(struct iommufd_viommu *viommu, u16 key, u64 *value);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)

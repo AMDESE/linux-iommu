@@ -643,7 +643,7 @@ int iommufd_ioas_option(struct iommufd_ucmd *ucmd)
 	struct iommufd_ioas *ioas;
 	int rc = 0;
 
-	if (cmd->__reserved)
+	if (cmd->key)
 		return -EOPNOTSUPP;
 
 	ioas = iommufd_get_ioas(ucmd->ictx, cmd->object_id);
