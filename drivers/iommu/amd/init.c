@@ -195,7 +195,7 @@ bool amdr_ivrs_remap_support __read_mostly;
 bool amd_iommu_force_isolation __read_mostly;
 
 /* VIOMMU enabling flag */
-bool amd_iommu_viommu = false;
+bool amd_iommu_viommu = true;
 
 unsigned long amd_iommu_pgsize_bitmap __ro_after_init = AMD_IOMMU_PGSIZES;
 
@@ -3714,6 +3714,8 @@ static int __init parse_amd_iommu_options(char *str)
 		} else if (strncmp(str, "v2_pgsizes_only", 15) == 0) {
 			pr_info("Restricting V1 page-sizes to 4KiB/2MiB/1GiB");
 			amd_iommu_pgsize_bitmap = AMD_IOMMU_PGSIZES_V2;
+		} else if (strncmp(str, "viommu_disable", 14) == 0) {
+			amd_iommu_viommu = false;
 		} else {
 			pr_notice("Unknown option - '%s'\n", str);
 		}
