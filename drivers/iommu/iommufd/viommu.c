@@ -477,3 +477,42 @@ out_put_viommu:
 	iommufd_put_object(ucmd->ictx, &viommu->obj);
 	return rc;
 }
+
+int iommufd_viommu_command_ioctl(struct iommufd_ucmd *ucmd)
+{
+	int rc = 0;
+	struct iommu_viommu_command *cmd = ucmd->cmd;
+	struct iommufd_viommu *viommu = iommufd_get_viommu(ucmd, cmd->object_id);
+
+	if (cmd->__reserved) {
+		rc = -EOPNOTSUPP;
+		goto out_put_viommu;
+	}
+
+	if (IS_ERR(viommu)) {
+		rc = PTR_ERR(viommu);
+		goto out_put_viommu;
+	}
+
+	if (cmd->op == IOMMU_VIOMMU_COMMAND_OP_SET) {
+		if (!viommu->ops->set_command)
+			rc = -EOPNOTSUPP;
+		rc = viommu->ops->set_command(viommu, cmd->index, cmd->val64);
+	} else if (cmd->op == IOMMU_VIOMMU_COMMAND_OP_GET) {
+		if (!viommu->ops->get_command)
+			rc = -EOPNOTSUPP;
+		rc = viommu->ops->get_command(viommu, cmd->index, &cmd->val64);
+	} else {
+		rc = -EOPNOTSUPP;
+	}
+
+	if (rc)
+		goto out_put_viommu;
+
+	if (copy_to_user(&((struct iommu_viommu_command __user *)ucmd->ubuffer)->val64,
+			 &cmd->val64, sizeof(cmd->val64)))
+		rc = -EFAULT;
+out_put_viommu:
+	iommufd_put_object(ucmd->ictx, &viommu->obj);
+	return rc;
+}
