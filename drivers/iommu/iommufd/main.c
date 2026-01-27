@@ -434,6 +434,7 @@ union ucmd_buffer {
 	struct iommu_viommu_alloc viommu;
 	struct iommu_vdevice_tsm_bind bind;
 	struct iommu_vdevice_tsm_guest_request gr;
+	struct iommu_viommu_command viommu_command;
 #ifdef CONFIG_IOMMUFD_TEST
 	struct iommu_test_cmd test;
 #endif
@@ -499,6 +500,8 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 struct iommu_vdevice_tsm_bind, pad),
 	IOCTL_OP(IOMMU_VDEVICE_TSM_GUEST_REQUEST, iommufd_vdevice_tsm_guest_request_ioctl,
 		 struct iommu_vdevice_tsm_guest_request, fw_err),
+	IOCTL_OP(IOMMU_VIOMMU_COMMAND, iommufd_viommu_command_ioctl,
+		 struct iommu_viommu_command, val64),
 #ifdef CONFIG_IOMMUFD_TEST
 	IOCTL_OP(IOMMU_TEST_CMD, iommufd_test, struct iommu_test_cmd, last),
 #endif
