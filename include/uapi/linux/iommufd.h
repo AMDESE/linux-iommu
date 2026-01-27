@@ -57,6 +57,7 @@ enum {
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
 	IOMMUFD_CMD_VEVENTQ_ALLOC = 0x93,
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
+	IOMMUFD_CMD_VIOMMU_COMMAND = 0x95,
 };
 
 /**
@@ -1130,6 +1131,39 @@ struct iommu_viommu_alloc {
 	__aligned_u64 data_uptr;
 };
 #define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
+
+/**
+ * enum viommu_command_ops - viommu command operations
+ * @IOMMU_VIOMMU_COMMAND_OP_SET: Set the command's data
+ * @IOMMU_VIOMMU_COMMAND_OP_GET: Get the command's data
+ */
+enum viommu_command_ops {
+	IOMMU_VIOMMU_COMMAND_OP_SET = 0,
+	IOMMU_VIOMMU_COMMAND_OP_GET = 1,
+};
+
+/**
+ * struct iommu_viommu_command - iommu viommu command multiplexer
+ * @size: sizeof(struct iommu_viommu_command)
+ * @object_id: ID of the vIOMMU if required
+ * @op: One of enum viommu_command_ops
+ * @index: Command index to match with the value
+ * @__reserved: Must be 0
+ * @val64: Command data to set or data returned on get
+ *
+ * This multiplexer allows controlling commands on vIOMMU.
+ * IOMMU_VIOMMU_COMMAND_OP_SET will load a command and
+ * IOMMU_VIOMMU_COMMAND_OP_GET will return the current value.
+ */
+struct iommu_viommu_command {
+	__u32 size;
+	__u32 object_id;
+	__u16 op;
+	__u16 index;
+	__u32 __reserved;
+	__aligned_u64 val64;
+};
+#define IOMMU_VIOMMU_COMMAND _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_COMMAND)
 
 /**
  * struct iommu_vdevice_alloc - ioctl(IOMMU_VDEVICE_ALLOC)
