@@ -138,6 +138,7 @@ enum psc_op {
 #define GHCB_HV_FT_SNP_AP_CREATION	BIT_ULL(1)
 #define GHCB_HV_FT_SNP_MULTI_VMPL	BIT_ULL(5)
 #define GHCB_HV_FT_SNP_SEV_TIO		BIT_ULL(7)
+#define GHCB_HV_FT_SNP_IOMMU_TLB_FLUSH	BIT_ULL(11)
 
 /*
  * SNP Page State Change NAE event

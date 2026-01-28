@@ -45,6 +45,7 @@
 #include <asm/cpuid/api.h>
 #include <asm/cmdline.h>
 #include <asm/msr.h>
+#include <asm/archrandom.h>
 
 /* Bitmap of SEV features supported by the hypervisor */
 u64 sev_hv_features __ro_after_init;
@@ -135,6 +136,7 @@ static unsigned long snp_tsc_freq_khz __ro_after_init;
 
 DEFINE_PER_CPU(struct sev_es_runtime_data*, runtime_data);
 DEFINE_PER_CPU(struct sev_es_save_area *, sev_vmsa);
+DEFINE_PER_CPU(u8 *, iommu_tlb_flush_ghcb_page);
 
 bool sev_tio_ghcb_supported(void)
 {
@@ -620,6 +622,41 @@ out:
 	return ret;
 }
 
+bool iommu_tlb_flush_ghcb(struct ghcb *ghcb, void *p)
+{
+	/* AES encrypts with 16 byte blocks */
+	unsigned long s1[BITS_TO_LONGS(128)], s2[BITS_TO_LONGS(128)];
+	u8 *p2 = (u8 *) p + 2048;
+	struct es_em_ctxt ctxt;
+	int ret;
+
+	if (!p)
+		return false;
+
+	vc_ghcb_invalidate(ghcb);
+
+	BUILD_BUG_ON(ARRAY_SIZE(s1) != 2);
+	if (!rdrand_long(s1) || !rdrand_long(s1 + 1) ||
+	    !rdrand_long(s2) || !rdrand_long(s2 + 1))
+		return true;
+
+	memcpy(p, s1, sizeof(s1));
+	memcpy(p2, s2, sizeof(s2));
+
+	pvalidate((unsigned long) p, RMP_PG_SIZE_4K, false);
+	ret = sev_es_ghcb_hv_call(ghcb, &ctxt, SVM_VMGEXIT_IOMMU_TLB_FLUSH, __pa(p), 0);
+	pvalidate((unsigned long) p, RMP_PG_SIZE_4K, true);
+
+	smp_mb();
+
+	if (!ret && ghcb->save.sw_exit_info_2 == SVM_VMGEXIT_IOMMU_TLB_FLUSH_NO_ACTION)
+		return true;
+
+	if (!memcmp(p, s1, sizeof(s1)) || memcmp(p2, s2, sizeof(s2)))
+		panic("The HV failed to flush IOMMU TLB via RMPUPDATE");
+
+	return false;
+}
 static unsigned long __set_pages_state(struct snp_psc_desc *data, unsigned long vaddr,
 				       unsigned long vaddr_end, int op)
 {
@@ -679,6 +716,10 @@ static unsigned long __set_pages_state(struct snp_psc_desc *data, unsigned long 
 	/* Invoke the hypervisor to perform the page state changes */
 	if (!ghcb || vmgexit_psc(ghcb, data))
 		sev_es_terminate(SEV_TERM_SET_LINUX, GHCB_TERM_PSC);
+
+	if (device_cc_accepted_any())
+		WARN_ON_ONCE(iommu_tlb_flush_ghcb(ghcb,
+			this_cpu_read(iommu_tlb_flush_ghcb_page)));
 
 	if (sev_cfg.ghcbs_initialized)
 		__sev_put_ghcb(&state);
@@ -1510,6 +1551,18 @@ static void __init alloc_runtime_data(int cpu)
 
 		per_cpu(svsm_caa, cpu) = caa;
 		per_cpu(svsm_caa_pa, cpu) = __pa(caa);
+	}
+
+	if (sev_hv_features & GHCB_HV_FT_SNP_IOMMU_TLB_FLUSH) {
+		u8 *b = memblock_alloc_node(PAGE_SIZE, PAGE_SIZE, cpu_to_node(cpu));
+
+		if (!b)
+			panic("Can't config IOMMU TLB Flush page");
+
+		/* Trigger psmash in the host os now to avoid psmash race later */
+		early_snp_set_memory_shared((unsigned long)b, __pa(b), 1);
+		early_snp_set_memory_private((unsigned long)b, __pa(b), 1);
+		per_cpu(iommu_tlb_flush_ghcb_page, cpu) = b;
 	}
 }
 
