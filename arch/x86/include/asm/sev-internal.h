@@ -85,3 +85,4 @@ enum es_result sev_es_ghcb_handle_msr(struct ghcb *ghcb, struct es_em_ctxt *ctxt
 u64 get_hv_features(void);
 
 const struct snp_cpuid_table *snp_cpuid_get_table(void);
+bool iommu_tlb_flush_ghcb(struct ghcb *ghcb, void *p);
