@@ -5123,6 +5123,8 @@ struct kvm_x86_ops svm_x86_ops __initdata = {
 	.nested_ops = &svm_nested_ops,
 
 	.deliver_interrupt = svm_deliver_interrupt,
+	.pi_init = avic_pi_init,
+	.pi_destroy = avic_pi_destroy,
 	.pi_update_irte = avic_pi_update_irte,
 	.setup_mce = svm_setup_mce,
 

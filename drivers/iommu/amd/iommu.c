@@ -4095,6 +4095,35 @@ static int amd_ir_set_vcpu_affinity(struct irq_data *data, void *info)
 	return ret;
 }
 
+static int amd_ir_setup_posted_interrupt(struct irq_data *data, void *pi_info)
+{
+       unsigned int host_irq = data->irq;
+       struct irq_alloc_info *gappi_irq_info;
+       struct amd_ir_data *host_ir_data;
+       struct amd_iommu_pi_data *pi_data;
+
+       if (!data || !pi_info)
+               return -EINVAL;
+
+       host_ir_data = data->chip_data;
+       pi_data = pi_info;
+       gappi_irq_info = &host_ir_data->gappi.irq_info;
+
+       if (pi_data->is_guest_mode) {
+               init_irq_alloc_info(gappi_irq_info, NULL);
+               gappi_irq_info->type = X86_IRQ_ALLOC_TYPE_AMDVI;
+               gappi_irq_info->data = host_ir_data;
+               gappi_irq_info->hwirq = host_irq;
+       } else {
+               gappi_irq_info->type = 0;
+               gappi_irq_info->data = NULL;
+               gappi_irq_info->hwirq = -1;
+       }
+
+       pi_data->ir_data = host_ir_data;
+
+       return 0;
+}
 
 static void amd_ir_update_irte(struct irq_data *irqd, struct amd_iommu *iommu,
 			       struct amd_ir_data *ir_data,
@@ -4151,6 +4180,7 @@ static struct irq_chip amd_ir_chip = {
 	.irq_ack		= apic_ack_irq,
 	.irq_set_affinity	= amd_ir_set_affinity,
 	.irq_set_vcpu_affinity	= amd_ir_set_vcpu_affinity,
+	.irq_setup_posted_interrupt = amd_ir_setup_posted_interrupt,
 	.irq_compose_msi_msg	= ir_compose_msi_msg,
 };
 
