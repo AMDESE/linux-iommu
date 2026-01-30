@@ -3746,6 +3746,8 @@ static int irq_remapping_alloc(struct irq_domain *domain, unsigned int virq,
 		}
 
 		data->iommu = iommu;
+		data->gappi.masked = 0;
+		data->gappi.irq = -1;
 		irq_data->hwirq = (devid << 16) + i;
 		irq_data->chip_data = data;
 		irq_data->chip = &amd_ir_chip;
@@ -3851,8 +3853,33 @@ static const struct irq_domain_ops amd_ir_domain_ops = {
 	.deactivate = irq_remapping_deactivate,
 };
 
-static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
-				  bool posted_intr)
+static unsigned int get_dest_apicid(u32 apicid)
+{
+       unsigned long bitmap, cluster;
+       u32 dest = apicid;
+
+       if (x2apic_enabled()) {
+               /* Logical cluster x2APIC 16 bit dest mask, 16 bit cluster id */
+               bitmap  = dest & 0xFFFF;
+               cluster = (dest >> 16) & 0xFFFF;
+               dest = (cluster << 4) + find_first_bit(&bitmap, 16);
+       } else if (apic_read(APIC_DFR) == APIC_DFR_CLUSTER) {
+               /* Logical cluster xAPIC : 4 bit desk mask, 4 bit cluster id */
+               bitmap  = dest & 0xF;
+               cluster = (dest >> 4);
+               dest = (cluster << 2) + find_first_bit(&bitmap, 4);
+       } else {
+               /* Logical flat */
+               bitmap  = dest & 0xFF;
+               dest = find_first_bit(&bitmap, 8);
+       }
+       return dest;
+}
+
+
+static void __amd_iommu_update_ga(struct irte_ga *entry,
+				  struct irq_cfg *gappi_cfg,
+				  int cpu, bool posted_intr)
 {
 	if (cpu >= 0) {
 		entry->lo.fields_vapic.destination =
@@ -3861,6 +3888,18 @@ static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
 					APICID_TO_IRTE_DEST_HI(cpu);
 		entry->lo.fields_vapic.is_run = true;
 		entry->lo.fields_vapic.ga_log_intr = false;
+	} else if (gappi_cfg) {
+		u32 dest;
+		if (apic->dest_mode_logical)
+			dest = get_dest_apicid(gappi_cfg->dest_apicid);
+
+		if (check_feature(FEATURE_GAPPIDISSUP))
+			entry->lo.fields_vapic.gappi_dis = !posted_intr;
+
+		entry->lo.fields_vapic.is_run = false;
+		entry->lo.fields_vapic.destination =
+					APICID_TO_IRTE_DEST_LO(dest);
+		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
 	} else {
 		entry->lo.fields_vapic.is_run = false;
 		entry->lo.fields_vapic.ga_log_intr = posted_intr;
@@ -3898,7 +3937,7 @@ int amd_iommu_update_ga(void *data, int cpu, bool posted_intr)
 	if (!ir_data->iommu)
 		return -ENODEV;
 
-	__amd_iommu_update_ga(entry, cpu, posted_intr);
+	__amd_iommu_update_ga(entry, ir_data->gappi.cfg, cpu, posted_intr);
 
 	return __modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 				ir_data->irq_2_irte.index, entry);
@@ -3926,9 +3965,15 @@ int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr)
 	entry->lo.fields_vapic.guest_mode  = 1;
 	entry->hi.fields.ga_root_ptr       = ir_data->ga_root_ptr;
 	entry->hi.fields.vector            = ir_data->ga_vector;
-	entry->lo.fields_vapic.ga_tag      = ir_data->ga_tag;
+	
+	if (ir_data->gappi.cfg) {
+		entry->lo.fields_vapic.ga_tag = ir_data->gappi.cfg->vector &
+						0xFF;
+	} else {
+		entry->lo.fields_vapic.ga_tag = ir_data->ga_tag;
+	}
 
-	__amd_iommu_update_ga(entry, cpu, posted_intr);
+	__amd_iommu_update_ga(entry , ir_data->gappi.cfg, cpu, posted_intr);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 			      ir_data->irq_2_irte.index, entry);
@@ -4005,6 +4050,46 @@ static int amd_ir_set_vcpu_affinity(struct irq_data *data, void *info)
 			ret = amd_iommu_deactivate_guest_mode(ir_data);
 	} else {
 		ret = amd_iommu_deactivate_guest_mode(ir_data);
+		
+		if (ret)
+			return ret;
+		/*
+		 * Wait for all the gappi handlers to complete.
+		 *
+		 * The pci specification mandates that the entry is masked
+		 * when the message is modified:
+		 *
+		 * "If software changes the Address or Data value of an
+		 * entry while the entry is unmasked, the result is
+		 * undefined."
+		 *
+		 * This guarantees that the guest will disable the MSI
+		 * before changing the affinity.
+		 * (see function: "drivers/pci/pci/msi.c:pci_write_msg_msix")
+		 *
+		 * Hence guest vcpu affinity change will always cause
+		 * following sequence of operations
+		 *
+		 * Guest: Disable MSI
+		 *      kvm: del_producer
+		 *      svm: pi_update_irte
+		 *      iommu: deactivate_guest_mode
+		 *
+		 * Guest: Update MSI mmio config with new vector and dest
+		 *
+		 * Guest: Enable MSI
+		 *      kvm: add_producer
+		 *      svm: pi_update_irte
+		 *      iommu: activate_guest_mode.
+		 *
+		 * Hence when guest changes the interrupt affinity wait for
+		 * the existing  GAPPI handlers to complete before changing
+		 * cached_ga_tag. This ensures that there are no running
+		 * gappi_handlers that uses cached_ga_tag to wakeup previous
+		 * vCPU.
+		 */
+		if (ir_data->gappi.irq != -1)
+			synchronize_hardirq(ir_data->gappi.irq);
 	}
 
 	return ret;
