@@ -651,6 +651,30 @@ int irq_set_vcpu_affinity(unsigned int irq, void *vcpu_info)
 }
 EXPORT_SYMBOL_GPL(irq_set_vcpu_affinity);
 
+int irq_setup_posted_interrupt(unsigned int irq, void *vcpu_info)
+{
+	scoped_irqdesc_get_and_lock(irq, 0) {
+		struct irq_desc *desc = scoped_irqdesc;
+		struct irq_data *data;
+		struct irq_chip *chip;
+
+		data = irq_desc_get_irq_data(desc);
+		do {
+			chip = irq_data_get_irq_chip(data);
+			if (chip && chip->irq_setup_posted_interrupt)
+				break;
+
+			data = irqd_get_parent_data(data);
+		} while (data);
+
+		if (!data)
+			return -ENOSYS;
+		return chip->irq_setup_posted_interrupt(data, vcpu_info);
+	}
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(irq_setup_posted_interrupt);
+
 void __disable_irq(struct irq_desc *desc)
 {
 	if (!desc->depth++)
