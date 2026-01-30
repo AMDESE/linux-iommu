@@ -870,6 +870,36 @@ static void svm_ir_list_del(struct kvm_kernel_irqfd *irqfd)
 	raw_spin_unlock_irqrestore(&to_svm(vcpu)->ir_list_lock, flags);
 }
 
+int avic_pi_init(unsigned int host_irq)
+{
+	int ret;
+	struct amd_iommu_pi_data pi = {.is_guest_mode = 1};
+
+	if (host_irq < 0)
+		return -EINVAL;
+
+	ret = irq_setup_posted_interrupt(host_irq, &pi);
+
+	if (!ret)
+		gappi_setup_irq(&pi);
+
+	return 0;
+}
+
+void avic_pi_destroy(unsigned int host_irq)
+{
+	int ret;
+	struct amd_iommu_pi_data pi = {.is_guest_mode = 0};
+
+	if (host_irq < 0)
+		return;
+
+	ret = irq_setup_posted_interrupt(host_irq, &pi);
+
+	if (!ret)
+		gappi_destroy_irq(&pi);
+}
+
 int avic_pi_update_irte(struct kvm_kernel_irqfd *irqfd, struct kvm *kvm,
 			unsigned int host_irq, uint32_t guest_irq,
 			struct kvm_vcpu *vcpu, u32 vector)
