@@ -13,6 +13,7 @@
 #include <asm/irqdomain.h>
 #include <asm/hw_irq.h>
 #include <asm/io_apic.h>
+#include <linux/kvm_host.h>
 
 struct msi_msg;
 struct irq_alloc_info;
@@ -39,6 +40,7 @@ struct amd_iommu_pi_data {
 	bool posted_intr;
 	bool is_guest_mode;
 	void *ir_data;
+	struct kvm_vcpu *vcpu;
 };
 
 struct intel_iommu_pi_data {

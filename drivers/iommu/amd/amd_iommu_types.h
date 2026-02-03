@@ -1015,6 +1015,7 @@ struct amd_ir_data {
 	int ga_vector;
 	u64 ga_root_ptr;
 	u32 ga_tag;
+	void *vcpu;
 
 	/* GAPPI information */
 	struct gappi_info gappi;

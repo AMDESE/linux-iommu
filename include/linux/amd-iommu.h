@@ -33,6 +33,7 @@ static inline void amd_iommu_detect(void) { }
 
 /* IOMMU AVIC Function */
 extern int amd_iommu_register_ga_log_notifier(int (*notifier)(u32));
+extern int amd_iommu_register_gappi_notifier(int (*notifier)(void *));
 
 extern int amd_iommu_update_ga(void *data, int cpu, bool posted_intr);
 extern int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr);
@@ -44,6 +45,12 @@ void gappi_destroy_irq(struct amd_iommu_pi_data *pi_data);
 
 static inline int
 amd_iommu_register_ga_log_notifier(int (*notifier)(u32))
+{
+	return 0;
+}
+
+static inline int
+amd_iommu_register_gappi_notifier(int (*notifier)(void *))
 {
 	return 0;
 }
