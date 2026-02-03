@@ -272,6 +272,14 @@ static int avic_ga_log_notifier(u32 ga_tag)
 	return 0;
 }
 
+static int avic_gappi_notifier(void *vcpu)
+{
+	if (vcpu)
+		kvm_vcpu_wake_up(vcpu);
+
+	return 0;
+}
+
 static int avic_get_physical_id_table_order(struct kvm *kvm)
 {
 	/* Provision for the maximum physical ID supported in x2avic mode */
@@ -923,6 +931,7 @@ int avic_pi_update_irte(struct kvm_kernel_irqfd *irqfd, struct kvm *kvm,
 			.is_guest_mode = kvm_vcpu_apicv_active(vcpu),
 			.vapic_addr = avic_get_backing_page_address(to_svm(vcpu)),
 			.vector = vector,
+			.vcpu = vcpu,
 		};
 		struct vcpu_svm *svm = to_svm(vcpu);
 		u64 entry;
@@ -1326,12 +1335,15 @@ bool __init avic_hardware_setup(void)
 	enable_ipiv = enable_ipiv && boot_cpu_data.x86 != 0x17;
 
 	amd_iommu_register_ga_log_notifier(&avic_ga_log_notifier);
+	amd_iommu_register_gappi_notifier(&avic_gappi_notifier);
 
 	return true;
 }
 
 void avic_hardware_unsetup(void)
 {
-	if (avic)
+	if (avic) {
 		amd_iommu_register_ga_log_notifier(NULL);
+		amd_iommu_register_gappi_notifier(NULL);
+	}
 }

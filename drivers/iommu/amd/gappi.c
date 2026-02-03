@@ -166,6 +166,24 @@ int gappi_init_irqdomain(void)
 	return 0;
 }
 
+int (*iommu_gappi_notifier)(void *);
+
+int amd_iommu_register_gappi_notifier(int (*notifier)(void *))
+{
+	iommu_gappi_notifier = notifier;
+
+	/*
+	 * Ensure all in-flight IRQ handlers run to completion before returning
+	 * to the caller, e.g. to ensure module code isn't unloaded while it's
+	 * being executed in the IRQ handler.
+	 */
+	if (!notifier)
+		synchronize_rcu();
+
+	return 0;
+}
+EXPORT_SYMBOL(amd_iommu_register_gappi_notifier);
+
 static irqreturn_t gappi_handler(int irq, void *data)
 {
 	return IRQ_WAKE_THREAD;
@@ -177,13 +195,13 @@ static irqreturn_t gappi_thread_fn(int irq, void *data)
 	struct amd_ir_data *host_ir_data = (struct amd_ir_data *)data;
 	struct amd_iommu *iommu = host_ir_data->iommu;
 
-	if (!iommu_ga_log_notifier)
+	if (!iommu_gappi_notifier)
 		return IRQ_HANDLED;
 
 	pr_debug("%s: iommu=%#x, irq=%d, devid=%#x\n",
 		 __func__, iommu->devid, irq, host_ir_data->irq_2_irte.devid);
 
-	ret = iommu_ga_log_notifier(host_ir_data->ga_tag);
+	ret = iommu_gappi_notifier(host_ir_data->vcpu);
 	if (ret)
 		pr_err("GAPPI: fail to wake up vcpu (%#x)\n", host_ir_data->ga_tag);
 
