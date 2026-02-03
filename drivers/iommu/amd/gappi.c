@@ -186,11 +186,6 @@ EXPORT_SYMBOL(amd_iommu_register_gappi_notifier);
 
 static irqreturn_t gappi_handler(int irq, void *data)
 {
-	return IRQ_WAKE_THREAD;
-}
-
-static irqreturn_t gappi_thread_fn(int irq, void *data)
-{
 	int ret;
 	struct amd_ir_data *host_ir_data = (struct amd_ir_data *)data;
 	struct amd_iommu *iommu = host_ir_data->iommu;
@@ -242,9 +237,8 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 
 	pr_debug("%s: irq=%d\n", __func__, gappi->irq);
 
-	/* SURAVEE: TODO: Should we use devm_request_threaded_irq() */
-	return request_threaded_irq(gappi->irq, gappi_handler, gappi_thread_fn,
-				    IRQF_ONESHOT, gappi->irq_name, host_ir_data);
+	return request_irq(gappi->irq, gappi_handler, 0, gappi->irq_name,
+			   host_ir_data);
 }
 EXPORT_SYMBOL(gappi_setup_irq);
 
