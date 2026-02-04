@@ -218,7 +218,7 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 		return 0;
 
 	irq_info = &gappi->irq_info;
-	irq = irq_domain_alloc_irqs(gappi_irqdomain, 1, 0, irq_info);
+	irq = irq_domain_alloc_irqs(gappi_irqdomain, 1, NUMA_NO_NODE, irq_info);
 	if (irq < 0)
 		return irq;
 
