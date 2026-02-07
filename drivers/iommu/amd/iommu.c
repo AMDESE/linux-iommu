@@ -31,6 +31,7 @@
 #include <linux/irqdomain.h>
 #include <linux/percpu.h>
 #include <linux/cc_platform.h>
+#include <linux/cpumask.h>
 #include <asm/irq_remapping.h>
 #include <asm/io_apic.h>
 #include <asm/apic.h>
@@ -84,6 +85,11 @@ static struct iommu_dev_data *find_dev_data(struct amd_iommu *iommu, u16 devid);
 static bool amd_iommu_enforce_cache_coherency(struct iommu_domain *domain);
 static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					bool enable);
+
+static void amd_ir_update_irte(struct irq_data *irqd, struct amd_iommu *iommu,
+			       struct amd_ir_data *ir_data,
+			       struct irq_2_irte *irte_info,
+			       struct irq_cfg *cfg);
 
 /****************************************************************************
  *
@@ -3505,12 +3511,10 @@ static void irte_ga_set_affinity(struct amd_iommu *iommu, void *entry, u16 devid
 
 	if (!irte->lo.fields_remap.guest_mode) {
 		irte->hi.fields.vector = vector;
-		irte->lo.fields_remap.destination =
-					APICID_TO_IRTE_DEST_LO(dest_apicid);
-		irte->hi.fields.destination =
-					APICID_TO_IRTE_DEST_HI(dest_apicid);
-		modify_irte_ga(iommu, devid, index, irte);
+		irte->lo.fields_remap.destination = APICID_TO_IRTE_DEST_LO(dest_apicid);
+		irte->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest_apicid);
 	}
+	modify_irte_ga(iommu, devid, index, irte);
 }
 
 #define IRTE_ALLOCATED (~1U)
@@ -3790,11 +3794,6 @@ static void irq_remapping_free(struct irq_domain *domain, unsigned int virq,
 	irq_domain_free_irqs_common(domain, virq, nr_irqs);
 }
 
-static void amd_ir_update_irte(struct irq_data *irqd, struct amd_iommu *iommu,
-			       struct amd_ir_data *ir_data,
-			       struct irq_2_irte *irte_info,
-			       struct irq_cfg *cfg);
-
 static int irq_remapping_activate(struct irq_domain *domain,
 				  struct irq_data *irq_data, bool reserve)
 {
@@ -3876,31 +3875,61 @@ static unsigned int get_dest_apicid(u32 apicid)
        return dest;
 }
 
+extern struct irq_domain *gappi_irqdomain;
 
 static void __amd_iommu_update_ga(struct irte_ga *entry,
-				  struct irq_cfg *gappi_cfg,
-				  int cpu, bool posted_intr)
+				  int cpu, bool posted_intr,
+				  struct amd_ir_data *data)
 {
-	if (cpu >= 0) {
-		entry->lo.fields_vapic.destination =
-					APICID_TO_IRTE_DEST_LO(cpu);
-		entry->hi.fields.destination =
-					APICID_TO_IRTE_DEST_HI(cpu);
+	int ret;
+	u32 apicid;
+	struct irq_cfg *gappi_cfg = data->gappi.cfg;
+
+//	printk("DEBUG: %s: cpu=%#x, gappi_cpu=%#x, gappi_dest_apicid=%#x\n", __func__,
+//			cpu, data->gappi.cpu, gappi_cfg->dest_apicid);
+
+	if (cpu >= 0) { /* ISRUNNING */
+		struct cpumask mask;
+
+		apicid = per_cpu(x86_cpu_to_apicid, cpu);
+		if (apic->dest_mode_logical)
+			apicid = get_dest_apicid(apicid);
+
+		/*
+		 * Since cpu is provided only when vcpu is running (otherwise -1),
+		 * we need to store it to use when seting up GAPPI destination
+		 * when the vcpu is not running.
+		 */
+		data->gappi.cpu = cpu;
+
+		/*
+		 * Move GAPPI irq affinity to the current AVIC cpu destintation
+		 * SURAVEE: TODO: Need to check if the cpu is changing
+		 */
+		cpumask_clear(&mask);
+		cpumask_set_cpu(data->gappi.cpu, &mask);
+		ret = irq_set_affinity_and_hint(data->gappi.irq, &mask);
+		if (ret)
+			WARN_ON(1);
+
 		entry->lo.fields_vapic.is_run = true;
 		entry->lo.fields_vapic.ga_log_intr = false;
-	} else if (gappi_cfg) {
-		u32 dest;
-		if (apic->dest_mode_logical)
-			dest = get_dest_apicid(gappi_cfg->dest_apicid);
+		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(apicid);
+		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(apicid);
+	} else if (gappi_cfg) {/* NOT RUNNING + GAPPI*/
 
+		/*
+		 * When GappiDis is support, we can use the posted_intr to help
+		 * reduce unnecessary GAPPI interrupt.
+		 */
 		if (check_feature(FEATURE_GAPPIDISSUP))
 			entry->lo.fields_vapic.gappi_dis = !posted_intr;
 
 		entry->lo.fields_vapic.is_run = false;
-		entry->lo.fields_vapic.destination =
-					APICID_TO_IRTE_DEST_LO(dest);
-		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
-	} else {
+		entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
+		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(gappi_cfg->dest_apicid);
+		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(gappi_cfg->dest_apicid);
+	} else { /* NOT RUNNING + NOT GAPPI */
 		entry->lo.fields_vapic.is_run = false;
 		entry->lo.fields_vapic.ga_log_intr = posted_intr;
 	}
@@ -3937,7 +3966,7 @@ int amd_iommu_update_ga(void *data, int cpu, bool posted_intr)
 	if (!ir_data->iommu)
 		return -ENODEV;
 
-	__amd_iommu_update_ga(entry, ir_data->gappi.cfg, cpu, posted_intr);
+	__amd_iommu_update_ga(entry, cpu, posted_intr, ir_data);
 
 	return __modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 				ir_data->irq_2_irte.index, entry);
@@ -3967,13 +3996,12 @@ int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr)
 	entry->hi.fields.vector            = ir_data->ga_vector;
 	
 	if (ir_data->gappi.cfg) {
-		entry->lo.fields_vapic.ga_tag = ir_data->gappi.cfg->vector &
-						0xFF;
+		entry->lo.fields_vapic.ga_tag = ir_data->gappi.cfg->vector & 0xFF;
 	} else {
 		entry->lo.fields_vapic.ga_tag = ir_data->ga_tag;
 	}
 
-	__amd_iommu_update_ga(entry , ir_data->gappi.cfg, cpu, posted_intr);
+	__amd_iommu_update_ga(entry, cpu, posted_intr, ir_data);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 			      ir_data->irq_2_irte.index, entry);
@@ -4138,6 +4166,48 @@ static void amd_ir_update_irte(struct irq_data *irqd, struct amd_iommu *iommu,
 	iommu->irte_ops->set_affinity(iommu, ir_data->entry, irte_info->devid,
 				      irte_info->index, cfg->vector,
 				      cfg->dest_apicid);
+}
+
+//SURAVEE
+/*
+ * Called from gappi_set_affinity()
+ */
+int amd_ir_set_gappi_affinity(struct irq_data *data, const struct cpumask *mask, bool force)
+{
+	int ret;
+	struct irq_cfg *gappi_cfg = irqd_cfg(data);
+	struct irq_data *parent = data->parent_data;
+	struct amd_ir_data *ir_data = data->chip_data;
+	struct irq_2_irte *irte_info = &ir_data->irq_2_irte;
+	u16 devid = irte_info->devid;
+	int index = irte_info->index;
+	struct irte_ga *entry = ir_data->entry;
+	struct amd_iommu *iommu = ir_data->iommu;
+
+	if (!iommu)
+		return -ENODEV;
+
+	ret = parent->chip->irq_set_affinity(parent, mask, force);
+	if (ret < 0 || ret == IRQ_SET_MASK_OK_DONE)
+		return ret;
+
+	/* SURAVEE: Only support IRTE_GA */
+	entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
+	entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(gappi_cfg->dest_apicid);
+	entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(gappi_cfg->dest_apicid);
+
+	ret = modify_irte_ga(iommu, devid, index, entry);
+	if (ret)
+		return ret;
+
+	/*
+	 * After this point, all the interrupts will start arriving
+	 * at the new destination. So, time to cleanup the previous
+	 * vector allocation.
+	 */
+	vector_schedule_cleanup(gappi_cfg);
+
+	return IRQ_SET_MASK_OK_DONE;
 }
 
 static int amd_ir_set_affinity(struct irq_data *data,

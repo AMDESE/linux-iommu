@@ -995,6 +995,7 @@ struct irq_2_irte {
 struct gappi_info {
 	bool masked;
 	int irq;
+	int cpu;
 	struct irq_cfg *cfg;
 	unsigned char irq_name[32];
 	struct irq_alloc_info irq_info;
