@@ -9,6 +9,7 @@
 #include <linux/irq.h>
 #include <linux/msi.h>
 #include <linux/cpumask.h>
+#include <linux/smp.h>
 #include <linux/irqdomain.h>
 #include <linux/hashtable.h>
 #include <linux/amd-iommu.h>
@@ -60,7 +61,31 @@ static void gappi_mask_irq(struct irq_data *irqd)
 static int gappi_set_affinity(struct irq_data *irqd,
 			      const struct cpumask *mask, bool force)
 {
-	return -EOPNOTSUPP;
+	int cpu, ret = -EINVAL;
+	u32 apicid;
+	struct amd_ir_data *ir_data = irqd->chip_data;
+
+	if (!ir_data->cfg)
+		return ret;
+
+	/* Pick one CPU from the mask */
+	cpu = cpumask_any_and(mask, cpu_online_mask);
+	if (cpu >= nr_cpu_ids) {
+		if (!force)
+			return ret;
+
+		/* forced: fall back to CPU0 */
+		cpu = 0;
+	}
+
+	apicid = per_cpu(x86_cpu_to_apicid, cpu);
+
+//	printk("DEBUG: %s: mask=%*pbl, cpu=%d, apicid=%#x, force=%#x\n", __func__,
+//	       cpumask_pr_args(mask), cpu, apicid, force);
+
+	/* Update GAPPI APIC ID*/
+	ir_data->cfg->dest_apicid = apicid;
+	return amd_ir_set_gappi_affinity(irqd, mask, force);
 }
 
 static int gappi_set_wake(struct irq_data *irqd, unsigned int on)
@@ -207,8 +232,9 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 
 	pr_debug("%s: irq=%d\n", __func__, gappi->irq);
 
+	/* SURAVEE: TODO: Should we use devm_request_threaded_irq() */
 	return request_threaded_irq(gappi->irq, gappi_handler, gappi_thread_fn,
-			IRQF_ONESHOT, gappi->irq_name, host_ir_data);
+				    IRQF_ONESHOT, gappi->irq_name, host_ir_data);
 }
 EXPORT_SYMBOL(gappi_setup_irq);
 
