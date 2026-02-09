@@ -3908,8 +3908,8 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
 		struct cpumask mask;
 
                 if (apicid != data->gappi.apicid) {
-                        printk("DEBUG: %s: Last apicid=%d, Current apicid=%d\n",
-                                __func__, data->gappi.apicid, apicid);
+                        printk("DEBUG: %s: Last apicid=%d, Current apicid=%d, gappi_cfg->dest_apicid=%#x\n",
+                                __func__, data->gappi.apicid, apicid, gappi_cfg->dest_apicid);
 
                         /*
                         * Since apicid is provided only when vcpu is running (otherwise -1),
@@ -3944,8 +3944,8 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
 
 		entry->lo.fields_vapic.is_run = false;
 		entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
-		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(gappi_cfg->dest_apicid);
-		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(gappi_cfg->dest_apicid);
+		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(data->gappi.apicid);
+		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(data->gappi.apicid);
 	} else { /* NOT RUNNING + NOT GAPPI */
 		entry->lo.fields_vapic.is_run = false;
 		entry->lo.fields_vapic.ga_log_intr = posted_intr;
@@ -4210,8 +4210,8 @@ int amd_ir_set_gappi_affinity(struct irq_data *data, const struct cpumask *mask,
 
 	/* SURAVEE: Only support IRTE_GA */
 	entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
-	entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(gappi_cfg->dest_apicid);
-	entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(gappi_cfg->dest_apicid);
+	entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(ir_data->gappi.apicid);
+	entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(ir_data->gappi.apicid);
 
 	ret = modify_irte_ga(iommu, devid, index, entry);
 	if (ret)

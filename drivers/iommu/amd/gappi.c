@@ -62,7 +62,6 @@ static int gappi_set_affinity(struct irq_data *irqd,
 			      const struct cpumask *mask, bool force)
 {
 	int cpu, ret = -EINVAL;
-	u32 apicid;
 	struct amd_ir_data *ir_data = irqd->chip_data;
 
 	if (!ir_data->cfg)
@@ -78,13 +77,6 @@ static int gappi_set_affinity(struct irq_data *irqd,
 		cpu = 0;
 	}
 
-	apicid = per_cpu(x86_cpu_to_apicid, cpu);
-
-//	printk("DEBUG: %s: mask=%*pbl, cpu=%d, apicid=%#x, force=%#x\n", __func__,
-//	       cpumask_pr_args(mask), cpu, apicid, force);
-
-	/* Update GAPPI APIC ID*/
-	ir_data->cfg->dest_apicid = apicid;
 	return amd_ir_set_gappi_affinity(irqd, mask, force);
 }
 
