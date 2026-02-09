@@ -3878,40 +3878,56 @@ static unsigned int get_dest_apicid(u32 apicid)
 
 extern struct irq_domain *gappi_irqdomain;
 
+static int find_cpu_index_by_apicid(unsigned int target_apicid)
+{
+        int cpu_index;
+
+        for_each_possible_cpu(cpu_index) {
+                struct cpuinfo_x86 *info = &cpu_data(cpu_index);
+
+                if (info->topo.apicid == target_apicid) {
+                        pr_debug("match APIC id %u for CPU index: %d\n",
+                                 info->topo.apicid, cpu_index);
+                        return cpu_index;
+                }
+        }
+
+        return -ENODEV;
+}
+
+
 static void __amd_iommu_update_ga(struct irte_ga *entry,
-				  int cpu, bool posted_intr,
+				  int apicid, bool posted_intr,
 				  struct amd_ir_data *data)
 {
 	int ret;
-	u32 apicid;
 	struct irq_cfg *gappi_cfg = data->gappi.cfg;
 
-//	printk("DEBUG: %s: cpu=%#x, gappi_cpu=%#x, gappi_dest_apicid=%#x\n", __func__,
-//			cpu, data->gappi.cpu, gappi_cfg->dest_apicid);
-
-	if (cpu >= 0) { /* ISRUNNING */
+	if (apicid >= 0) { /* ISRUNNING */
+                int cpu;
 		struct cpumask mask;
 
-		apicid = per_cpu(x86_cpu_to_apicid, cpu);
-		if (apic->dest_mode_logical)
-			apicid = get_dest_apicid(apicid);
+                if (apicid != data->gappi.apicid) {
+                        printk("DEBUG: %s: Last apicid=%d, Current apicid=%d\n",
+                                __func__, data->gappi.apicid, apicid);
 
-		/*
-		 * Since cpu is provided only when vcpu is running (otherwise -1),
-		 * we need to store it to use when seting up GAPPI destination
-		 * when the vcpu is not running.
-		 */
-		data->gappi.cpu = cpu;
+                        /*
+                        * Since apicid is provided only when vcpu is running (otherwise -1),
+                        * we need to store it to use when seting up GAPPI destination
+                        * when the vcpu is not running.
+                        */
+                        data->gappi.apicid = apicid;
 
-		/*
-		 * Move GAPPI irq affinity to the current AVIC cpu destintation
-		 * SURAVEE: TODO: Need to check if the cpu is changing
-		 */
-		cpumask_clear(&mask);
-		cpumask_set_cpu(data->gappi.cpu, &mask);
-		ret = irq_set_affinity_and_hint(data->gappi.irq, &mask);
-		if (ret)
-			WARN_ON(1);
+                        /*
+                        * Move GAPPI irq affinity to the current AVIC destintation apicid
+                        */
+                       cpu = find_cpu_index_by_apicid(apicid);
+                        cpumask_clear(&mask);
+                        cpumask_set_cpu(cpu, &mask);
+                        ret = irq_set_affinity_and_hint(data->gappi.irq, &mask);
+                        if (ret)
+                                WARN_ON(1);
+                }
 
 		entry->lo.fields_vapic.is_run = true;
 		entry->lo.fields_vapic.ga_log_intr = false;
@@ -3953,7 +3969,7 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
  * and thus don't require an invalidation to ensure the IOMMU consumes fresh
  * information.
  */
-int amd_iommu_update_ga(void *data, int cpu, bool posted_intr)
+int amd_iommu_update_ga(void *data, int apicid, bool posted_intr)
 {
 	struct amd_ir_data *ir_data = (struct amd_ir_data *)data;
 	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
@@ -3967,14 +3983,14 @@ int amd_iommu_update_ga(void *data, int cpu, bool posted_intr)
 	if (!ir_data->iommu)
 		return -ENODEV;
 
-	__amd_iommu_update_ga(entry, cpu, posted_intr, ir_data);
+	__amd_iommu_update_ga(entry, apicid, posted_intr, ir_data);
 
 	return __modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 				ir_data->irq_2_irte.index, entry);
 }
 EXPORT_SYMBOL(amd_iommu_update_ga);
 
-int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr)
+int amd_iommu_activate_guest_mode(void *data, int apicid, bool posted_intr)
 {
 	struct amd_ir_data *ir_data = (struct amd_ir_data *)data;
 	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
@@ -4002,7 +4018,7 @@ int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr)
 		entry->lo.fields_vapic.ga_tag = ir_data->ga_tag;
 	}
 
-	__amd_iommu_update_ga(entry, cpu, posted_intr, ir_data);
+	__amd_iommu_update_ga(entry, apicid, posted_intr, ir_data);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 			      ir_data->irq_2_irte.index, entry);
