@@ -254,6 +254,7 @@ void gappi_destroy_irq(struct amd_iommu_pi_data *pi_data)
 
 	pr_debug("%s: irq=%d\n", __func__, gappi->irq);
 
+	irq_set_affinity_and_hint(gappi->irq, NULL);
 	free_irq(gappi->irq, host_ir_data);
 	irqd = irq_domain_get_irq_data(gappi_irqdomain, gappi->irq);
 	irq_domain_deactivate_irq(irqd);
