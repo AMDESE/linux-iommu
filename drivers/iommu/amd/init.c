@@ -3027,8 +3027,9 @@ static void enable_iommus_vapic(void)
 	}
 
 	if (amd_iommu_gappi &&
-	    !(check_feature(FEATURE_GAPPI) &&
-	      AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir))) {
+	    (!check_feature(FEATURE_GAPPI) ||
+	     !check_feature2(FEATURE_GAPPIDISSUP) ||
+	     !AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir))) {
 		pr_warn("GAPPI is not supported.\n");
 		amd_iommu_gappi = false;
 	}

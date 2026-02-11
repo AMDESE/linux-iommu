@@ -28,9 +28,6 @@ static void set_gappidis(struct amd_ir_data *host_ir_data, bool set)
 	struct irq_2_irte *irte_info = &host_ir_data->irq_2_irte;
 	struct irte_ga *entry = (struct irte_ga *)host_ir_data->entry;
 
-	if (!check_feature2(FEATURE_GAPPIDISSUP))
-		return;
-
 	host_ir_data->gappi.masked = set;
 
 	/* If IRTE is not in guest mode, defer until guest mode is activated */
