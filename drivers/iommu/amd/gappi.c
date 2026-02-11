@@ -104,6 +104,12 @@ static int gappi_irqdomain_alloc(struct irq_domain *domain, unsigned int virq,
 		struct irq_data *irqd = irq_domain_get_irq_data(domain, i);
 
 		irqd->chip = &gappi_controller;
+
+                /*
+                 * Note:
+                 * The irq_info is initialized in amd_ir_setup_posted_interrupt(),
+                 * which is called from avic_pi_init().
+                 */
 		irqd->hwirq = irq_info->hwirq;
 		irqd->chip_data = irq_info->data;
 		__irq_set_handler(i, handle_edge_irq, 0, "edge");
