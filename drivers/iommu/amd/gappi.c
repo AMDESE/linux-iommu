@@ -61,21 +61,12 @@ static void gappi_mask_irq(struct irq_data *irqd)
 static int gappi_set_affinity(struct irq_data *irqd,
 			      const struct cpumask *mask, bool force)
 {
-	int cpu, ret = -EINVAL;
+	int ret = -EINVAL;
+        /* See the gappi_irqdomain_alloc() */
 	struct amd_ir_data *ir_data = irqd->chip_data;
 
-	if (!ir_data->cfg)
+	if (WARN_ON(!ir_data->gappi.cfg))
 		return ret;
-
-	/* Pick one CPU from the mask */
-	cpu = cpumask_any_and(mask, cpu_online_mask);
-	if (cpu >= nr_cpu_ids) {
-		if (!force)
-			return ret;
-
-		/* forced: fall back to CPU0 */
-		cpu = 0;
-	}
 
 	return amd_ir_set_gappi_affinity(irqd, mask, force);
 }
