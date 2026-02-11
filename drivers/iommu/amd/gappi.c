@@ -232,6 +232,7 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 
 	gappi->irq = irq;
 	gappi->cfg = irq_cfg(gappi->irq);
+        gappi->apicid = -1;
 	snprintf(gappi->irq_name, sizeof(gappi->irq_name),
 		 "GAPPI-%#x-%u", host_ir_data->irq_2_irte.devid, irq);
 

@@ -3853,12 +3853,14 @@ static const struct irq_domain_ops amd_ir_domain_ops = {
 	.deactivate = irq_remapping_deactivate,
 };
 
-static unsigned int get_dest_apicid(u32 apicid)
+static unsigned int get_phys_apic_id(u32 apicid)
 {
        unsigned long bitmap, cluster;
        u32 dest = apicid;
 
-       if (x2apic_enabled()) {
+	if (!apic->dest_mode_logical) { /* Already Physical */
+		goto out;
+	} else if (x2apic_enabled()) {
                /* Logical cluster x2APIC 16 bit dest mask, 16 bit cluster id */
                bitmap  = dest & 0xFFFF;
                cluster = (dest >> 16) & 0xFFFF;
@@ -3873,6 +3875,7 @@ static unsigned int get_dest_apicid(u32 apicid)
                bitmap  = dest & 0xFF;
                dest = find_first_bit(&bitmap, 8);
        }
+out:
        return dest;
 }
 
@@ -3905,11 +3908,12 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
 
 	if (apicid >= 0) { /* ISRUNNING */
                 int cpu;
-		struct cpumask mask;
 
-                if (apicid != data->gappi.apicid) {
-                        printk("DEBUG: %s: Last apicid=%d, Current apicid=%d, gappi_cfg->dest_apicid=%#x\n",
-                                __func__, data->gappi.apicid, apicid, gappi_cfg->dest_apicid);
+                if (gappi_cfg && apicid != data->gappi.apicid) {
+			struct cpumask mask;
+
+                        pr_debug("%s: apicid=%d, gappi_cfg->dest_apicid=%#x, new apicid=%d\n",
+                                __func__, data->gappi.apicid, gappi_cfg->dest_apicid, apicid);
 
                         /*
                         * Since apicid is provided only when vcpu is running (otherwise -1),
@@ -3934,18 +3938,19 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
 		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(apicid);
 		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(apicid);
 	} else if (gappi_cfg) {/* NOT RUNNING + GAPPI*/
-
 		/*
-		 * When GappiDis is support, we can use the posted_intr to help
-		 * reduce unnecessary GAPPI interrupt.
+		 * Note:
+		 * We cannot use apicid from data->gappi.apicid since it might not
+		 * have been initialized yet. Therefore, we need to program the IRTE
+		 * using irq_cfg.dest_apicid, which could be logical or physical.
 		 */
-		if (check_feature(FEATURE_GAPPIDISSUP))
-			entry->lo.fields_vapic.gappi_dis = !posted_intr;
+		u32 dest = get_phys_apic_id(gappi_cfg->dest_apicid);
 
 		entry->lo.fields_vapic.is_run = false;
+                entry->lo.fields_vapic.gappi_dis = !posted_intr;
 		entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
-		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(data->gappi.apicid);
-		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(data->gappi.apicid);
+		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
+		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(dest);
 	} else { /* NOT RUNNING + NOT GAPPI */
 		entry->lo.fields_vapic.is_run = false;
 		entry->lo.fields_vapic.ga_log_intr = posted_intr;
@@ -4193,6 +4198,7 @@ static void amd_ir_update_irte(struct irq_data *irqd, struct amd_iommu *iommu,
 int amd_ir_set_gappi_affinity(struct irq_data *data, const struct cpumask *mask, bool force)
 {
 	int ret;
+	u32 dest;
 	struct irq_cfg *gappi_cfg = irqd_cfg(data);
 	struct irq_data *parent = data->parent_data;
 	struct amd_ir_data *ir_data = data->chip_data;
@@ -4209,10 +4215,13 @@ int amd_ir_set_gappi_affinity(struct irq_data *data, const struct cpumask *mask,
 	if (ret < 0 || ret == IRQ_SET_MASK_OK_DONE)
 		return ret;
 
+	/* Must be after setting irq affinity */
+	dest = get_phys_apic_id(gappi_cfg->dest_apicid);
+
 	/* SURAVEE: Only support IRTE_GA */
 	entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
-	entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(ir_data->gappi.apicid);
-	entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(ir_data->gappi.apicid);
+	entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
+	entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(dest);
 
 	ret = modify_irte_ga(iommu, devid, index, entry);
 	if (ret)
