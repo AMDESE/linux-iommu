@@ -3946,8 +3946,13 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
 		 */
 		u32 dest = get_phys_apic_id(gappi_cfg->dest_apicid);
 
+		/*
+		 * Need to make sure gappi interrupt is disabled if it is masked
+		 * (See set_gappidis() )
+		 */
+		entry->lo.fields_vapic.gappi_dis = (!posted_intr || data->gappi.masked);
+
 		entry->lo.fields_vapic.is_run = false;
-                entry->lo.fields_vapic.gappi_dis = !posted_intr;
 		entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
 		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
 		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(dest);

@@ -204,6 +204,10 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 	struct irq_alloc_info *irq_info;
 	struct amd_ir_data *host_ir_data = pi_data->ir_data;
 	struct gappi_info *gappi = &host_ir_data->gappi;
+	struct irq_affinity_desc affinity = {
+		.mask = CPU_MASK_ALL,
+		.is_managed = 1, /* kernel managed interrupt */
+	};
 
 	if (!gappi_irqdomain || !pi_data->is_guest_mode)
 		return 0;
@@ -212,7 +216,11 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 		return 0;
 
 	irq_info = &gappi->irq_info;
-	irq = irq_domain_alloc_irqs(gappi_irqdomain, 1, NUMA_NO_NODE, irq_info);
+	/*
+	 * Instead of irq_domain_alloc_irqs, call __irq_domain_alloc_irqs
+	 * in order to set the interrupt as kernel managed
+	 */
+	irq = __irq_domain_alloc_irqs(gappi_irqdomain, -1, 1, NUMA_NO_NODE, irq_info, false, &affinity);
 	if (irq < 0)
 		return irq;
 
