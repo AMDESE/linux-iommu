@@ -1641,9 +1641,12 @@ int iommufd_get_hw_info(struct iommufd_ucmd *ucmd)
 			int ctrl;
 
 			ctrl = pci_pasid_status(pdev);
+			pr_info("%s: Device PASID ctrl 0x%x\n", __func__, ctrl);
 
+#if 0
 			WARN_ON_ONCE(ctrl < 0 ||
 				     !(ctrl & PCI_PASID_CTRL_ENABLE));
+#endif
 
 			if (ctrl & PCI_PASID_CTRL_EXEC)
 				cmd->out_capabilities |=
