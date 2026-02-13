@@ -457,8 +457,10 @@ static void iommu_disable(struct amd_iommu *iommu)
 	iommu_feature_disable(iommu, CONTROL_EVT_LOG_EN);
 
 	/* Disable IOMMU GA_LOG */
-	iommu_feature_disable(iommu, CONTROL_GALOG_EN);
-	iommu_feature_disable(iommu, CONTROL_GAINT_EN);
+	if (!amd_iommu_gappi) {
+		iommu_feature_disable(iommu, CONTROL_GALOG_EN);
+		iommu_feature_disable(iommu, CONTROL_GAINT_EN);
+	}
 
 	/* Disable IOMMU PPR logging */
 	iommu_feature_disable(iommu, CONTROL_PPRLOG_EN);
@@ -791,6 +793,9 @@ void amd_iommu_restart_event_logging(struct amd_iommu *iommu)
  */
 void amd_iommu_restart_ga_log(struct amd_iommu *iommu)
 {
+	if (amd_iommu_gappi)
+		return;
+
 	amd_iommu_restart_log(iommu, "GA", CONTROL_GAINT_EN,
 			      CONTROL_GALOG_EN, MMIO_STATUS_GALOG_RUN_MASK,
 			      MMIO_STATUS_GALOG_OVERFLOW_MASK);
@@ -938,7 +943,6 @@ static int iommu_ga_log_enable(struct amd_iommu *iommu)
 		    &entry, sizeof(entry));
 	writel(0x00, iommu->mmio_base + MMIO_GA_HEAD_OFFSET);
 	writel(0x00, iommu->mmio_base + MMIO_GA_TAIL_OFFSET);
-
 
 	iommu_feature_enable(iommu, CONTROL_GAINT_EN);
 	iommu_feature_enable(iommu, CONTROL_GALOG_EN);
@@ -2995,8 +2999,10 @@ static void enable_iommus_vapic(void)
 		if (!(status & MMIO_STATUS_GALOG_RUN_MASK))
 			continue;
 
-		iommu_feature_disable(iommu, CONTROL_GALOG_EN);
-		iommu_feature_disable(iommu, CONTROL_GAINT_EN);
+		if (!amd_iommu_gappi) {
+			iommu_feature_disable(iommu, CONTROL_GALOG_EN);
+			iommu_feature_disable(iommu, CONTROL_GAINT_EN);
+		}
 
 		/*
 		 * Need to set and poll check the GALOGRun bit to zero before
@@ -3044,12 +3050,13 @@ static void enable_iommus_vapic(void)
 
 	/* Enabling GAM and SNPAVIC support */
 	for_each_iommu(iommu) {
-		if (amd_iommu_gappi)
+		if (amd_iommu_gappi) {
 			iommu_feature_enable(iommu, CONTROL_GAPPI_EN);
-
+		} else {
 		if (iommu_init_ga_log(iommu) ||
 		    iommu_ga_log_enable(iommu))
 			return;
+		}
 
 		iommu_feature_enable(iommu, CONTROL_GAM_EN);
 		if (amd_iommu_snp_en)
