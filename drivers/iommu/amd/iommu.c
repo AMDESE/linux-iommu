@@ -3897,6 +3897,7 @@ static int find_cpu_index_by_apicid(unsigned int target_apicid)
         return -ENODEV;
 }
 
+extern bool amd_iommu_gappi;
 
 static void __amd_iommu_update_ga(struct irte_ga *entry,
 				  int apicid, bool posted_intr,
@@ -3952,12 +3953,14 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
 		entry->lo.fields_vapic.gappi_dis = (!posted_intr || data->gappi.masked);
 
 		entry->lo.fields_vapic.is_run = false;
+		entry->lo.fields_vapic.ga_log_intr = false;
 		entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
 		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
 		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(dest);
 	} else { /* NOT RUNNING + NOT GAPPI */
 		entry->lo.fields_vapic.is_run = false;
-		entry->lo.fields_vapic.ga_log_intr = posted_intr;
+		if (!amd_iommu_gappi)
+			entry->lo.fields_vapic.ga_log_intr = posted_intr;
 	}
 }
 
