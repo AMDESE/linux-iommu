@@ -94,8 +94,10 @@ static int gappi_irqdomain_alloc(struct irq_domain *domain, unsigned int virq,
 		return -EINVAL;
 
 	ret = irq_domain_alloc_irqs_parent(domain, virq, nr_irqs, irq_info);
-	if (ret < 0)
+	if (ret < 0) {
+		pr_err("%s: Failing to allocate irq from parent. ret=%d", __func__, ret);
 		return ret;
+	}
 
 	for (i = virq; i < virq + nr_irqs; i++) {
 		struct irq_data *irqd = irq_domain_get_irq_data(domain, i);
@@ -206,7 +208,12 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 	struct gappi_info *gappi = &host_ir_data->gappi;
 	struct irq_affinity_desc affinity = {
 		.mask = CPU_MASK_ALL,
-		.is_managed = 1, /* kernel managed interrupt */
+		/*
+		 * SURAVEEE: FIXME:
+		 * If is_manage=1, __irq_domain_alloc_irqs() failing from parent domain
+		 * w/ -ENOSPC for 768 vcpus from parent domain.
+		 */
+		.is_managed = 0, /* kernel managed interrupt */
 	};
 
 	if (!gappi_irqdomain || !pi_data->is_guest_mode)
@@ -220,9 +227,12 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 	 * Instead of irq_domain_alloc_irqs, call __irq_domain_alloc_irqs
 	 * in order to set the interrupt as kernel managed
 	 */
-	irq = __irq_domain_alloc_irqs(gappi_irqdomain, -1, 1, NUMA_NO_NODE, irq_info, false, &affinity);
-	if (irq < 0)
+	irq = __irq_domain_alloc_irqs(gappi_irqdomain, -1, 1, NUMA_NO_NODE,
+				      irq_info, false, &affinity);
+	if (irq < 0) {
+		pr_err("%s: Failed to allocate irq=%d\n", __func__, irq);
 		return irq;
+	}
 
 	irqd = irq_domain_get_irq_data(gappi_irqdomain, irq);
 	ret = irq_domain_activate_irq(irqd, 0);
@@ -238,7 +248,8 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 	snprintf(gappi->irq_name, sizeof(gappi->irq_name),
 		 "GAPPI-%#x-%u", host_ir_data->irq_2_irte.devid, irq);
 
-	pr_debug("%s: irq=%d\n", __func__, gappi->irq);
+	pr_debug("%s: irq=%d, gappi_cfg.apicid=%#x\n", __func__,
+		gappi->irq, gappi->cfg->dest_apicid);
 
 	return request_irq(gappi->irq, gappi_handler, 0, gappi->irq_name,
 			   host_ir_data);
@@ -257,12 +268,22 @@ void gappi_destroy_irq(struct amd_iommu_pi_data *pi_data)
 	if (!gappi || gappi->irq < 0)
 		return;
 
-	pr_debug("%s: irq=%d\n", __func__, gappi->irq);
+	pr_debug("%s: irq=%d, gappi_cfg.apicid=%#x\n", __func__,
+		gappi->irq, gappi->cfg->dest_apicid);
+
+	/* Drain any in-flight handler */
+	synchronize_irq(gappi->irq);
 
 	irq_set_affinity_and_hint(gappi->irq, NULL);
+
+	/* Remove handler */
 	free_irq(gappi->irq, host_ir_data);
+
+	/* Deactivate domain programming */
 	irqd = irq_domain_get_irq_data(gappi_irqdomain, gappi->irq);
 	irq_domain_deactivate_irq(irqd);
+
+	/* Free domain mapping + descriptor */
 	irq_domain_free_irqs(gappi->irq, 1);
 
 	gappi->irq = -1;

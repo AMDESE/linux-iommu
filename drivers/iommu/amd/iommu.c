@@ -3752,6 +3752,7 @@ static int irq_remapping_alloc(struct irq_domain *domain, unsigned int virq,
 		data->iommu = iommu;
 		data->gappi.masked = 0;
 		data->gappi.irq = -1;
+		data->gappi.apicid = -1;
 		irq_data->hwirq = (devid << 16) + i;
 		irq_data->chip_data = data;
 		irq_data->chip = &amd_ir_chip;
@@ -3912,7 +3913,7 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
                 if (gappi_cfg && apicid != data->gappi.apicid) {
 			struct cpumask mask;
 
-                        pr_debug("%s: apicid=%d, gappi_cfg->dest_apicid=%#x, new apicid=%d\n",
+                        pr_debug("%s: apicid=%#x, gappi_cfg->dest_apicid=%#x, new apicid=%d\n",
                                 __func__, data->gappi.apicid, gappi_cfg->dest_apicid, apicid);
 
                         /*
@@ -3931,20 +3932,23 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
                         ret = irq_set_affinity_and_hint(data->gappi.irq, &mask);
                         if (ret)
                                 WARN_ON(1);
-                }
+		}
 
 		entry->lo.fields_vapic.is_run = true;
+		entry->lo.fields_vapic.gappi_dis = true;
 		entry->lo.fields_vapic.ga_log_intr = false;
 		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(apicid);
 		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(apicid);
 	} else if (gappi_cfg) {/* NOT RUNNING + GAPPI*/
 		/*
-		 * Note:
 		 * We cannot use apicid from data->gappi.apicid since it might not
-		 * have been initialized yet. Therefore, we need to program the IRTE
+		 * have been initialized/updated yet. Therefore, we need to program the IRTE
 		 * using irq_cfg.dest_apicid, which could be logical or physical.
 		 */
 		u32 dest = get_phys_apic_id(gappi_cfg->dest_apicid);
+
+		/* Need to update the stored apicid since it could have been changed */
+		data->gappi.apicid = dest;
 
 		/*
 		 * Need to make sure gappi interrupt is disabled if it is masked
@@ -3958,9 +3962,11 @@ static void __amd_iommu_update_ga(struct irte_ga *entry,
 		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
 		entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(dest);
 	} else { /* NOT RUNNING + NOT GAPPI */
+		/* Invalid GAPPI state */
+		WARN_ON(amd_iommu_gappi);
+
 		entry->lo.fields_vapic.is_run = false;
-		if (!amd_iommu_gappi)
-			entry->lo.fields_vapic.ga_log_intr = posted_intr;
+		entry->lo.fields_vapic.ga_log_intr = posted_intr;
 	}
 }
 
@@ -4226,6 +4232,7 @@ int amd_ir_set_gappi_affinity(struct irq_data *data, const struct cpumask *mask,
 	dest = get_phys_apic_id(gappi_cfg->dest_apicid);
 
 	/* SURAVEE: Only support IRTE_GA */
+	entry->lo.fields_vapic.gappi_dis = false;
 	entry->lo.fields_vapic.ga_tag = (gappi_cfg->vector & 0xFF);
 	entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(dest);
 	entry->lo.fields_vapic.destination = APICID_TO_IRTE_DEST_LO(dest);
