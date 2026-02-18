@@ -4228,6 +4228,14 @@ int amd_ir_set_gappi_affinity(struct irq_data *data, const struct cpumask *mask,
 	ret = parent->chip->irq_set_affinity(parent, mask, force);
 	if (ret < 0 || ret == IRQ_SET_MASK_OK_DONE)
 		return ret;
+	
+	/*
+	 * We should not program IRTE if guest mode is disabled or vCPU is
+	 * running
+	 */
+	if (entry->lo.fields_vapic.guest_mode == 0 ||
+	    entry->lo.fields_vapic.is_run == 1)
+		goto out_vector_cleanup;
 
 	/* Must be after setting irq affinity */
 	dest = get_phys_apic_id(gappi_cfg->dest_apicid);
@@ -4247,6 +4255,7 @@ int amd_ir_set_gappi_affinity(struct irq_data *data, const struct cpumask *mask,
 	 * at the new destination. So, time to cleanup the previous
 	 * vector allocation.
 	 */
+out_vector_cleanup:
 	vector_schedule_cleanup(gappi_cfg);
 
 	return IRQ_SET_MASK_OK_DONE;
