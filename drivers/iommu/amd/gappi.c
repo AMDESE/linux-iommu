@@ -206,15 +206,6 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 	struct irq_alloc_info *irq_info;
 	struct amd_ir_data *host_ir_data = pi_data->ir_data;
 	struct gappi_info *gappi = &host_ir_data->gappi;
-	struct irq_affinity_desc affinity = {
-		.mask = CPU_MASK_ALL,
-		/*
-		 * SURAVEEE: FIXME:
-		 * If is_manage=1, __irq_domain_alloc_irqs() failing from parent domain
-		 * w/ -ENOSPC for 768 vcpus from parent domain.
-		 */
-		.is_managed = 0, /* kernel managed interrupt */
-	};
 
 	if (!gappi_irqdomain || !pi_data->is_guest_mode)
 		return 0;
@@ -223,12 +214,7 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 		return 0;
 
 	irq_info = &gappi->irq_info;
-	/*
-	 * Instead of irq_domain_alloc_irqs, call __irq_domain_alloc_irqs
-	 * in order to set the interrupt as kernel managed
-	 */
-	irq = __irq_domain_alloc_irqs(gappi_irqdomain, -1, 1, NUMA_NO_NODE,
-				      irq_info, false, &affinity);
+	irq = irq_domain_alloc_irqs(gappi_irqdomain, 1, NUMA_NO_NODE, irq_info);
 	if (irq < 0) {
 		pr_err("%s: Failed to allocate irq=%d\n", __func__, irq);
 		return irq;
@@ -251,7 +237,7 @@ int gappi_setup_irq(struct amd_iommu_pi_data *pi_data)
 	pr_debug("%s: irq=%d, gappi_cfg.apicid=%#x\n", __func__,
 		gappi->irq, gappi->cfg->dest_apicid);
 
-	return request_irq(gappi->irq, gappi_handler, 0, gappi->irq_name,
+	return request_irq(gappi->irq, gappi_handler, IRQF_NOBALANCING, gappi->irq_name,
 			   host_ir_data);
 }
 EXPORT_SYMBOL(gappi_setup_irq);
