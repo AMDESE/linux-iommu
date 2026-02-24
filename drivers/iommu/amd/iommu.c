@@ -3233,6 +3233,57 @@ static bool amd_iommu_enforce_cache_coherency(struct iommu_domain *domain)
 	return true;
 }
 
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+
+void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
+						  u16 gid, u32 devid)
+{
+	writeq((devid & 0xFFFFULL) << 16,
+	       VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) +
+	       VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
+}
+
+void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
+				 struct protection_domain *pdom,
+				 u32 devid)
+{
+	u64 tmp0 = 0ULL, tmp1 = 0ULL;
+	struct pt_iommu_amdv1_hw_info pt_info;
+	struct dev_table_entry *dev_table = get_dev_table(iommu);
+
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+
+	pr_debug("%s: gid=%#x, iommu_devid=%#x, devid=%#x, host_pt_root=%#llx, mode=%#x\n",
+		 __func__, gid, iommu->devid, devid, pt_info.host_pt_root, pt_info.mode);
+
+	/* Setup DTE for v1 page table at the offset specified by devid */
+	tmp0 |=	FIELD_PREP(DTE_HOST_TRP, pt_info.host_pt_root >> 12);
+	tmp0 |= FIELD_PREP(DTE_MODE_MASK, pt_info.mode);
+	tmp0 |= (DTE_FLAG_IR | DTE_FLAG_IW | DTE_FLAG_TV | DTE_FLAG_V);
+	tmp1 |= FIELD_PREP(DTE_DOMID_MASK, pdom->id);
+
+	dev_table[devid].data[0] = tmp0;
+	dev_table[devid].data[1] = tmp1;
+
+	iommu_flush_dte(iommu, devid);
+	iommu_completion_wait(iommu);
+}
+
+void amd_iommu_clear_translate_dte(struct amd_iommu *iommu, u16 gid, u32 devid)
+{
+	struct dev_table_entry *dev_table = get_dev_table(iommu);
+
+	pr_debug("%s: gid=%#x, iommu_devid=%#x, devid=%#x\n",
+		 __func__, gid, iommu->devid, devid);
+
+	dev_table[devid].data[0] = 0ULL;
+	dev_table[devid].data[1] = 0ULL;
+
+	iommu_flush_dte(iommu, devid);
+	iommu_completion_wait(iommu);
+}
+#endif /* CONFIG_AMD_IOMMU_IOMMUFD */
+
 const struct iommu_ops amd_iommu_ops = {
 	.capable = amd_iommu_capable,
 	.hw_info = amd_iommufd_hw_info,
