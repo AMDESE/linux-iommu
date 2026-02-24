@@ -71,8 +71,27 @@ static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 		release_mem_region(iommu->vf_base_phys, VIOMMU_VF_MMIO_MAP_SIZE);
 }
 
+static void viommu_free_self_dev_data(struct amd_iommu *iommu, bool clear_dte)
+{
+	struct iommu_dev_data *dev_data = iommu->viommu_dev_data;
+
+	if (!dev_data)
+		return;
+
+	if (clear_dte) {
+		struct dev_table_entry new = {};
+
+		amd_iommu_make_clear_dte(iommu, dev_data->devid, &new);
+		amd_iommu_update_dte(iommu, dev_data, &new);
+	}
+
+	amd_iommu_free_dev_data(iommu, dev_data);
+	iommu->viommu_dev_data = NULL;
+}
+
 void __init amd_viommu_uninit(struct amd_iommu *iommu)
 {
+	viommu_free_self_dev_data(iommu, true);
 	amd_viommu_gid_ida_fini(iommu);
 	amd_viommu_vf_vfcntl_unmap(iommu);
 }
@@ -303,21 +322,39 @@ u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
 }
 EXPORT_SYMBOL(amd_viommu_get_vfmmio_addr);
 
+static void set_dte_ipa(struct amd_iommu *iommu, struct dev_table_entry *new)
+{
+	struct pt_iommu_amdv1_hw_info pt_info;
+	struct protection_domain *pdom = iommu->viommu_pdom;
+
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+	amd_iommu_set_dte_v1(iommu->viommu_dev_data, pdom, pdom->id, &pt_info, new);
+}
+
 int __init amd_viommu_init(struct amd_iommu *iommu)
 {
 	int ret;
+	bool dte_set = false;
+	struct dev_table_entry new = {};
 
 	if (!amd_iommu_viommu ||
 	    !check_feature(FEATURE_VIOMMU))
 		return 0;
 
+	iommu->viommu_dev_data = amd_iommu_alloc_dev_data(iommu, iommu->devid);
+	if (!iommu->viommu_dev_data) {
+		pr_err("%s: Failed to allocate dev_data\n", __func__);
+		return -ENOMEM;
+	}
+	iommu->viommu_dev_data->dev = &iommu->dev->dev;
+
 	ret = viommu_init_pci_vsc(iommu);
 	if (ret)
-		return ret;
+		goto err_dev_data;
 
 	ret = viommu_vf_vfcntl_init(iommu);
 	if (ret)
-		return ret;
+		goto err_dev_data;
 
 	amd_viommu_gid_ida_init(iommu);
 
@@ -325,5 +362,15 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 	if (ret)
 		return ret;
 
+	/* Set DTE for IOMMU device */
+	amd_iommu_make_clear_dte(iommu, iommu->devid, &new);
+	set_dte_ipa(iommu, &new);
+	amd_iommu_update_dte(iommu, iommu->viommu_dev_data, &new);
+	dte_set = true;
+
 	return 0;
+
+err_dev_data:
+	viommu_free_self_dev_data(iommu, dte_set);
+	return ret;
 }

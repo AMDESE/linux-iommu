@@ -406,6 +406,29 @@ struct iommu_dev_data *amd_iommu_alloc_dev_data(struct amd_iommu *iommu, u16 dev
 	return dev_data;
 }
 
+void amd_iommu_free_dev_data(struct amd_iommu *iommu,
+			     struct iommu_dev_data *dev_data)
+{
+	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
+	struct llist_node *prev = NULL, *node;
+
+	if (!dev_data)
+		return;
+
+	for (node = pci_seg->dev_data_list.first; node;
+	     prev = node, node = node->next) {
+		if (node == &dev_data->dev_data_list) {
+			if (prev)
+				prev->next = node->next;
+			else
+				pci_seg->dev_data_list.first = node->next;
+			break;
+		}
+	}
+
+	kfree(dev_data);
+}
+
 struct iommu_dev_data *search_dev_data(struct amd_iommu *iommu, u16 devid)
 {
 	struct iommu_dev_data *dev_data;
