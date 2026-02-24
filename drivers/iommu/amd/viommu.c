@@ -175,6 +175,35 @@ u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
 }
 EXPORT_SYMBOL(amd_viommu_get_vfmmio_addr);
 
+/* Set DTE for IOMMU device */
+static void set_iommu_dte(struct amd_iommu *iommu)
+{
+	u64 dte0, dte1;
+	u16 devid = iommu->devid;
+	struct pt_iommu_amdv1_hw_info pt_info;
+	struct protection_domain *pdom = iommu->viommu_pdom;
+	struct dev_table_entry *dev_table = get_dev_table(iommu);
+
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+
+	pr_debug("%s: host_pt_root=%#llx, mode=%#x\n",
+		 __func__, pt_info.host_pt_root, pt_info.mode);
+
+	dte0 = FIELD_PREP(DTE_HOST_TRP, pt_info.host_pt_root >> 12);
+	dte0 |= (pt_info.mode & DEV_ENTRY_MODE_MASK) << DEV_ENTRY_MODE_SHIFT;
+	dte0 |= DTE_FLAG_IR | DTE_FLAG_IW | DTE_FLAG_V | DTE_FLAG_TV;
+
+	dte1 = dev_table[devid].data[1];
+	dte1 &= ~DTE_DOMID_MASK;
+	dte1 |= pdom->id;
+
+	dev_table[devid].data[1] = dte1;
+	dev_table[devid].data[0] = dte0;
+
+	iommu_flush_dte(iommu, devid);
+	amd_iommu_completion_wait(iommu);
+}
+
 int __init amd_viommu_init(struct amd_iommu *iommu)
 {
 	int ret;
@@ -194,6 +223,8 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 	ret = viommu_private_space_init(iommu);
 	if (ret)
 		return ret;
+
+	set_iommu_dte(iommu);
 
 	return 0;
 }
