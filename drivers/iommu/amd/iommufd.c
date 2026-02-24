@@ -151,6 +151,8 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	pr_debug("%s: gid=%#x, iommu_devid=%#x, hdev_id=%#x, gdev_id=%#x\n", __func__,
 			 dev_data->gid, aviommu->iommu_devid, pci_dev_id(pdev), dev_data->gDevId);
 
+	amd_viommu_set_device_mapping(iommu, pci_dev_id(pdev), dev_data->gid, dev_data->gDevId);
+
 	return 0;
 }
 
