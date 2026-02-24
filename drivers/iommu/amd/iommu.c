@@ -1803,6 +1803,22 @@ static int domain_flush_pages_v1(struct protection_domain *pdom,
 	return ret;
 }
 
+int amd_iommu_flush_private_vm_region(struct amd_iommu *iommu, struct protection_domain *pdom,
+				      u64 address, size_t size)
+{
+	int ret;
+	struct iommu_cmd cmd;
+
+	build_inv_iommu_pages(&cmd, address, size, pdom->id, 0, false);
+
+	ret = iommu_queue_command(iommu, &cmd);
+	if (ret)
+		return ret;
+
+	amd_iommu_completion_wait(iommu);
+	return ret;
+}
+
 /*
  * TLB invalidation function which is called from the mapping functions.
  * It flushes range of PTEs of the domain.

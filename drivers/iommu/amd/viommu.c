@@ -133,8 +133,44 @@ viommu_domain_alloc(struct amd_iommu *iommu)
 	return &domain->domain;
 }
 
+static void *alloc_private_subregion(struct amd_iommu *iommu, u64 base, size_t size)
+{
+	int ret;
+	void *region;
+	size_t mapped;
+	int nid = iommu && iommu->dev ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
+
+	region = (void *)iommu_alloc_pages_node_sz(nid, GFP_KERNEL | __GFP_ZERO, size);
+	if (!region)
+		return NULL;
+
+	ret = set_memory_uc((unsigned long)region, size >> PAGE_SHIFT);
+	if (ret)
+		goto err_out;
+
+	ret = pt_iommu_amdv1_map_pages(&iommu->viommu_pdom->domain, base,
+				     iommu_virt_to_phys(region), PAGE_SIZE, (size / PAGE_SIZE),
+				     IOMMU_PROT_IR | IOMMU_PROT_IW, GFP_KERNEL, &mapped);
+
+	if (ret)
+		goto err_out;
+
+	pr_debug("%s: base=%#llx, size=%#lx, subregion=%#llx(%#llx)\n",
+		 __func__, base, size, (unsigned long long)region, iommu_virt_to_phys(region));
+
+	amd_iommu_flush_private_vm_region(iommu, iommu->viommu_pdom, base, size);
+
+	return region;
+
+err_out:
+	free_pages((unsigned long)region, get_order(size));
+	return NULL;
+}
+
 static int viommu_private_space_init(struct amd_iommu *iommu)
 {
+	int i;
+	u64 base;
 	struct iommu_domain *dom;
 	struct protection_domain *pdom;
 	struct pt_iommu_amdv1_hw_info pt_info;
@@ -146,11 +182,25 @@ static int viommu_private_space_init(struct amd_iommu *iommu)
 	dom = viommu_domain_alloc(iommu);
 	if (!dom) {
 		pr_err("%s: Failed to initialize private space\n", __func__);
-		goto err_out;
+		return -ENOMEM;
 	}
 
 	pdom = to_pdomain(dom);
 	iommu->viommu_pdom = pdom;
+
+	/*
+	 * Each private region requires to 8MB of memory to be allocated
+	 * and mapped. Split the region into 4 x 2MB-subregion.
+	 */
+	for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++) {
+		base = VIOMMU_PRIV_REGION_BASE + (i * VIOMMU_PRIV_SUBREGION_SIZE);
+		iommu->viommu_priv_region[i] = alloc_private_subregion(iommu, base,
+								       VIOMMU_PRIV_SUBREGION_SIZE);
+		if (!iommu->viommu_priv_region[i]) {
+			pr_err("%s: Failed to allocate vIOMMU private subregion %d\n", __func__, i);
+			goto err_out;
+		}
+	}
 
 	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
 	pr_debug("%s: devid=%#x, pte_root=%#llx\n",
@@ -159,6 +209,11 @@ static int viommu_private_space_init(struct amd_iommu *iommu)
 
 	return 0;
 err_out:
+	for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++) {
+		if (iommu->viommu_priv_region[i])
+			free_pages((unsigned long)iommu->viommu_priv_region[i],
+				    get_order(VIOMMU_PRIV_SUBREGION_SIZE));
+	}
 	if (dom)
 		amd_iommu_domain_free(dom);
 	return -ENOMEM;
