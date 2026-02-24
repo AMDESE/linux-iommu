@@ -217,7 +217,12 @@ void amd_iommu_update_dte(struct amd_iommu *iommu,
 			     struct dev_table_entry *new)
 {
 	update_dte256(iommu, dev_data, new);
-	clone_aliases(iommu, dev_data->dev);
+	/*
+	 * Synthetic DTEs (vIOMMU self, translate-device-id) leave
+	 * dev_data->dev NULL so clone_aliases() is skipped.
+	 */
+	if (dev_data->dev)
+		clone_aliases(iommu, dev_data->dev);
 	device_flush_dte(iommu, dev_data);
 	iommu_completion_wait(iommu);
 }
@@ -391,14 +396,13 @@ static struct amd_iommu *rlookup_amd_iommu(struct device *dev)
 }
 
 /*
- * Allocate an immortal per-devid object stored in pci_seg->dev_data_xa.
- * These are never erased: amd_iommu_release_device() keeps them for
- * replug, and IRQ/DTE paths look them up locklessly via xa_load().
+ * Allocate a synthetic DTE object that is not inserted into
+ * pci_seg->dev_data_xa. Lifetime is owned by the caller (vIOMMU
+ * self DTE or translate-device-id).
  */
-static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
+struct iommu_dev_data *amd_iommu_alloc_dev_data(u16 devid)
 {
-	struct iommu_dev_data *dev_data, *old;
-	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
+	struct iommu_dev_data *dev_data;
 
 	dev_data = kzalloc_obj(*dev_data);
 	if (!dev_data)
@@ -408,6 +412,22 @@ static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
 	spin_lock_init(&dev_data->dte_lock);
 	dev_data->devid = devid;
 	ratelimit_default_init(&dev_data->rs);
+	return dev_data;
+}
+
+/*
+ * Allocate an immortal per-devid object stored in pci_seg->dev_data_xa.
+ * These are never erased: amd_iommu_release_device() keeps them for
+ * replug, and IRQ/DTE paths look them up locklessly via xa_load().
+ */
+static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
+{
+	struct iommu_dev_data *dev_data, *old;
+	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
+
+	dev_data = amd_iommu_alloc_dev_data(devid);
+	if (!dev_data)
+		return NULL;
 
 	old = xa_cmpxchg(&pci_seg->dev_data_xa, devid, NULL, dev_data,
 			 GFP_KERNEL);
@@ -426,6 +446,22 @@ static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
 struct iommu_dev_data *search_dev_data(struct amd_iommu *iommu, u16 devid)
 {
 	return xa_load(&iommu->pci_seg->dev_data_xa, devid);
+}
+
+void amd_iommu_free_dev_data(struct amd_iommu *iommu,
+			     struct iommu_dev_data *dev_data)
+{
+	if (!dev_data)
+		return;
+
+	/*
+	 * PCI/alias objects in the xarray are immortal. Never kfree
+	 * those; synthetics must not be stored there.
+	 */
+	if (WARN_ON_ONCE(search_dev_data(iommu, dev_data->devid) == dev_data))
+		return;
+
+	kfree(dev_data);
 }
 
 static int clone_alias(struct pci_dev *pdev_origin, u16 alias, void *data)
@@ -1826,7 +1862,11 @@ static int device_flush_dte(struct amd_iommu *iommu, struct iommu_dev_data *dev_
 	u16 alias;
 	int ret;
 
-	if (dev_is_pci(dev_data->dev))
+	/*
+	 * Synthetic DTEs leave dev_data->dev NULL; flush iommu->devid
+	 * rather than walking PCI DMA aliases.
+	 */
+	if (dev_data->dev && dev_is_pci(dev_data->dev))
 		pdev = to_pci_dev(dev_data->dev);
 
 	if (pdev)
@@ -2770,6 +2810,51 @@ static spinlock_t *amd_iommu_get_top_lock(struct pt_iommu *iommupt)
 	return &pdom->lock;
 }
 
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+/*
+ * The vIOMMU private IPA domain programs a synthetic DTE for the
+ * IOMMU's own requester ID so hardware can DMA to backing store.
+ * That object is not on pdom->dev_list: it is not an IOMMU-API
+ * attach, and walkers such as rlookup and clone_aliases assume a
+ * real struct device.
+ *
+ * amd_iommu_change_top() therefore misses it. Early maps fit under
+ * the initial page-table top (PT_FEAT_DYNAMIC_TOP). Later DevID and
+ * DomID maps at high IPA call increase_top(); the old root stays
+ * live as a child of the new one, but the self DTE still holds the
+ * old MODE and would not translate those IOVAs.
+ *
+ * Walk iommu_array (from amd_iommu_pdom_bind_iommu()) and rewrite
+ * iommu->viommu_dev_data when this domain is that IOMMU's private
+ * IPA table. set_dte_entry() skips clone_aliases() because the
+ * synthetic DTE has no struct device.
+ */
+static void update_viommu_self_dte(struct protection_domain *pdom,
+				   phys_addr_t top_paddr,
+				   unsigned int top_level)
+{
+	struct pdom_iommu_info *pdom_iommu_info;
+	unsigned long i;
+
+	lockdep_assert_held(&pdom->lock);
+
+	xa_for_each(&pdom->iommu_array, i, pdom_iommu_info) {
+		struct amd_iommu *iommu = pdom_iommu_info->iommu;
+
+		if (iommu->viommu_pdom != pdom || !iommu->viommu_dev_data)
+			continue;
+		set_dte_entry(iommu, iommu->viommu_dev_data, top_paddr,
+			      top_level);
+	}
+}
+#else
+static inline void update_viommu_self_dte(struct protection_domain *pdom,
+					  phys_addr_t top_paddr,
+					  unsigned int top_level)
+{
+}
+#endif
+
 /*
  * Update all HW references to the domain with a new pgtable configuration.
  */
@@ -2792,6 +2877,7 @@ static void amd_iommu_change_top(struct pt_iommu *iommu_table,
 		device_flush_dte(iommu, dev_data);
 	}
 
+	update_viommu_self_dte(pdom, top_paddr, top_level);
 	domain_flush_complete(pdom);
 }
 
