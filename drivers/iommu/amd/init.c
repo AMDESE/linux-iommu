@@ -436,6 +436,16 @@ void iommu_feature_enable(struct amd_iommu *iommu, u8 bit)
 	iommu_feature_set(iommu, 1ULL, 1ULL, bit);
 }
 
+bool iommu_feature_enable_and_check(struct amd_iommu *iommu, u8 bit)
+{
+	u64 ctrl;
+
+	iommu_feature_enable(iommu, bit);
+
+	ctrl = readq(iommu->mmio_base +  MMIO_CONTROL_OFFSET);
+	return (ctrl & (1ULL << bit));
+}
+
 static void iommu_feature_disable(struct amd_iommu *iommu, u8 bit)
 {
 	iommu_feature_set(iommu, 0ULL, 1ULL, bit);
