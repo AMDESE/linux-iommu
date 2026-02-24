@@ -117,6 +117,38 @@ static int __init viommu_vf_vfcntl_init(struct amd_iommu *iommu)
 	return 0;
 }
 
+static void *alloc_private_region(struct amd_iommu *iommu,
+				  u64 base, size_t size)
+{
+	int ret;
+	void *region;
+	size_t mapped;
+
+	region = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO,
+						get_order(size));
+	if (!region)
+		return NULL;
+
+	ret = set_memory_uc((unsigned long)region, size >> PAGE_SHIFT);
+	if (ret)
+		goto err_out;
+
+	ret = pt_iommu_amdv1_map_pages(&iommu->viommu_pdom->domain, base,
+				     iommu_virt_to_phys(region), PAGE_SIZE, (size / PAGE_SIZE),
+				     IOMMU_PROT_IR | IOMMU_PROT_IW, GFP_KERNEL, &mapped);
+
+	if (ret)
+		goto err_out;
+
+	pr_debug("%s: base=%#llx, size=%#lx\n", __func__, base, size);
+
+	return region;
+
+err_out:
+	free_pages((unsigned long)region, get_order(size));
+	return NULL;
+}
+
 static struct iommu_domain *
 viommu_domain_alloc(struct amd_iommu *iommu)
 {
@@ -177,6 +209,24 @@ static int viommu_private_space_init(struct amd_iommu *iommu)
 
 	pdom = to_pdomain(dom);
 	iommu->viommu_pdom = pdom;
+
+	iommu->guest_mmio1 = alloc_private_region(iommu,
+						 VIOMMU_GUEST_MMIO_BASE1,
+						 VIOMMU_GUEST_MMIO_SIZE1);
+	if (!iommu->guest_mmio1)
+		goto err_out;
+
+	iommu->guest_mmio2 = alloc_private_region(iommu,
+						 VIOMMU_GUEST_MMIO_BASE2,
+						 VIOMMU_GUEST_MMIO_SIZE2);
+	if (!iommu->guest_mmio2)
+		goto err_out;
+
+	iommu->cmdbuf_dirty_mask = alloc_private_region(iommu,
+							VIOMMU_CMDBUF_DIRTY_STATUS_BASE,
+							VIOMMU_CMDBUF_DIRTY_STATUS_SIZE);
+	if (!iommu->cmdbuf_dirty_mask)
+		goto err_out;
 
 	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
 	pr_debug("%s: devid=%#x, pte_root=%#llx, guest_mmio1=%#llx(%#llx), guest_mmio2=%#llx(%#llx), cmdbuf_dirty_mask=%#llx(%#llx)\n",
