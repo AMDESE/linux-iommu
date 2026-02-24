@@ -57,6 +57,8 @@ extern unsigned long amd_iommu_pgsize_bitmap;
 extern bool amd_iommu_hatdis;
 
 struct iommu_dev_data *amd_iommu_alloc_dev_data(struct amd_iommu *iommu, u16 devid);
+void amd_iommu_free_dev_data(struct amd_iommu *iommu,
+			     struct iommu_dev_data *dev_data);
 
 /* Protection domain ops */
 void amd_iommu_init_identity_domain(void);

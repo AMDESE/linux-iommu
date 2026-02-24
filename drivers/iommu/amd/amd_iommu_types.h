@@ -823,6 +823,7 @@ struct amd_iommu {
 	bool gid_ida_inited;
 
 	/* HW vIOMMU support */
+	struct iommu_dev_data *viommu_dev_data;
 	struct protection_domain *viommu_pdom;
 	void *viommu_priv_region[VIOMMU_PRIV_SUBREGION_CNT];
 };
