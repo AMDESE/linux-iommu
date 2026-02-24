@@ -40,11 +40,64 @@ static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 	}
 }
 
+
+static bool viommu_cmdbuf_enabled(struct amd_iommu *iommu);
+
+static void viommu_free_self_dev_data(struct amd_iommu *iommu)
+{
+	struct iommu_dev_data *dev_data = iommu->viommu_dev_data;
+	struct dev_table_entry new = {};
+
+	if (!dev_data)
+		return;
+
+	/*
+	 * INV_DTE needs the command buffer. Skip it after
+	 * disable_iommus() clears CONTROL_CMDBUF_EN. The init
+	 * unwind still flushes while the buffer is enabled.
+	 */
+	if (viommu_cmdbuf_enabled(iommu)) {
+		amd_iommu_make_clear_dte(iommu, dev_data->devid, &new);
+		amd_iommu_update_dte(iommu, dev_data, &new);
+	}
+	amd_iommu_free_dev_data(iommu, dev_data);
+	iommu->viommu_dev_data = NULL;
+}
+
+static int viommu_alloc_self_dev_data(struct amd_iommu *iommu)
+{
+	struct protection_domain *pdom = iommu->viommu_pdom;
+	struct pt_iommu_amdv1_hw_info pt_info;
+	struct iommu_dev_data *dev_data;
+	struct dev_table_entry new = {};
+
+	dev_data = amd_iommu_alloc_dev_data(iommu->devid);
+	if (!dev_data) {
+		pr_err("%s: Failed to allocate dev_data\n", __func__);
+		return -ENOMEM;
+	}
+	/*
+	 * Synthetic DTE for iommu->devid only: no struct device, so
+	 * amd_iommu_update_dte() skips clone_aliases(), and not on
+	 * pdom->dev_list (not an IOMMU-API attach).
+	 */
+	dev_data->dev = NULL;
+	dev_data->domain = pdom;
+	iommu->viommu_dev_data = dev_data;
+
+	amd_iommu_make_clear_dte(iommu, iommu->devid, &new);
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+	amd_iommu_set_dte_v1(dev_data, pdom, pdom->id, &pt_info, &new);
+	amd_iommu_update_dte(iommu, dev_data, &new);
+	return 0;
+}
+
 static void viommu_private_space_uninit(struct amd_iommu *iommu);
 
 void __init amd_viommu_uninit(struct amd_iommu *iommu)
 {
 	iommu->flags &= ~AMD_IOMMU_FLAG_VIOMMU_EN;
+	viommu_free_self_dev_data(iommu);
 	viommu_private_space_uninit(iommu);
 	amd_viommu_vf_vfcntl_unmap(iommu);
 }
@@ -316,6 +369,10 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 		return ret;
 
 	ret = viommu_private_space_init(iommu);
+	if (ret)
+		goto err;
+
+	ret = viommu_alloc_self_dev_data(iommu);
 	if (ret)
 		goto err;
 

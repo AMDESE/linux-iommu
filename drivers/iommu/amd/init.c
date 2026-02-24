@@ -1809,9 +1809,10 @@ static void __init free_iommu_one(struct amd_iommu *iommu)
 	free_sysfs(iommu);
 	/*
 	 * Tear down vIOMMU before buffers and MMIO are released.
-	 * IOTLB invalidation runs only while CONTROL_CMDBUF_EN is
-	 * set (amd_viommu_init() unwind). disable_iommus() clears
-	 * that bit first on the boot-failure path.
+	 * IOTLB invalidation and the self-DTE clear run only while
+	 * CONTROL_CMDBUF_EN is set (amd_viommu_init() unwind).
+	 * disable_iommus() clears that bit first on the boot-failure
+	 * path.
 	 */
 	amd_viommu_uninit(iommu);
 	free_iommu_buffers(iommu);
