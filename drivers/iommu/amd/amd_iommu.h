@@ -209,7 +209,15 @@ void amd_iommu_set_dte_v1(struct iommu_dev_data *dev_data,
 void amd_iommu_update_dte(struct amd_iommu *iommu,
 			  struct iommu_dev_data *dev_data,
 			  struct dev_table_entry *new);
+
 int amd_iommu_completion_wait(struct amd_iommu *iommu);
+
+void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
+				 struct protection_domain *pdom,
+				 u32 devid);
+void amd_iommu_clear_translate_dte(struct amd_iommu *iommu, u16 gid, u32 devid);
+void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
+						  u16 gid, u32 trans_devid);
 
 static inline void
 amd_iommu_make_clear_dte(struct iommu_dev_data *dev_data, struct dev_table_entry *new)

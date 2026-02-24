@@ -83,6 +83,13 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	/* Reset vIOMMU MMIOs to initialize the vIOMMU */
 	iommu_reset_vmmio(iommu, aviommu->gid);
 
+	amd_iommu_set_translate_dte(iommu, aviommu->gid, pdom, data.trans_devid);
+
+	/* Set translate devid in vfctrl mmio */
+	writeq((data.trans_devid & 0xFFFFULL) << 16,
+	       VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid) +
+	       VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
+
 	ret = amd_viommu_init_one(iommu, aviommu);
 	if (ret)
 		goto err_out;
@@ -93,6 +100,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		goto free_mmap;
 
+	aviommu->trans_devid = data.trans_devid;
 	viommu->ops = &amd_viommu_ops;
 
 	spin_lock_irqsave(&pdom->lock, flags);

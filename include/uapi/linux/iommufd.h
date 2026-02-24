@@ -1076,10 +1076,12 @@ struct iommu_viommu_tegra241_cmdqv {
 /**
  * struct iommu_viommu_amd - AMD vIOMMU Interface (IOMMU_VIOMMU_TYPE_AMD)
  * @out_vfmmio_mmap_offset: (out) mmap offset for vIOMMU VF-MMIO
+ * @trans_devid: GPA->GVA translation device ID (host)
  * @reserved: Must be zero
  */
 struct iommu_viommu_amd {
 	__aligned_u64 out_vfmmio_mmap_offset;
+	__u32 trans_devid;
 	__u32 reserved; /* must be last */
 };
 
