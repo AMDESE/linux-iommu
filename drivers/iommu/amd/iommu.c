@@ -282,6 +282,9 @@ static void update_sdte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data
 	sdte.vmpl = 0;
 	sdte.vtom_en = 0;
 	sdte.vtom = 0;
+
+	sdte.interrupt = FIELD_GET(DTE_FLAG_IOTLB, new->data[1]);
+
 	/* Always enable viommu_en and gv bit */
 	sdte.viommu_en	= 1;
 
