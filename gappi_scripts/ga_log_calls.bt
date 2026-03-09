@@ -1,0 +1,39 @@
+#!/usr/bin/env bpftrace
+
+/*
+ * Emits one integer per completed call to iommu_poll_ga_log():
+ *   the number of times avic_ga_log_notifier() executed during that call.
+ *
+ * Handles nesting (re-entrancy) with @depth[tid].
+ */
+
+BEGIN
+{
+  printf("Tracing... output is: <notifier_calls_per_iommu_poll_ga_log>\n");
+}
+
+/* Enter iommu_poll_ga_log(): push a new counter frame */
+kprobe:iommu_poll_ga_log
+{
+  @depth[tid] = @depth[tid] + 1;
+  @cnt[tid, @depth[tid]] = 0;
+}
+
+/* Each notifier call increments the counter for the current depth */
+kprobe:avic_ga_log_notifier
+/@depth[tid] > 0/
+{
+  @cnt[tid, @depth[tid]] = @cnt[tid, @depth[tid]] + 1;
+}
+
+/* Exit iommu_poll_ga_log(): pop and print the counter */
+kretprobe:iommu_poll_ga_log
+/@depth[tid] > 0/
+{
+  $d = @depth[tid];
+  printf("%d\n", @cnt[tid, $d]);
+
+  delete(@cnt[tid, $d]);
+  @depth[tid] = @depth[tid] - 1;
+  if (@depth[tid] == 0) { delete(@depth[tid]); }
+}
