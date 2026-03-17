@@ -1339,7 +1339,7 @@ static int avic_set_ext_ir_affinity(struct kvm *kvm, u32 vcpu_id,
 	return ret;
 }
 
-const struct amd_iommu_svm_ops svm_ops = {
+const struct amd_iommu_svm_ops avic_svm_ops = {
 	.ga_log_notifier = avic_ga_log_notifier,
 	.get_ga_tag = avic_get_ga_tag,
 	.get_apic_backing_page = avic_get_apic_backing_page,
@@ -1380,7 +1380,7 @@ bool __init avic_hardware_setup(void)
 	 */
 	enable_ipiv = enable_ipiv && boot_cpu_data.x86 != 0x17;
 
-	amd_iommu_register_svm_ops(&svm_ops);
+	amd_iommu_register_svm_ops(&avic_svm_ops);
 
 	return true;
 }
