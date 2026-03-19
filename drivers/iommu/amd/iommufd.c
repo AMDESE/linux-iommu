@@ -173,6 +173,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	}
 	trans_devid_allocated = true;
 	aviommu->trans_devid = ret;
+	aviommu->trans_domid = pdom->id;
 
 	ret = amd_iommu_set_translate_dte(viommu);
 	if (ret)

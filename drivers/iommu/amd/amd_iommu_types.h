@@ -604,6 +604,7 @@ struct amd_iommu_viommu {
 	u64 *devid_table;
 	u64 *domid_table;
 	u16 trans_devid;
+	u16 trans_domid;
 	/* Synthetic DTE; not stored in pci_seg->dev_data_xa */
 	struct iommu_dev_data *trans_dev_data;
 
