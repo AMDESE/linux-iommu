@@ -61,6 +61,9 @@ LIST_HEAD(acpihid_map);
 
 const struct iommu_ops amd_iommu_ops;
 
+/* Global guest ID */
+static DEFINE_IDA(amd_iommu_global_gid_ida);
+
 int amd_iommu_max_glx_val = -1;
 
 /*
@@ -250,6 +253,23 @@ static inline bool pdom_is_in_pt_mode(struct protection_domain *pdom)
 static inline bool pdom_is_sva_capable(struct protection_domain *pdom)
 {
 	return pdom_is_v2_pgtbl_mode(pdom) || pdom_is_in_pt_mode(pdom);
+}
+
+int amd_iommu_gid_alloc(void)
+{
+	int ret = ida_alloc_range(&amd_iommu_global_gid_ida, 1, VIOMMU_MAX_GID, GFP_KERNEL);
+
+	if (ret < 0)
+		pr_err("%s: Failed to allocate guest ID\n", __func__);
+	else
+		pr_debug("%s: gid=%u\n", __func__, ret);
+
+	return ret;
+}
+
+void amd_iommu_gid_free(int gid)
+{
+	ida_free(&amd_iommu_global_gid_ida, gid);
 }
 
 static inline int get_acpihid_device_id(struct device *dev,
