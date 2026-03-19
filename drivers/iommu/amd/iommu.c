@@ -687,6 +687,66 @@ static void pdev_disable_caps(struct pci_dev *pdev)
 }
 
 /*
+ * In case of secure vIOMMU, DTE[domid] is reserved. Host should pass
+ * domain ID to PSP during device bind and PSP will setup sDTE[domid].
+ *
+ * Host is not aware how guest IOMMU is setup (passthrough mode or page table).
+ * Hence due to domain aliasing issue, always allocate per device domain ID
+ * and send it to PSP.
+ */
+int amd_iommu_get_dev_domid(struct pci_dev *pdev)
+{
+	struct amd_iommu *iommu;
+	struct iommu_dev_data *dev_data;
+	int id;
+
+	iommu = get_amd_iommu_from_dev(&pdev->dev);
+	if (!iommu)
+		return -EINVAL;
+
+	dev_data = search_dev_data(iommu, pci_dev_id(pdev));
+	if (!dev_data)
+		return -EINVAL;
+
+	mutex_lock(&dev_data->mutex);
+	if (!dev_data->gcr3_info.domid) {
+		id = amd_iommu_pdom_id_alloc();
+		if (id < 0) {
+			mutex_unlock(&dev_data->mutex);
+			return id;
+		}
+		dev_data->gcr3_info.domid = (u16)id;
+	}
+	mutex_unlock(&dev_data->mutex);
+
+	DUMP_printk("%s:%d devid=0x%x domid=0x%x\n", __func__, __LINE__,
+		    pci_dev_id(pdev), dev_data->gcr3_info.domid);
+
+	return dev_data->gcr3_info.domid;
+}
+EXPORT_SYMBOL_GPL(amd_iommu_get_dev_domid);
+
+void amd_iommu_clear_dev_domid(struct pci_dev *pdev)
+{
+	struct amd_iommu *iommu;
+	struct iommu_dev_data *dev_data;
+
+	iommu = get_amd_iommu_from_dev(&pdev->dev);
+	if (!iommu)
+		return;
+
+	dev_data = search_dev_data(iommu, pci_dev_id(pdev));
+	if (!dev_data)
+		return;
+
+	if (dev_data->gcr3_info.domid)
+		amd_iommu_pdom_id_free(dev_data->gcr3_info.domid);
+
+	dev_data->gcr3_info.domid = 0;
+}
+EXPORT_SYMBOL_GPL(amd_iommu_clear_dev_domid);
+
+/*
  * This function checks if the driver got a valid device from the caller to
  * avoid dereferencing invalid pointers.
  */
