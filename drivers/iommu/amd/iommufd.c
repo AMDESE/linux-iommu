@@ -135,6 +135,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 		goto err_init;
 
 	aviommu->trans_devid = trans_devid;
+	aviommu->trans_domid = pdom->id;
 	aviommu->kvmfd = data.kvmfd;
 	viommu->ops = &amd_viommu_ops;
 

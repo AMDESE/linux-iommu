@@ -580,6 +580,7 @@ struct amd_iommu_viommu {
 	u64 *devid_table;
 	u64 *domid_table;
 	u16 trans_devid;
+	u16 trans_domid;
 };
 
 /*
