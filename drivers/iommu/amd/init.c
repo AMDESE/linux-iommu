@@ -1816,6 +1816,7 @@ static void __init free_iommu_one(struct amd_iommu *iommu)
 	free_ga_log(iommu);
 	iommu_unmap_mmio_space(iommu);
 	amd_iommu_iopf_uninit(iommu);
+	ida_destroy(&iommu->gid_ida);
 }
 
 static void __init free_iommu_all(void)
@@ -1904,6 +1905,7 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h,
 
 	raw_spin_lock_init(&iommu->lock);
 	iommu->cmd_sem_val = 0;
+	ida_init(&iommu->gid_ida);
 
 	/* Add IOMMU to internal data structures */
 	list_add_tail(&iommu->list, &amd_iommu_list);
