@@ -997,6 +997,7 @@ struct iommu_dev_data {
 					     PPR completions */
 	u8 ppr          :1;		  /* Enable device PPR support */
 	u8 tsm_enabled  :1;		  /* Enable device to use TSM */
+	u8 sviommu_trans:1;		  /* Secure vIOMMU translation DTE */
 	bool use_vapic;			  /* Enable device to use vapic mode */
 	bool defer_attach;
 

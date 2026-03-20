@@ -2618,6 +2618,11 @@ static void set_dte_entry(struct amd_iommu *iommu,
 	else
 		WARN_ON(true);
 
+	if (dev_data->sviommu_trans) {
+		new.data[0] |= DTE_FLAG_PPR;
+		new.data[1] |= DTE_FLAG_IOTLB;
+	}
+
 	amd_iommu_update_dte(iommu, dev_data, &new);
 
 	/*
@@ -3810,6 +3815,7 @@ int amd_iommu_set_translate_dte(struct iommufd_viommu *viommu)
 	trans_dev_data = aviommu->trans_dev_data;
 	trans_dev_data->dev = NULL;
 	trans_dev_data->domain = pdom;
+	trans_dev_data->sviommu_trans = amd_viommu_is_secure_guest(gid);
 	/*
 	 * Leave off pdom->dev_list: this is not an IOMMU-API attach.
 	 * Hold pdom->lock so change_top() cannot grow the nest-parent
