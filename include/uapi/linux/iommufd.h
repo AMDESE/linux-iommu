@@ -1079,11 +1079,15 @@ struct iommu_viommu_tegra241_cmdqv {
 
 /**
  * struct iommu_viommu_amd - AMD vIOMMU Interface (IOMMU_VIOMMU_TYPE_AMD)
+ * @features: Feature flags for AMD vIOMMU. Set AMD_VIOMMU_FEATURE_SVIOMMU
+ *            for Secure vIOMMU (SNP-protected guest)
  * @out_vfmmio_mmap_offset: (out) mmap offset for vIOMMU VF-MMIO
  * @kvmfd: KVM FD handler
  * @reserved: Must be zero
  */
+#define AMD_VIOMMU_FEATURE_SVIOMMU	BIT(0)
 struct iommu_viommu_amd {
+	__u32 features;		/* AMD_VIOMMU_FEATURE_* requested by VMM */
 	__aligned_u64 out_vfmmio_mmap_offset;
 	__u32 kvmfd;
 	__u32 reserved; /* must be last */

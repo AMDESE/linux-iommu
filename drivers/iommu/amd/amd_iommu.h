@@ -288,4 +288,5 @@ amd_iommu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 /* Guest ID for vIOMMU */
 int amd_iommu_gid_alloc(void);
 void amd_iommu_gid_free(int gid);
+bool amd_viommu_is_secure_guest(u16 gid);
 #endif /* AMD_IOMMU_H */
