@@ -3457,6 +3457,9 @@ void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
 	tmp0 |=	FIELD_PREP(DTE_HOST_TRP, pt_info.host_pt_root >> 12);
 	tmp0 |= FIELD_PREP(DTE_MODE_MASK, pt_info.mode);
 	tmp0 |= (DTE_FLAG_IR | DTE_FLAG_IW | DTE_FLAG_TV | DTE_FLAG_V);
+	tmp0 |= (1ULL << DEV_ENTRY_PPR);
+
+	tmp1 |= DTE_FLAG_IOTLB;
 	tmp1 |= FIELD_PREP(DTE_DOMID_MASK, pdom->id);
 
 	dev_table[devid].data[0] = tmp0;
