@@ -692,6 +692,7 @@ iommufd_viommu_find_veventq(struct iommufd_viommu *viommu,
 
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd);
 void iommufd_viommu_destroy(struct iommufd_object *obj);
+int iommufd_viommu_ext_int_remap_ioctl(struct iommufd_ucmd *ucmd);
 int iommufd_vdevice_alloc_ioctl(struct iommufd_ucmd *ucmd);
 void iommufd_vdevice_destroy(struct iommufd_object *obj);
 void iommufd_vdevice_abort(struct iommufd_object *obj);

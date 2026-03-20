@@ -445,3 +445,33 @@ out_put_viommu:
 	iommufd_put_object(ucmd->ictx, &viommu->obj);
 	return rc;
 }
+
+int iommufd_viommu_ext_int_remap_ioctl(struct iommufd_ucmd *ucmd)
+{
+	int rc;
+	struct iommu_viommu_ext_int_remap *cmd = ucmd->cmd;
+	struct iommufd_viommu *viommu;
+
+	if (cmd->flags)
+		return -EINVAL;
+
+	if (cmd->__reserved)
+		return -EINVAL;
+
+	if (cmd->vector & ~0xFFU)
+		return -EINVAL;
+
+	viommu = iommufd_get_viommu(ucmd, cmd->object_id);
+	if (IS_ERR(viommu))
+		return PTR_ERR(viommu);
+
+	if (!viommu->ops->set_ext_int_remap) {
+		rc = -EOPNOTSUPP;
+		goto out_put_viommu;
+	}
+
+	rc = viommu->ops->set_ext_int_remap(viommu, cmd);
+out_put_viommu:
+	iommufd_put_object(ucmd->ictx, &viommu->obj);
+	return rc;
+}
