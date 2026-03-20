@@ -57,6 +57,7 @@ enum {
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
 	IOMMUFD_CMD_VEVENTQ_ALLOC = 0x93,
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
+	IOMMUFD_CMD_VIOMMU_EXT_INT_REMAP = 0x95,
 };
 
 /**
@@ -1126,6 +1127,52 @@ struct iommu_viommu_alloc {
 	__aligned_u64 data_uptr;
 };
 #define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
+
+/**
+ * enum iommu_viommu_ext_int_type - Extended interrupt remapping target
+ * @IOMMU_VIOMMU_EXT_INT_EVENT: Event-log interrupt (host MMIO 0x170)
+ * @IOMMU_VIOMMU_EXT_INT_PPR: PPR-log interrupt (host MMIO 0x178)
+ */
+enum iommu_viommu_ext_int_type {
+	IOMMU_VIOMMU_EXT_INT_EVENT = 0,
+	IOMMU_VIOMMU_EXT_INT_PPR = 1,
+};
+
+/**
+ * enum iommu_viommu_ext_int_flags - Must be 0
+ */
+enum iommu_viommu_ext_int_flags {
+	IOMMU_VIOMMU_EXT_INT_FLAG_NONE = 0,
+};
+
+/**
+ * struct iommu_viommu_ext_int_remap - ioctl(IOMMU_VIOMMU_EXT_INT_REMAP)
+ * @size: sizeof(struct iommu_viommu_ext_int_remap)
+ * @object_id: vIOMMU ID from IOMMU_VIOMMU_ALLOC
+ * @type: One of enum iommu_viommu_ext_int_type
+ * @flags: Must be 0
+ * @kvmfd: KVM VM fd for the guest that owns this vIOMMU
+ * @vcpu_id: KVM vCPU ID to deliver the interrupt to
+ * @vector: Guest APIC vector (only bits 7:0 are used)
+ * @__reserved: Must be 0
+ *
+ * Program Extended-IRT guest interrupt delivery for a vIOMMU log
+ * interrupt. The first successful call for @object_id records the KVM
+ * VM; later calls must use a @kvmfd that resolves to the same VM.
+ */
+struct iommu_viommu_ext_int_remap {
+	__u32 size;
+	__u32 object_id;
+	__u32 type;
+	__u32 flags;
+	__u32 kvmfd;
+	__u32 vcpu_id;
+	__u32 vector;
+	__u32 __reserved;
+};
+#define IOMMU_VIOMMU_EXT_INT_REMAP \
+	_IOW(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_EXT_INT_REMAP, \
+	     struct iommu_viommu_ext_int_remap)
 
 /**
  * struct iommu_vdevice_alloc - ioctl(IOMMU_VDEVICE_ALLOC)
