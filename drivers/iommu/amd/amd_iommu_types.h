@@ -595,6 +595,8 @@ struct amd_iommu_viommu {
 	u16 gid;			  /* Guest ID for the vIOMMU */
 	struct kvm *ext_ir_kvm;		  /* KVM VM from first ext-IR ioctl */
 	void (*ext_ir_put_kvm)(struct kvm *kvm);
+	struct kvm *sviommu_kvm;	  /* SNP guest of a Secure vIOMMU */
+	void (*sviommu_put_kvm)(struct kvm *kvm);
 
 	/*
 	 * Per-vIOMMU guest domain ID to host domain ID mapping.

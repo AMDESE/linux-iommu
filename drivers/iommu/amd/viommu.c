@@ -22,6 +22,11 @@
 #include "amd_viommu.h"
 #include "../iommu-pages.h"
 
+bool amd_viommu_is_secure_guest(u16 gid)
+{
+	return (gid & 0x8000);
+}
+
 bool amd_viommu_attach_ext_ir_kvm(struct amd_iommu_viommu *aviommu,
 				  struct kvm *kvm,
 				  void (*put_kvm)(struct kvm *kvm))
@@ -455,7 +460,8 @@ static int viommu_private_space_init(struct amd_iommu *iommu)
  */
 u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
 {
-	if (WARN_ON(!iommu->vf_base_phys || gid > VIOMMU_MAX_GID))
+	if (WARN_ON(!iommu->vf_base_phys ||
+		    (gid > VIOMMU_MAX_GID && !amd_viommu_is_secure_guest(gid))))
 		return 0;
 
 	return iommu->vf_base_phys + gid * VIOMMU_VF_MMIO_ENTRY_SIZE;

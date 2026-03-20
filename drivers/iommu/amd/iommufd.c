@@ -3,6 +3,8 @@
  * Copyright (C) 2025 Advanced Micro Devices, Inc.
  */
 
+#include <asm/sev-kvm.h>
+
 #include <linux/iommu.h>
 #include <linux/amd-iommu.h>
 #include <linux/rcupdate.h>
@@ -109,6 +111,63 @@ out_unlock:
 	return ret;
 }
 
+/*
+ * The KVM reference is held until gid_free() so the ASID encoded in the
+ * GID stays owned by this guest.
+ */
+static int sviommu_gid_alloc(struct amd_iommu_viommu *aviommu, u32 kvmfd)
+{
+	const struct amd_iommu_svm_ops *ops;
+	struct kvm_sev_info *sev;
+	struct kvm *kvm;
+	int gid;
+
+	rcu_read_lock();
+	ops = svm_ops;
+	if (!ops || !ops->kvm_from_fd || !ops->put_kvm) {
+		rcu_read_unlock();
+		return -ENODEV;
+	}
+	kvm = ops->kvm_from_fd(kvmfd);
+	rcu_read_unlock();
+	if (IS_ERR(kvm))
+		return PTR_ERR(kvm);
+
+	sev = &to_kvm_svm(kvm)->sev_info;
+	if (!sev->asid) {
+		ops->put_kvm(kvm);
+		return -EINVAL;
+	}
+
+	aviommu->sviommu_kvm = kvm;
+	aviommu->sviommu_put_kvm = ops->put_kvm;
+
+	/* Guest ID construction: {1'b1, 5'b0, 10'bASID} */
+	gid = 0x8000 | (sev->asid & 0x3FF);
+	pr_debug("%s: Secure guest gid=%#x (ASID=%u)\n", __func__, gid, sev->asid);
+
+	return gid;
+}
+
+static int gid_alloc(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu,
+		     const struct iommu_viommu_amd *data)
+{
+	if (data->features & AMD_VIOMMU_FEATURE_SVIOMMU)
+		return sviommu_gid_alloc(aviommu, data->kvmfd);
+
+	return amd_iommu_gid_alloc(iommu);
+}
+
+static void gid_free(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu)
+{
+	if (!amd_viommu_is_secure_guest(aviommu->gid))
+		return amd_iommu_gid_free(iommu, aviommu->gid);
+
+	aviommu->sviommu_put_kvm(aviommu->sviommu_kvm);
+	aviommu->sviommu_kvm = NULL;
+	aviommu->sviommu_put_kvm = NULL;
+}
+
 int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
 			    const struct iommu_user_data *user_data)
 {
@@ -135,16 +194,20 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		return ret;
 
+	if (data.features & ~AMD_VIOMMU_FEATURE_SVIOMMU)
+		return -EOPNOTSUPP;
+
 	mutex_init(&aviommu->trans_devid_lock);
 	mutex_init(&aviommu->vfctrl_lock);
 	INIT_LIST_HEAD(&aviommu->pdom_list);
 	xa_init_flags(&aviommu->gdomid_array, XA_FLAGS_ALLOC1);
 	aviommu->parent = pdom;
 
-	ret = amd_iommu_gid_alloc(iommu);
+	ret = gid_alloc(iommu, aviommu, &data);
 	if (ret < 0)
 		goto err_gid;
 	aviommu->gid = ret;
+	pr_debug("%s: gid=%#x", __func__, aviommu->gid);
 
 	page_base = amd_viommu_get_vfmmio_addr(iommu, aviommu->gid);
 	if (!page_base) {
@@ -220,7 +283,7 @@ err_init_unlock:
 err_trans_devid:
 	iommufd_viommu_destroy_mmap(&aviommu->core, aviommu->vfmmio_mmap_offset);
 err_mmap:
-	amd_iommu_gid_free(iommu, aviommu->gid);
+	gid_free(iommu, aviommu);
 err_gid:
 	mutex_destroy(&aviommu->trans_devid_lock);
 	mutex_destroy(&aviommu->vfctrl_lock);
@@ -270,7 +333,7 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	mutex_unlock(&aviommu->trans_devid_lock);
 
 	amd_viommu_uninit_one(iommu, aviommu);
-	amd_iommu_gid_free(iommu, aviommu->gid);
+	gid_free(iommu, aviommu);
 	mutex_destroy(&aviommu->trans_devid_lock);
 	mutex_destroy(&aviommu->vfctrl_lock);
 }
