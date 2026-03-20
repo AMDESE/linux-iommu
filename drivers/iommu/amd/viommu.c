@@ -47,6 +47,11 @@
 
 LIST_HEAD(viommu_devid_map);
 
+bool amd_viommu_is_secure_guest(u16 gid)
+{
+	return (gid & 0x8000);
+}
+
 static int viommu_enable(struct amd_iommu *iommu)
 {
 	/* The GstBufferTRPMode feature is checked by set and test */

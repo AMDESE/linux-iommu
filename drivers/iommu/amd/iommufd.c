@@ -3,6 +3,8 @@
  * Copyright (C) 2025 Advanced Micro Devices, Inc.
  */
 
+#include <asm/sev-kvm.h>
+
 #include <linux/iommu.h>
 #include <linux/file.h>
 #include <linux/amd-iommu.h>
@@ -62,6 +64,48 @@ static void *get_kvm_handler(u32 kvmfd)
 	return handler;
 }
 
+static int sviommu_gid_alloc(u32 kvmfd)
+{
+	struct kvm_sev_info *sev;
+	void *kvm;
+	int gid;
+	struct fd f = fdget(kvmfd);
+
+	if (fd_empty(f)) {
+		pr_notice("%s: Failed to get kvm handler\n", __func__);
+		return -EINVAL;
+	}
+
+	kvm = fd_file(f)->private_data;
+	fdput(f);
+	if (!kvm)
+		return -EINVAL;
+
+	sev = &to_kvm_svm(kvm)->sev_info;
+
+	/* Guest ID construction: {1'b1, 5'b0, 10'bASID} */
+	gid = 0x8000 | (sev->asid & 0x3FF);
+	pr_debug("%s: Secure guest gid=%u (ASID=%u)\n", __func__, gid, sev->asid);
+
+	return gid;
+}
+
+static int gid_alloc(u32 features, u32 kvmfd)
+{
+	if (features & AMD_VIOMMU_FEATURE_SVIOMMU)
+		return sviommu_gid_alloc(kvmfd);
+
+	return amd_iommu_gid_alloc();
+}
+
+static void gid_free(int gid)
+{
+	if (amd_viommu_is_secure_guest(gid))
+		return;
+
+	amd_iommu_gid_free(gid);
+}
+
 int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
 			    const struct iommu_user_data *user_data)
 {
@@ -91,11 +135,11 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		return ret;
 
-	aviommu->gid = amd_iommu_gid_alloc();
-	if (aviommu->gid < 0) {
-		ret = aviommu->gid;
-		goto err_gid;
-	}
+	ret = gid_alloc(data.features, data.kvmfd);
+	if (ret < 0)
+		return ret;
+
+	aviommu->gid = (u16)ret;
 	pr_debug("%s: gid=%#x", __func__, aviommu->gid);
 
 	page_base = amd_viommu_get_vfmmio_addr(iommu, aviommu->gid);
@@ -151,8 +195,7 @@ err_init:
 err_kvmfd:
 	iommufd_viommu_destroy_mmap(&aviommu->core, data.out_vfmmio_mmap_offset);
 err_mmap:
-	amd_iommu_gid_free(aviommu->gid);
-err_gid:
+	gid_free(aviommu->gid);
 	return ret;
 }
 
@@ -169,7 +212,7 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	list_del(&aviommu->pdom_list);
 	spin_unlock_irqrestore(&pdom->lock, flags);
 	xa_destroy(&aviommu->gdomid_array);
-	amd_iommu_gid_free(aviommu->gid);
+	gid_free(aviommu->gid);
 	amd_viommu_uninit_one(iommu, aviommu);
 	amd_iommu_free_trans_devid_by_kvmfd(iommu->pci_seg, aviommu->kvmfd);
 }
