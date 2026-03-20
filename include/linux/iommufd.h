@@ -184,6 +184,9 @@ struct iommufd_hw_queue {
  * @hw_queue_init: Similar to hw_queue_init_phys, but driver providing this op
  *                 indicates that HW accesses the guest queue memory via
  *                 @hw_queue->base_addr.
+ * @set_ext_int_remap: Program extended interrupt remapping for a vIOMMU log
+ *                     interrupt (event, PPR, etc.). Optional; return
+ *                     -EOPNOTSUPP if unsupported.
  */
 struct iommufd_viommu_ops {
 	void (*destroy)(struct iommufd_viommu *viommu);
@@ -199,6 +202,8 @@ struct iommufd_viommu_ops {
 	int (*hw_queue_init_phys)(struct iommufd_hw_queue *hw_queue, u32 index,
 				  phys_addr_t base_addr_pa);
 	int (*hw_queue_init)(struct iommufd_hw_queue *hw_queue, u32 index);
+	int (*set_ext_int_remap)(struct iommufd_viommu *viommu,
+				 const struct iommu_viommu_ext_int_remap *arg);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
