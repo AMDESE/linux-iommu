@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/amd-iommu.h>
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/pci.h>
@@ -748,58 +749,6 @@ static void tio_tdi_mmio_invalidate(struct pci_dev *pdev, struct snp_guest_dev *
 	kfree(devsec_tsm->mmio);
 	devsec_tsm->mmio = NULL;
 }
-
-struct sdte {
-	u64 v                  : 1;
-	u64 reserved           : 3;
-	u64 cxlio              : 3;
-	u64 reserved1          : 45;
-	u64 ppr                : 1;
-	u64 reserved2          : 1;
-	u64 giov               : 1;
-	u64 gv                 : 1;
-	u64 glx                : 2;
-	u64 gcr3_tbl_rp0       : 3;
-	u64 ir                 : 1;
-	u64 iw                 : 1;
-	u64 reserved3          : 1;
-	u16 domain_id;
-	u16 gcr3_tbl_rp1;
-	u32 interrupt          : 1;
-	u32 reserved4          : 5;
-	u32 ex                 : 1;
-	u32 sd                 : 1;
-	u32 reserved5          : 2;
-	u32 sats               : 1;
-	u32 gcr3_tbl_rp2       : 21;
-	u64 giv                : 1;
-	u64 gint_tbl_len       : 4;
-	u64 reserved6          : 1;
-	u64 gint_tbl           : 46;
-	u64 reserved7          : 2;
-	u64 gpm                : 2;
-	u64 reserved8          : 3;
-	u64 hpt_mode           : 1;
-	u64 reserved9          : 4;
-	u32 asid               : 12;
-	u32 reserved10         : 3;
-	u32 viommu_en          : 1;
-	u32 guest_device_id    : 16;
-	u32 guest_id           : 15;
-	u32 guest_id_mbo       : 1;
-	u32 reserved11         : 1;
-	u32 vmpl               : 2;
-	u32 reserved12         : 3;
-	u32 attrv              : 1;
-	u32 reserved13         : 1;
-	u32 sa                 : 8;
-	u8 ide_stream_id[8];
-	u32 vtom_en            : 1;
-	u32 vtom               : 31;
-	u32 rp_id              : 5;
-	u32 reserved14         : 27;
-	u8  reserved15[0x40-0x30];
-} __packed;
 
 struct tio_msg_sdte_write_req {
 	u16 guest_device_id;
