@@ -840,6 +840,9 @@ int avic_init_vcpu(struct vcpu_svm *svm)
 	INIT_LIST_HEAD(&svm->ir_list);
 	raw_spin_lock_init(&svm->ir_list_lock);
 
+	INIT_LIST_HEAD(&svm->gappi_wakeup_list);
+	svm->gappi_dest = -1;
+
 	if (!enable_apicv || !irqchip_in_kernel(vcpu->kvm))
 		return 0;
 
@@ -850,6 +853,65 @@ int avic_init_vcpu(struct vcpu_svm *svm)
 	svm->dfr_reg = APIC_DFR_FLAT;
 
 	return ret;
+}
+
+static int find_cpu_index_by_apicid(unsigned int target_apicid)
+{
+        int cpu_index;
+
+        for_each_possible_cpu(cpu_index) {
+                struct cpuinfo_x86 *info = &cpu_data(cpu_index);
+
+                if (info->topo.apicid == target_apicid) {
+                        pr_debug("match APIC id %u for CPU index: %d\n",
+                                 info->topo.apicid, cpu_index);
+                        return cpu_index;
+                }
+        }
+
+        return -ENODEV;
+}
+
+
+static void avic_add_svm_to_gappi_wakeup(struct vcpu_svm *svm, int apicid) {
+	int cpu = find_cpu_index_by_apicid(apicid);
+	struct list_head *wakeup_list;
+	raw_spinlock_t *spinlock;
+
+	if (WARN_ON(cpu < 0))
+		return;
+
+	wakeup_list = &per_cpu(gappi_wakeup_list, cpu);
+	spinlock = &per_cpu(gappi_wakeup_list_lock, cpu);
+	raw_spin_lock(spinlock);
+	if (list_empty(&svm->gappi_wakeup_list))
+		list_add_tail(&svm->gappi_wakeup_list, wakeup_list);
+	raw_spin_unlock(spinlock);
+}
+
+static void avic_remove_svm_from_gappi_wakeup(struct vcpu_svm *svm, int apicid) {
+	int cpu = find_cpu_index_by_apicid(apicid);
+	raw_spinlock_t *spinlock;
+
+	if (WARN_ON(cpu < 0))
+		return;
+
+	spinlock = &per_cpu(gappi_wakeup_list_lock, cpu);
+	raw_spin_lock(spinlock);
+	if (!list_empty(&svm->gappi_wakeup_list))
+		list_del_init(&svm->gappi_wakeup_list);
+	raw_spin_unlock(spinlock);
+}
+
+void avic_destroy_vcpu(struct vcpu_svm *svm) {
+
+	unsigned long flags;
+	raw_spin_lock_irqsave(&svm->ir_list_lock, flags);
+	if (svm->gappi_dest != -1) {
+		avic_remove_svm_from_gappi_wakeup(svm, svm->gappi_dest);
+		svm->gappi_dest = -1;
+	}
+	raw_spin_unlock_irqrestore(&svm->ir_list_lock, flags);
 }
 
 void avic_apicv_post_state_restore(struct kvm_vcpu *vcpu)
@@ -917,10 +979,20 @@ int avic_pi_update_irte(struct kvm_kernel_irqfd *irqfd, struct kvm *kvm,
 		if (entry & AVIC_PHYSICAL_ID_ENTRY_IS_RUNNING_MASK) {
 			pi_data.cpu = entry & AVIC_PHYSICAL_ID_ENTRY_HOST_PHYSICAL_ID_MASK;
 			pi_data.gappi_dest = 0;
+			if (svm->gappi_dest == -1) {
+				svm->gappi_dest = pi_data.cpu;
+				avic_add_svm_to_gappi_wakeup(svm, svm->gappi_dest);
+			}
 		} else {
 			pi_data.cpu = -1;
 			pi_data.posted_intr = entry & AVIC_PHYSICAL_ID_ENTRY_GA_LOG_INTR;
-			pi_data.gappi_dest = 0;
+			pi_data.gappi_dest = svm->gappi_dest == -1 ?
+					     kvm_cpu_get_apicid(smp_processor_id()):
+					     svm->gappi_dest;
+			if (svm->gappi_dest == -1) {
+				svm->gappi_dest = pi_data.gappi_dest;
+				avic_add_svm_to_gappi_wakeup(svm, pi_data.gappi_dest);
+			}
 		}
 
 		ret = irq_set_vcpu_affinity(host_irq, &pi_data);
@@ -972,7 +1044,7 @@ enum avic_vcpu_action {
 	AVIC_START_BLOCKING	= BIT(1),
 };
 
-static void avic_update_iommu_vcpu_affinity(struct kvm_vcpu *vcpu, int cpu,
+static void avic_update_iommu_vcpu_affinity(struct kvm_vcpu *vcpu, int apicid,
 					    enum avic_vcpu_action action)
 {
 	bool posted_intr = (action & AVIC_START_BLOCKING);
@@ -988,13 +1060,24 @@ static void avic_update_iommu_vcpu_affinity(struct kvm_vcpu *vcpu, int cpu,
 	if (list_empty(&svm->ir_list))
 		return;
 
+	if (apicid >= 0) {
+		/* IF condition handles the initial state */
+		if (svm->gappi_dest != -1)
+			avic_remove_svm_from_gappi_wakeup(svm, svm->gappi_dest);
+		svm->gappi_dest = apicid; /* Store new apicid as target for GAPPI */
+	} else {
+		if (svm->gappi_dest == -1)
+			svm->gappi_dest = kvm_cpu_get_apicid(smp_processor_id());
+		avic_add_svm_to_gappi_wakeup(svm, svm->gappi_dest);
+	}
+
 	list_for_each_entry(irqfd, &svm->ir_list, vcpu_list) {
 		void *data = irqfd->irq_bypass_data;
 
 		if (!(action & AVIC_TOGGLE_ON_OFF))
-			WARN_ON_ONCE(amd_iommu_update_ga(data, cpu, posted_intr, 0));
-		else if (cpu >= 0)
-			WARN_ON_ONCE(amd_iommu_activate_guest_mode(data, cpu, posted_intr, 0));
+			WARN_ON_ONCE(amd_iommu_update_ga(data, apicid, posted_intr, svm->gappi_dest));
+		else if (apicid >= 0)
+			WARN_ON_ONCE(amd_iommu_activate_guest_mode(data, apicid, posted_intr, svm->gappi_dest));
 		else
 			WARN_ON_ONCE(amd_iommu_deactivate_guest_mode(data));
 	}
@@ -1264,6 +1347,22 @@ static bool __init avic_want_avic_enabled(void)
 	return true;
 }
 
+static void avic_gappi_wakeup_handler(void) {
+       int cpu = smp_processor_id();
+       struct list_head *wakeup_list = &per_cpu(gappi_wakeup_list, cpu);
+       raw_spinlock_t *spinlock = &per_cpu(gappi_wakeup_list_lock, cpu);
+       struct vcpu_svm *svm;
+
+       raw_spin_lock(spinlock);
+       list_for_each_entry(svm, wakeup_list, gappi_wakeup_list) {
+               if (kvm_lapic_find_highest_irr(&(svm->vcpu)) >= 0)
+                       kvm_vcpu_wake_up(&(svm->vcpu));
+       }
+       raw_spin_unlock(spinlock);
+}
+
+
+
 /*
  * Note:
  * - The module param avic enable both xAPIC and x2APIC mode.
@@ -1305,6 +1404,7 @@ bool __init avic_hardware_setup(void)
 	enable_ipiv = enable_ipiv && boot_cpu_data.x86 != 0x17;
 
 	amd_iommu_register_ga_log_notifier(&avic_ga_log_notifier);
+	kvm_set_posted_intr_wakeup_handler(&avic_gappi_wakeup_handler);
 
 	return true;
 }
