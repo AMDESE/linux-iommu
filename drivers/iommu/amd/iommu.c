@@ -2723,8 +2723,8 @@ static void amd_iommu_flush_iotlb_all(struct iommu_domain *domain)
 	spin_unlock_irqrestore(&dom->lock, flags);
 }
 
-static void amd_iommu_iotlb_sync(struct iommu_domain *domain,
-				 struct iommu_iotlb_gather *gather)
+void amd_iommu_iotlb_sync(struct iommu_domain *domain,
+			  struct iommu_iotlb_gather *gather)
 {
 	struct protection_domain *dom = to_pdomain(domain);
 	unsigned long flags;
