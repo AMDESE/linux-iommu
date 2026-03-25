@@ -291,4 +291,5 @@ static void nested_domain_free(struct iommu_domain *dom)
 static const struct iommu_domain_ops nested_domain_ops = {
 	.attach_dev = nested_attach_device,
 	.free = nested_domain_free,
+	.iotlb_sync = amd_iommu_iotlb_sync,
 };
