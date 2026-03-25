@@ -283,3 +283,55 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 
 	return 0;
 }
+
+static int alloc_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+				   u64 base, size_t size, u16 gid)
+{
+	int ret;
+	size_t mapped;
+	u64 addr = base + (gid * size);
+	int nid = iommu && iommu->dev ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
+
+	*entry = (void *)iommu_alloc_pages_node_sz(nid, GFP_KERNEL | __GFP_ZERO, size);
+	if (!*entry)
+		return -ENOMEM;
+
+	ret = set_memory_uc((unsigned long)*entry, size >> PAGE_SHIFT);
+	if (ret)
+		return ret;
+
+	pr_debug("%s: entry=%#llx(%#llx), addr=%#llx, size=%#lx\n", __func__,
+		 (unsigned long  long)*entry, iommu_virt_to_phys(*entry), addr, size);
+
+	ret = pt_iommu_amdv1_map_pages(&iommu->viommu_pdom->domain, addr,
+				       iommu_virt_to_phys(*entry), PAGE_SIZE, (size / PAGE_SIZE),
+				       IOMMU_PROT_IR | IOMMU_PROT_IW, GFP_KERNEL, &mapped);
+	if (ret)
+		return ret;
+
+	return amd_iommu_flush_private_vm_region(iommu, iommu->viommu_pdom, addr, size);
+}
+
+static void free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+					u64 base, size_t size, u16 gid)
+{
+	size_t ret;
+	struct iommu_iotlb_gather gather;
+	u64 addr = base + (gid * size);
+
+	pr_debug("%s: entry=%#llx(%#llx), base=%#llx, addr=%#llx, size=%#lx\n",
+		 __func__, (unsigned long  long)*entry,
+		 iommu_virt_to_phys(*entry), base, addr, size);
+
+	if (!iommu || !iommu->viommu_pdom)
+		return;
+
+	iommu_iotlb_gather_init(&gather);
+	ret = pt_iommu_amdv1_unmap_pages(&iommu->viommu_pdom->domain,
+					 addr, PAGE_SIZE, (size / PAGE_SIZE), &gather);
+	if (ret)
+		amd_iommu_iotlb_sync(&iommu->viommu_pdom->domain, &gather);
+
+	iommu_free_pages(*entry);
+	*entry = NULL;
+}
