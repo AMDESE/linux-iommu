@@ -543,6 +543,9 @@ struct amd_iommu_viommu {
 	 * Indexed by guest domain ID.
 	 */
 	struct xarray gdomid_array;
+
+	u64 *devid_table;
+	u64 *domid_table;
 };
 
 /*
