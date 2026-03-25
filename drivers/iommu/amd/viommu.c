@@ -19,6 +19,32 @@
 #include "amd_viommu.h"
 #include "../iommu-pages.h"
 
+/*
+ * Per-vIOMMU DevID / DomID tables share iommu->viommu_pdom:
+ *   IOVA = base + gid * entry_size, gid in [1, VIOMMU_MAX_GID].
+ * The 64GB gap between these bases is 0x10000 1MB DevID slots.
+ * VIOMMU_MAX_GID is 0x7FFF, so a max-gid DevID window ends at
+ * 0x1800000000 and cannot meet VIOMMU_DOMID_MAPPING_BASE.
+ *
+ * VIOMMU_MAX_GDEVID / VIOMMU_MAX_GDOMID are 16-bit guest DevID
+ * and DomID table indices (hardware mapping-table width), not GID.
+ */
+#define VIOMMU_MAX_GDEVID		0xFFFF
+#define VIOMMU_DEVID_MAPPING_BASE	0x1000000000ULL
+#define VIOMMU_DEVID_MAPPING_ENTRY_SIZE	(1 << 20)
+
+#define VIOMMU_MAX_GDOMID		0xFFFF
+#define VIOMMU_DOMID_MAPPING_BASE	0x2000000000ULL
+#define VIOMMU_DOMID_MAPPING_ENTRY_SIZE	(1 << 19)
+
+static_assert(VIOMMU_DEVID_MAPPING_BASE +
+	      (VIOMMU_MAX_GID + 1ULL) * VIOMMU_DEVID_MAPPING_ENTRY_SIZE <=
+	      VIOMMU_DOMID_MAPPING_BASE);
+static_assert(VIOMMU_DEVID_MAPPING_ENTRY_SIZE >=
+	      (VIOMMU_MAX_GDEVID + 1ULL) * sizeof(u64));
+static_assert(VIOMMU_DOMID_MAPPING_ENTRY_SIZE >=
+	      (VIOMMU_MAX_GDOMID + 1ULL) * sizeof(u64));
+
 static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 {
 	if (iommu->vfctrl_base) {
@@ -420,4 +446,42 @@ static void __maybe_unused free_private_vm_region(struct amd_iommu *iommu, u64 *
 	viommu_priv_unmap_free(iommu, addr, size, *entry);
 
 	*entry = NULL;
+}
+
+void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu)
+{
+	pr_debug("%s: gid=%u\n", __func__, aviommu->gid);
+
+	free_private_vm_region(iommu, &aviommu->devid_table,
+			       VIOMMU_DEVID_MAPPING_BASE,
+			       VIOMMU_DEVID_MAPPING_ENTRY_SIZE,
+			       aviommu->gid);
+	free_private_vm_region(iommu, &aviommu->domid_table,
+			       VIOMMU_DOMID_MAPPING_BASE,
+			       VIOMMU_DOMID_MAPPING_ENTRY_SIZE,
+			       aviommu->gid);
+}
+
+int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu)
+{
+	int ret;
+
+	ret = alloc_private_vm_region(iommu, &viommu->devid_table,
+				      VIOMMU_DEVID_MAPPING_BASE,
+				      VIOMMU_DEVID_MAPPING_ENTRY_SIZE,
+				      viommu->gid);
+	if (ret)
+		goto err_out;
+
+	ret = alloc_private_vm_region(iommu, &viommu->domid_table,
+				      VIOMMU_DOMID_MAPPING_BASE,
+				      VIOMMU_DOMID_MAPPING_ENTRY_SIZE,
+				      viommu->gid);
+	if (ret)
+		goto err_out;
+
+	return 0;
+err_out:
+	amd_viommu_uninit_one(iommu, viommu);
+	return ret;
 }
