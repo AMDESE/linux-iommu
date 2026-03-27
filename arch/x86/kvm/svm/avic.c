@@ -913,9 +913,11 @@ int avic_pi_update_irte(struct kvm_kernel_irqfd *irqfd, struct kvm *kvm,
 		entry = svm->avic_physical_id_entry;
 		if (entry & AVIC_PHYSICAL_ID_ENTRY_IS_RUNNING_MASK) {
 			pi_data.cpu = entry & AVIC_PHYSICAL_ID_ENTRY_HOST_PHYSICAL_ID_MASK;
+			pi_data.gappi_dest = 0;
 		} else {
 			pi_data.cpu = -1;
 			pi_data.posted_intr = entry & AVIC_PHYSICAL_ID_ENTRY_GA_LOG_INTR;
+			pi_data.gappi_dest = 0;
 		}
 
 		ret = irq_set_vcpu_affinity(host_irq, &pi_data);
@@ -987,9 +989,9 @@ static void avic_update_iommu_vcpu_affinity(struct kvm_vcpu *vcpu, int cpu,
 		void *data = irqfd->irq_bypass_data;
 
 		if (!(action & AVIC_TOGGLE_ON_OFF))
-			WARN_ON_ONCE(amd_iommu_update_ga(data, cpu, posted_intr));
+			WARN_ON_ONCE(amd_iommu_update_ga(data, cpu, posted_intr, 0));
 		else if (cpu >= 0)
-			WARN_ON_ONCE(amd_iommu_activate_guest_mode(data, cpu, posted_intr));
+			WARN_ON_ONCE(amd_iommu_activate_guest_mode(data, cpu, posted_intr, 0));
 		else
 			WARN_ON_ONCE(amd_iommu_deactivate_guest_mode(data));
 	}

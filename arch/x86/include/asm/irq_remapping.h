@@ -39,6 +39,7 @@ struct amd_iommu_pi_data {
 	bool posted_intr;
 	bool is_guest_mode;
 	void *ir_data;
+	int gappi_dest;
 };
 
 struct intel_iommu_pi_data {

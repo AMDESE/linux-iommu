@@ -3851,8 +3851,9 @@ static const struct irq_domain_ops amd_ir_domain_ops = {
 	.deactivate = irq_remapping_deactivate,
 };
 
-static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
-				  bool posted_intr)
+static void __amd_iommu_update_ga(struct irte_ga *entry,
+				  int gappi_dest,
+				  int cpu, bool posted_intr)
 {
 	if (cpu >= 0) {
 		entry->lo.fields_vapic.destination =
@@ -3861,6 +3862,15 @@ static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
 					APICID_TO_IRTE_DEST_HI(cpu);
 		entry->lo.fields_vapic.is_run = true;
 		entry->lo.fields_vapic.ga_log_intr = false;
+	} else if (amd_iommu_gappi) {
+
+		if (check_feature(FEATURE_GAPPIDISSUP))
+			entry->lo.fields_vapic.gappi_dis = !posted_intr;
+
+		entry->lo.fields_vapic.is_run = false;
+		entry->lo.fields_vapic.destination =
+					APICID_TO_IRTE_DEST_LO(gappi_dest);
+		entry->hi.fields.destination = APICID_TO_IRTE_DEST_HI(gappi_dest);
 	} else {
 		entry->lo.fields_vapic.is_run = false;
 		entry->lo.fields_vapic.ga_log_intr = posted_intr;
@@ -3884,7 +3894,7 @@ static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
  * and thus don't require an invalidation to ensure the IOMMU consumes fresh
  * information.
  */
-int amd_iommu_update_ga(void *data, int cpu, bool posted_intr)
+int amd_iommu_update_ga(void *data, int cpu, bool posted_intr, int gappi_dest)
 {
 	struct amd_ir_data *ir_data = (struct amd_ir_data *)data;
 	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
@@ -3898,14 +3908,14 @@ int amd_iommu_update_ga(void *data, int cpu, bool posted_intr)
 	if (!ir_data->iommu)
 		return -ENODEV;
 
-	__amd_iommu_update_ga(entry, cpu, posted_intr);
+	__amd_iommu_update_ga(entry, gappi_dest, cpu, posted_intr);
 
 	return __modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 				ir_data->irq_2_irte.index, entry);
 }
 EXPORT_SYMBOL(amd_iommu_update_ga);
 
-int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr)
+int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr, int gappi_dest)
 {
 	struct amd_ir_data *ir_data = (struct amd_ir_data *)data;
 	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
@@ -3926,9 +3936,14 @@ int amd_iommu_activate_guest_mode(void *data, int cpu, bool posted_intr)
 	entry->lo.fields_vapic.guest_mode  = 1;
 	entry->hi.fields.ga_root_ptr       = ir_data->ga_root_ptr;
 	entry->hi.fields.vector            = ir_data->ga_vector;
-	entry->lo.fields_vapic.ga_tag      = ir_data->ga_tag;
+	
+	if (amd_iommu_gappi) {
+		entry->lo.fields_vapic.ga_tag = POSTED_INTR_WAKEUP_VECTOR;
+	} else {
+		entry->lo.fields_vapic.ga_tag = ir_data->ga_tag;
+	}
 
-	__amd_iommu_update_ga(entry, cpu, posted_intr);
+	__amd_iommu_update_ga(entry , gappi_dest, cpu, posted_intr);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 			      ir_data->irq_2_irte.index, entry);
@@ -4000,7 +4015,7 @@ static int amd_ir_set_vcpu_affinity(struct irq_data *data, void *info)
 		ir_data->ga_tag = pi_data->ga_tag;
 		if (pi_data->is_guest_mode)
 			ret = amd_iommu_activate_guest_mode(ir_data, pi_data->cpu,
-							    pi_data->posted_intr);
+							    pi_data->posted_intr, pi_data->gappi_dest);
 		else
 			ret = amd_iommu_deactivate_guest_mode(ir_data);
 	} else {
