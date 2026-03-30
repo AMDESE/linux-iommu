@@ -133,6 +133,7 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	struct pci_dev *pdev = to_pci_dev(vdev->idev->dev);
 	struct iommufd_viommu *viommu = vdev->viommu;
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 
 	if (!pdev) {
 		pr_err();
@@ -150,6 +151,8 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	dev_data->gDevId = vdev->virt_id;
 	pr_debug("%s: gid=%#x, hdev_id=%#x, gdev_id=%#x\n", __func__,
 			 dev_data->gid, pci_dev_id(pdev), dev_data->gDevId);
+
+	amd_viommu_set_device_mapping(iommu, pci_dev_id(pdev), dev_data->gid, dev_data->gDevId);
 
 	return 0;
 }

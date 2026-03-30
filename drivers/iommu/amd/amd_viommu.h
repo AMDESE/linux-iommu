@@ -18,6 +18,9 @@ void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *vio
 
 int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
 				u16 hdom_id, u16 gdom_id);
+
+void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
+				   u16 guestId, u16 gDevId);
 #else
 
 static inline int amd_viommu_init(struct amd_iommu *iommu)
@@ -25,7 +28,7 @@ static inline int amd_viommu_init(struct amd_iommu *iommu)
 	return 0;
 }
 
-u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid);
+static inline u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid);
 {
 	return 0;
 }
@@ -36,6 +39,11 @@ static inline int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_
 }
 
 static inline void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu)
+{
+}
+
+static inline void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
+						 u16 guestId, u16 gDevId)
 {
 }
 

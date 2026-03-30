@@ -40,6 +40,7 @@
 #define VIOMMU_DOMID_MAPPING_BASE	0x2000000000ULL
 #define VIOMMU_DOMID_MAPPING_ENTRY_SIZE	(1 << 19)
 
+#define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET	0x00
 #define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET	0x08
 
 LIST_HEAD(viommu_devid_map);
@@ -352,6 +353,49 @@ static void free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
 	*entry = NULL;
 }
 
+/*
+ * Program the DevID via VFCTRL registers
+ * This function will be called during VM init via VFIO.
+ */
+void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
+				   u16 guestId, u16 gDevId)
+{
+	u64 val, tmp1, tmp2;
+	u8 __iomem *vfctrl;
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, hDevId=%#x, gDevId=%#x\n",
+		__func__, pci_dev_id(iommu->dev), guestId, hDevId, gDevId);
+
+	tmp1 = gDevId;
+	tmp1 = ((tmp1 & 0xFFFFULL) << 46);
+	tmp2 = hDevId;
+	tmp2 = ((tmp2 & 0xFFFFULL) << 14);
+	val = tmp1 | tmp2 | 0x8000000000000001ULL;
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId);
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET);
+}
+
+/*
+ * Clear the DevID via VFCTRL registers
+ * This function will be called during VM destroy via VFIO.
+ */
+static void clear_device_mapping(struct amd_iommu *iommu, u16 guestId, u16 gDevId)
+{
+	u64 val, tmp1, tmp2;
+	u8 __iomem *vfctrl;
+
+	/*
+	 * Clear the DevID in VFCTRL registers
+	 */
+	tmp1 = gDevId;
+	tmp1 = ((tmp1 & 0xFFFFULL) << 46);
+	tmp2 = 0; /* hDevId */
+	tmp2 = ((tmp2 & 0xFFFFULL) << 14);
+	val = tmp1 | tmp2 | 0x8000000000000001ULL;
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId);
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET);
+}
+
 static void viommu_clear_mapping(struct amd_iommu *iommu,
 				 struct amd_iommu_viommu *aviommu)
 {
@@ -366,6 +410,10 @@ static void viommu_clear_mapping(struct amd_iommu *iommu,
 	 */
 	for (i = 0; i <= VIOMMU_MAX_GDOMID; i++)
 		amd_viommu_domain_id_update(iommu, gid, aviommu->parent->id, i);
+
+	for (i = 0; i <= VIOMMU_MAX_GDEVID; i++)
+		clear_device_mapping(iommu, gid, i);
+
 }
 
 void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu)
