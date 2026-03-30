@@ -7,6 +7,7 @@
 #define dev_fmt(fmt)    pr_fmt(fmt)
 
 #include <linux/delay.h>
+#include <linux/sched.h>
 #include <linux/iommu.h>
 #include <linux/iommufd.h>
 #include <uapi/linux/iommufd.h>
@@ -447,6 +448,8 @@ static void __maybe_unused free_private_vm_region(struct amd_iommu *iommu, u64 *
 #define DEVID_ENTRY_WRITE		BIT_ULL(63)
 #define DEVID_ENTRY_VALID		BIT_ULL(0)
 
+#define VIOMMU_VFCTRL_PREFILL_RESCHED	256
+
 /*
  * CONTROL0/CONTROL1 bit 63 (WRITE) is a doorbell: hardware copies one
  * entry into the IPA-backed table and clears WRITE when that DMA write
@@ -559,10 +562,95 @@ void amd_viommu_domain_id_update(struct amd_iommu_viommu *aviommu,
 	mutex_unlock(&aviommu->vfctrl_lock);
 }
 
+static bool viommu_vfctrl_ready(struct amd_iommu *iommu)
+{
+	return iommu->vfctrl_base && viommu_cmdbuf_enabled(iommu);
+}
+
+/*
+ * Drain outstanding CONTROL0/CONTROL1 table DMA before the IPA pages
+ * are unmapped and freed. Do not rewrite 0..0xFFFF: vDevice destroy
+ * and nested_domain_free already restored idle entries, and a full
+ * walk would start 128K new DMA writes into pages about to be freed.
+ *
+ * Skip after disable_iommus(): CMDBUF_EN is already clear, matching
+ * viommu_priv_unmap_free() which skips IOTLB invalidation.
+ */
+static void viommu_drain_mapping(struct amd_iommu *iommu,
+				 struct amd_iommu_viommu *aviommu)
+{
+	u16 gid = aviommu->gid;
+
+	if (!viommu_vfctrl_ready(iommu))
+		return;
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	vfctrl_wait_write_clear(iommu, gid,
+			VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET);
+	vfctrl_wait_write_clear(iommu, gid,
+			VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
+	mutex_unlock(&aviommu->vfctrl_lock);
+}
+
+static void viommu_prefill_resched(struct amd_iommu_viommu *aviommu, int i)
+{
+	lockdep_assert_held(&aviommu->vfctrl_lock);
+
+	if ((i & (VIOMMU_VFCTRL_PREFILL_RESCHED - 1)) !=
+	    VIOMMU_VFCTRL_PREFILL_RESCHED - 1)
+		return;
+
+	mutex_unlock(&aviommu->vfctrl_lock);
+	cond_resched();
+	mutex_lock(&aviommu->vfctrl_lock);
+}
+
+/*
+ * Prefill every guest ID so hardware never sees an unknown mapping.
+ * Map all gdom_id to the nest parent domain ID, and all gdev_id with
+ * hdev_id 0. Cannot be scoped to IDs in use: none exist yet, and
+ * INVALIDATE_IOMMU_ALL walks the HW table.
+ *
+ * Drop vfctrl_lock every VIOMMU_VFCTRL_PREFILL_RESCHED doorbells so
+ * the 128K MMIO loop can yield. Safe on init: vDevice/nested attach
+ * cannot run until viommu->ops is published after init_one().
+ */
+static void viommu_prefill_mapping(struct amd_iommu *iommu,
+				   struct amd_iommu_viommu *aviommu)
+{
+	int i;
+	u16 gid = aviommu->gid;
+
+	if (!viommu_vfctrl_ready(iommu))
+		return;
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	if (aviommu->domid_table) {
+		for (i = 0; i <= VIOMMU_MAX_GDOMID; i++) {
+			domain_id_update_unlocked(iommu, gid,
+						  aviommu->parent->id, i);
+			viommu_prefill_resched(aviommu, i);
+		}
+	}
+
+	if (aviommu->devid_table) {
+		for (i = 0; i <= VIOMMU_MAX_GDEVID; i++) {
+			set_device_mapping_unlocked(iommu, gid, 0, i);
+			viommu_prefill_resched(aviommu, i);
+		}
+	}
+	mutex_unlock(&aviommu->vfctrl_lock);
+}
+
 void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu)
 {
 	pr_debug("%s: gid=%u\n", __func__, aviommu->gid);
 
+	/*
+	 * Wait until CONTROL0/CONTROL1 table DMA has retired before
+	 * the backing pages are unmapped and freed.
+	 */
+	viommu_drain_mapping(iommu, aviommu);
 	free_private_vm_region(iommu, &aviommu->devid_table,
 			       VIOMMU_DEVID_MAPPING_BASE,
 			       VIOMMU_DEVID_MAPPING_ENTRY_SIZE,
@@ -590,6 +678,8 @@ int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu
 				      viommu->gid);
 	if (ret)
 		goto err_out;
+
+	viommu_prefill_mapping(iommu, viommu);
 
 	return 0;
 err_out:
