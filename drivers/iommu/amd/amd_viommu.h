@@ -23,6 +23,9 @@ int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu
 
 void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu);
 
+void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
+					u16 hdom_id, u16 gdom_id);
+
 void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
 				   u16 hdev_id, u16 gdev_id);
 #else
@@ -48,6 +51,11 @@ static inline u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
 
 static inline void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
 						 u16 hdev_id, u16 gdev_id)
+{
+}
+
+static inline void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
+						      u16 hdom_id, u16 gdom_id)
 {
 }
 
