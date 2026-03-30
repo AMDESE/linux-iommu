@@ -40,6 +40,8 @@
 #define VIOMMU_DOMID_MAPPING_BASE	0x2000000000ULL
 #define VIOMMU_DOMID_MAPPING_ENTRY_SIZE	(1 << 19)
 
+#define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET	0x08
+
 LIST_HEAD(viommu_devid_map);
 
 static int viommu_init_pci_vsc(struct amd_iommu *iommu)
@@ -350,6 +352,22 @@ static void free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
 	*entry = NULL;
 }
 
+static void viommu_clear_mapping(struct amd_iommu *iommu,
+				 struct amd_iommu_viommu *aviommu)
+{
+	int i;
+	u16 gid = aviommu->gid;
+
+	/*
+	 * IOMMU hardware uses the domain ID mapping table to map gdom ID to hdom ID.
+	 * If the mapping does not exist, the hardware would generate error in the event log.
+	 * Therefore, initialize all gdom ID entries to map to parent domain ID to prevent
+	 * unknown mapping scenario.
+	 */
+	for (i = 0; i <= VIOMMU_MAX_GDOMID; i++)
+		amd_viommu_domain_id_update(iommu, gid, aviommu->parent->id, i);
+}
+
 void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *aviommu)
 {
 	pr_debug("%s: gid=%u\n", __func__, aviommu->gid);
@@ -362,6 +380,7 @@ void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *avi
 			       VIOMMU_DOMID_MAPPING_BASE,
 			       VIOMMU_DOMID_MAPPING_ENTRY_SIZE,
 			       aviommu->gid);
+	viommu_clear_mapping(iommu, aviommu);
 }
 
 int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu)
@@ -382,8 +401,31 @@ int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu
 	if (ret)
 		goto err_out;
 
+	viommu_clear_mapping(iommu, viommu);
+
 	return 0;
 err_out:
 	amd_viommu_uninit_one(iommu, viommu);
 	return -ENOMEM;
 }
+
+/*
+ * Program the DomID via VFCTRL registers
+ * This function will be called during VM init via VFIO.
+ */
+int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
+				u16 hdom_id, u16 gdom_id)
+{
+	u64 val, tmp1, tmp2;
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	tmp1 = gdom_id;
+	tmp1 = ((tmp1 & 0xFFFFULL) << 46);
+	tmp2 = hdom_id;
+	tmp2 = ((tmp2 & 0xFFFFULL) << 14);
+	val = tmp1 | tmp2 | 0x8000000000000001UL;
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
+
+	return 0;
+}
+EXPORT_SYMBOL(amd_viommu_domain_id_update);
