@@ -136,9 +136,15 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	struct pci_dev *pdev = to_pci_dev(vdev->idev->dev);
 	struct iommufd_viommu *viommu = vdev->viommu;
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 
 	if (!pdev) {
 		pr_err("%s: not a PCI device\n", __func__);
+		return -EINVAL;
+	}
+
+	if (vdev->virt_id > VIOMMU_MAX_GDEVID) {
+		pr_err("%s: Invalid virtual ID (virt_id=%#llx)\n", __func__, vdev->virt_id);
 		return -EINVAL;
 	}
 
@@ -151,6 +157,9 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 
 	pr_debug("%s: gid=%#x, hdev_id=%#x, gdev_id=%#llx\n", __func__,
 		 aviommu->gid, pci_dev_id(pdev), vdev->virt_id);
+
+	amd_viommu_set_device_mapping(iommu, pci_dev_id(pdev), aviommu->gid,
+				       (u16)vdev->virt_id);
 
 	return 0;
 }
