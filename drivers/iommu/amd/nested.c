@@ -10,6 +10,7 @@
 #include <uapi/linux/iommufd.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 
 static const struct iommu_domain_ops nested_domain_ops;
 
@@ -245,6 +246,7 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 				struct iommu_domain *old)
 {
 	struct dev_table_entry new = {0};
+	struct nested_domain *ndom = to_ndomain(dom);
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
 	int ret = 0;
@@ -261,6 +263,9 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 	set_dte_nested(iommu, dom, dev_data, &new);
 
 	amd_iommu_update_dte(iommu, dev_data, &new);
+
+	ret = amd_viommu_domain_id_update(iommu, dev_data->gid,
+					  ndom->gdom_info->hdom_id, ndom->gdom_id);
 
 	mutex_unlock(&dev_data->mutex);
 
