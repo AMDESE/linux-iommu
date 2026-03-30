@@ -10,6 +10,7 @@
 #include <uapi/linux/iommufd.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 
 static const struct iommu_domain_ops nested_domain_ops;
 
@@ -188,13 +189,16 @@ out_err:
 	return ERR_PTR(ret);
 }
 
-static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
-			   struct iommu_dev_data *dev_data, struct dev_table_entry *new)
+static int set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
+			  struct iommu_dev_data *dev_data, struct dev_table_entry *new)
 {
+	int ret;
+	u16 gid;
 	struct protection_domain *parent;
 	struct nested_domain *ndom = to_ndomain(dom);
 	struct iommu_hwpt_amd_guest *gdte = &ndom->gdte;
 	struct pt_iommu_amdv1_hw_info pt_info;
+	unsigned long gdev_id;
 
 	/*
 	 * The nest parent domain is attached during the call to the
@@ -202,9 +206,15 @@ static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 	 * of the struct amd_iommu_viommu.parent.
 	 */
 	if (WARN_ON(!ndom->viommu || !ndom->viommu->parent))
-		return;
+		return -EINVAL;
 
+	gid = ndom->viommu->gid;
 	parent = ndom->viommu->parent;
+
+	ret = iommufd_viommu_get_vdev_id(&ndom->viommu->core, dev_data->dev, &gdev_id);
+	if (ret)
+		return ret;
+
 	amd_iommu_make_clear_dte(iommu, dev_data->devid, new);
 
 	/* Retrieve the current pagetable info via the IOMMU PT API. */
@@ -232,12 +242,19 @@ static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 
 	/* Guest paging mode */
 	new->data[2] |= gdte->dte[2] & DTE_GPT_LEVEL_MASK;
+
+	new->data[3] |= 1ULL << DTE_VIOMMU_EN_SHIFT;
+	new->data[3] |= FIELD_PREP(DTE_VIOMMU_GDEVICEID_MASK, gdev_id);
+	new->data[3] |= FIELD_PREP(DTE_VIOMMU_GUESTID_MASK, gid);
+
+	return 0;
 }
 
 static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 				struct iommu_domain *old)
 {
 	struct dev_table_entry new = {0};
+	struct nested_domain *ndom = to_ndomain(dom);
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
 	int ret = 0;
@@ -251,10 +268,23 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 
 	mutex_lock(&dev_data->mutex);
 
-	set_dte_nested(iommu, dom, dev_data, &new);
+	ret = set_dte_nested(iommu, dom, dev_data, &new);
+	if (ret)
+		goto out_err;
 
+	/*
+	 * Program gdom_id -> hdom_id before the DTE is live with
+	 * DTE_VIOMMU_EN. Hold vfctrl_lock across both so a concurrent
+	 * last-ref free cannot restore the idle map in between.
+	 */
+	mutex_lock(&ndom->viommu->vfctrl_lock);
+	amd_viommu_domain_id_update_locked(ndom->viommu,
+					   ndom->gdom_info->hdom_id,
+					   ndom->gdom_id);
 	amd_iommu_update_dte(iommu, dev_data, &new);
+	mutex_unlock(&ndom->viommu->vfctrl_lock);
 
+out_err:
 	mutex_unlock(&dev_data->mutex);
 
 	return ret;
@@ -267,10 +297,18 @@ static void nested_domain_free(struct iommu_domain *dom)
 	struct nested_domain *ndom __free(kfree) = to_ndomain(dom);
 	struct amd_iommu_viommu *aviommu = ndom->viommu;
 
+	/*
+	 * vfctrl_lock then gdomid_array: keep the slot empty in the
+	 * xarray until CONTROL1 is idle so a concurrent alloc+attach
+	 * for this gdom_id cannot publish H2 and then lose it to this
+	 * restore. Attach takes the same lock around CONTROL1 + DTE.
+	 */
+	mutex_lock(&aviommu->vfctrl_lock);
 	xa_lock_irqsave(&aviommu->gdomid_array, irqflags);
 
 	if (!refcount_dec_and_test(&ndom->gdom_info->users)) {
 		xa_unlock_irqrestore(&aviommu->gdomid_array, irqflags);
+		mutex_unlock(&aviommu->vfctrl_lock);
 		return;
 	}
 
@@ -282,14 +320,34 @@ static void nested_domain_free(struct iommu_domain *dom)
 			    ndom->gdom_info, NULL, GFP_ATOMIC);
 
 	xa_unlock_irqrestore(&aviommu->gdomid_array, irqflags);
-	if (WARN_ON(!curr || xa_err(curr)))
+	if (WARN_ON(!curr || xa_err(curr))) {
+		mutex_unlock(&aviommu->vfctrl_lock);
 		return;
+	}
 
-	/* success */
 	pr_debug("%s: Free gdom_id=%#x, hdom_id=%#x\n",
-		__func__, ndom->gdom_id, curr->hdom_id);
+		 __func__, ndom->gdom_id, curr->hdom_id);
 
-	amd_iommu_pdom_id_free(ndom->gdom_info->hdom_id);
+	/*
+	 * Restore the idle DomID map before releasing hdom_id. Every
+	 * slot stays V=1; unknown mapping raises an event. Idle is the
+	 * nest parent CONTROL1 map, same as vIOMMU init prefill.
+	 * amd_iommu_reset_vmmio() only resets guest MMIO.
+	 *
+	 * Guest INVALIDATE_IOMMU_ALL walks the HW table, not
+	 * gdomid_array. The pdom_ids IDA is global, so a stale V=1
+	 * entry can invalidate a recycled hdom_id that now belongs to
+	 * another domain.
+	 *
+	 * Detach does not clear this slot: hdom_id stays allocated
+	 * until this last free, so a lingering gdom_id -> hdom_id
+	 * map cannot point at a recycled ID.
+	 */
+	amd_viommu_domain_id_update_locked(aviommu, aviommu->parent->id,
+					   ndom->gdom_id);
+	mutex_unlock(&aviommu->vfctrl_lock);
+
+	amd_iommu_pdom_id_free(curr->hdom_id);
 	kfree(curr);
 }
 

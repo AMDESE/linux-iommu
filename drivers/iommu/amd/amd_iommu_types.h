@@ -382,6 +382,11 @@
 #define DTE_GPT_LEVEL_SHIFT	54
 #define DTE_GPT_LEVEL_MASK	GENMASK_ULL(55, 54)
 
+/* vIOMMU bit fields */
+#define DTE_VIOMMU_EN_SHIFT		15
+#define DTE_VIOMMU_GDEVICEID_MASK	GENMASK_ULL(31, 16)
+#define DTE_VIOMMU_GUESTID_MASK		GENMASK_ULL(47, 32)
+
 #define GCR3_VALID		0x01ULL
 
 /* DTE[128:179] | DTE[184:191] */
@@ -552,6 +557,11 @@ struct amd_iommu_viommu {
 	 * (DevID and DomID table updates) for this gid. Those registers
 	 * are shared by every vDevice on this vIOMMU; igroup locks are
 	 * not. Do not nest with trans_devid_lock.
+	 *
+	 * nested_domain_free() last-ref takes this before
+	 * gdomid_array's xa_lock so CONTROL1 idle restore cannot race
+	 * a concurrent alloc+attach. Attach holds it across CONTROL1
+	 * and the DTE commit.
 	 */
 	struct mutex vfctrl_lock;
 
