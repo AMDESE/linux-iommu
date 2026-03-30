@@ -46,6 +46,7 @@ static_assert(VIOMMU_DOMID_MAPPING_ENTRY_SIZE >=
 	      (VIOMMU_MAX_GDOMID + 1ULL) * sizeof(u64));
 
 #define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL0_OFFSET	0x00
+#define VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET	0x08
 
 static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 {
@@ -507,6 +508,54 @@ void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
 
 	mutex_lock(&aviommu->vfctrl_lock);
 	set_device_mapping_unlocked(iommu, aviommu->gid, hdev_id, gdev_id);
+	mutex_unlock(&aviommu->vfctrl_lock);
+}
+
+#define DOMID_ENTRY_GDOMID_MASK	GENMASK_ULL(61, 46)
+#define DOMID_ENTRY_HDOMID_MASK	GENMASK_ULL(29, 14)
+#define DOMID_ENTRY_VALID		BIT_ULL(0)
+#define DOMID_ENTRY_WRITE		BIT_ULL(63)
+
+/*
+ * Guest DomID table update via VFCTRL CONTROL1. Same WRITE-bit
+ * doorbell as CONTROL0.
+ */
+static void domain_id_update_unlocked(struct amd_iommu *iommu, u16 gid,
+				      u16 hdom_id, u16 gdom_id)
+{
+	u64 val;
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	val = FIELD_PREP(DOMID_ENTRY_GDOMID_MASK, gdom_id) |
+	      FIELD_PREP(DOMID_ENTRY_HDOMID_MASK, hdom_id) |
+	      DOMID_ENTRY_WRITE | DOMID_ENTRY_VALID;
+
+	vfctrl_wait_write_clear(iommu, gid,
+			VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
+	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
+	vfctrl_wait_write_clear(iommu, gid,
+			VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
+}
+
+/*
+ * Program a gdom_id -> hdom_id entry through VFCTRL CONTROL1.
+ * Caller must hold aviommu->vfctrl_lock.
+ */
+void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
+					u16 hdom_id, u16 gdom_id)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+
+	lockdep_assert_held(&aviommu->vfctrl_lock);
+	domain_id_update_unlocked(iommu, aviommu->gid, hdom_id, gdom_id);
+}
+
+void amd_viommu_domain_id_update(struct amd_iommu_viommu *aviommu,
+				 u16 hdom_id, u16 gdom_id)
+{
+	mutex_lock(&aviommu->vfctrl_lock);
+	amd_viommu_domain_id_update_locked(aviommu, hdom_id, gdom_id);
 	mutex_unlock(&aviommu->vfctrl_lock);
 }
 
