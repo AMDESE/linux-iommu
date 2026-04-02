@@ -553,6 +553,36 @@ static bool ide_xt_supported(struct pci_dev *pdev)
 	return false;
 }
 
+bool ide_xt_enabled(struct pci_ide *ide)
+{
+	struct pci_dev *pdev;
+	struct pci_ide_partner *settings;
+	u32 val;
+	int pos;
+
+	if (ide == NULL || ide->pdev == NULL) {
+		pr_notice("%s: pdev in NULL\n", __func__);
+		return false;
+	}
+
+	pdev = ide->pdev;
+	settings = pci_ide_to_settings(pdev, ide);
+
+	if (!xt_support)
+		return false;
+
+	pos = sel_ide_offset(pdev, settings);
+	pci_read_config_dword(pdev, pos + PCI_IDE_SEL_CTL, &val);
+
+	pr_info("%s: PCI_IDE_SEL_CTL=0x%x\n", __func__, val);
+
+	if (val & PCI_IDE_SEL_CTL_XT)
+		return true;
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(ide_xt_enabled);
+
 static void set_ide_sel_ctl(struct pci_dev *pdev, struct pci_ide *ide,
 			    struct pci_ide_partner *settings, int pos,
 			    bool enable)

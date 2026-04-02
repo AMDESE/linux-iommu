@@ -334,9 +334,12 @@ struct sev_data_tio_dev_connect {
 	struct sla_addr_t dev_ctx_sla;
 	u8 tc_mask;
 	u8 cert_slot;
-	u8 reserved3[6];
+	u8 reserved3[2];
+	u32 xt_mode_enable:1;
+	u32 xt_bit_locked_msix:1;
+	u32 reserved4:30;
 	u8 ide_stream_id[8];
-	u8 reserved4[8];
+	u8 reserved5[8];
 } __packed;
 
 /*
@@ -1367,6 +1370,12 @@ int sev_tio_dev_connect(struct tsm_dsm_tio *dev_data, u8 tc_mask, u8 ids[8], u8 
 		return ret;
 
 	spdm_ctrl_init(&connect.spdm_ctrl, dev_data);
+
+	/* TODO: This works for now as ide[0] is always populated */
+	if (ide_xt_enabled(dev_data->ide[0]))
+		connect.xt_mode_enable = 1;
+	pr_info("DEBUG: %s XT support=%s\n", __func__,
+		connect.xt_mode_enable? "enabled" : "disabled");
 
 	return sev_tio_do_cmd(SEV_CMD_TIO_DEV_CONNECT, &connect, sizeof(connect),
 			      &dev_data->psp_ret, dev_data);
