@@ -116,4 +116,5 @@ int pci_ide_stream_enable(struct pci_dev *pdev, struct pci_ide *ide);
 void pci_ide_stream_disable(struct pci_dev *pdev, struct pci_ide *ide);
 void pci_ide_stream_release(struct pci_ide *ide);
 DEFINE_FREE(pci_ide_stream_release, struct pci_ide *, if (_T) pci_ide_stream_release(_T))
+bool ide_xt_enabled(struct pci_ide *ide);
 #endif /* __PCI_IDE_H__ */
