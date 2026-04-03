@@ -777,6 +777,8 @@ struct iommu_domain_ops {
 
 	phys_addr_t (*iova_to_phys)(struct iommu_domain *domain,
 				    dma_addr_t iova);
+	u64 *(*ptep)(struct iommu_domain *domain,
+                     dma_addr_t iova, size_t *size);
 
 	bool (*enforce_cache_coherency)(struct iommu_domain *domain);
 	int (*set_pgtable_quirks)(struct iommu_domain *domain,
@@ -932,6 +934,9 @@ extern ssize_t iommu_map_sg(struct iommu_domain *domain, unsigned long iova,
 			    struct scatterlist *sg, unsigned int nents,
 			    int prot, gfp_t gfp);
 extern phys_addr_t iommu_iova_to_phys(struct iommu_domain *domain, dma_addr_t iova);
+extern u64 *iommu_fetch_pte(struct iommu_domain *dom,
+			 unsigned long iova,
+			 unsigned long *size);
 extern int iommu_for_each(struct iommu_domain *domain, iommu_domain_ops_for_each_fn fn, void *arg);
 extern void iommu_set_fault_handler(struct iommu_domain *domain,
 			iommu_fault_handler_t handler, void *token);

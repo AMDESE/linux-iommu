@@ -189,6 +189,54 @@ phys_addr_t DOMAIN_NS(iova_to_phys)(struct iommu_domain *domain,
 }
 EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(iova_to_phys), "GENERIC_PT_IOMMU");
 
+struct __do_ptep_walk_s {
+	u64 *pteptrp;
+	size_t size;
+};
+
+static __always_inline int __do_ptep(struct pt_range *range, void *arg,
+					     unsigned int level,
+					     struct pt_table_p *table,
+					     pt_level_fn_t descend_fn)
+{
+	struct pt_state pts = pt_init(range, level, table);
+	struct __do_ptep_walk_s *s = arg;
+
+	switch (pt_load_single_entry(&pts)) {
+	case PT_ENTRY_EMPTY:
+		return -ENOENT;
+	case PT_ENTRY_TABLE:
+		return pt_descend(&pts, arg, descend_fn);
+	case PT_ENTRY_OA:
+		s->size = 1UL << pt_entry_oa_lg2sz(&pts);
+		s->pteptrp = pt_cur_table(&pts, u64) + pts.index;
+		return 0;
+	}
+	return -ENOENT;
+}
+PT_MAKE_LEVELS(__ptep, __do_ptep);
+
+u64 *DOMAIN_NS(ptep)(struct iommu_domain *domain, dma_addr_t iova, size_t *size)
+{
+	struct pt_iommu *iommu_table =
+		container_of(domain, struct pt_iommu, domain);
+	struct pt_range range = {};
+	struct __do_ptep_walk_s s = {};
+	int ret;
+
+	ret = make_range(common_from_iommu(iommu_table), &range, iova, 1);
+	if (ret)
+		return NULL;
+
+	ret = pt_walk_range(&range, __ptep, &s);
+	/* PHYS_ADDR_MAX would be a better error code */
+	if (ret)
+		return NULL;
+	*size = s.size;
+	return s.pteptrp;
+}
+EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(ptep), "GENERIC_PT_IOMMU");
+
 struct __do_for_each_walk_s {
 	struct iommu_domain *domain;
 	iommu_domain_ops_for_each_fn fn;
