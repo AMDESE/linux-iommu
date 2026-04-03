@@ -65,19 +65,19 @@ extern unsigned long tmpm_sev_mask;
  * this interval while polling the status register should only happen if the TMPM
  * is wedged.
  */
-#define POLL_MSEC 25
+#define POLL_MSEC 250
 
 /*
  * Shorter interval to wait for other conditions.
  */
-#define POLL_USEC 25
+#define POLL_USEC 250
 
 /*
  * Each polling loop delays for POLL_USEC (25 us). To poll for POLL_MSEC:
  * POLL_LOOPS =  (USEC_PER_MSEC * POLL_USEC) / POLL_USEC which is reduced to
  * USEC_PER_MSEC.
  */
-#define POLL_LOOPS USEC_PER_MSEC
+#define POLL_LOOPS (10*(USEC_PER_MSEC))
 
 /*
  * TMPM Command IDs and status codes. Subsequent patches will add command IDs.
