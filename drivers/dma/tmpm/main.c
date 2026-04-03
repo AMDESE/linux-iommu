@@ -39,9 +39,45 @@ struct get_capabilities capabilities;
  *
  * Return: the contents of the register
  */
+static bool in_probe;
+
+static const char *regname(u32 reg)
+{
+	switch (reg) {
+	case REG_RBCTL: return "REG_RBCTL";
+	case REG_RBTAIL: return "REG_RBTAIL";
+	case REG_RBHEAD: return "REG_RBHEAD";
+	case REG_CDATA: return "REG_CDATA";
+	case REG_RBLOW: return "REG_RBLOW";
+	case REG_RBHIGH: return "REG_RBHIGH";
+	case REG_THRESH: return "REG_THRESH";
+	case REG_STATUS: return "REG_STATUS";
+	}
+	return "unknown";
+}
+
 static u32 read_mb_reg(struct tmpm *tmpm, u32 reg)
 {
-	return readl(tmpm->mbox + reg);
+	u32 ret = readl(tmpm->mbox + reg);
+
+	if (!in_probe)
+		return ret;
+
+	static u32 reg1 = -1, ret1, n;
+	if (reg1 != reg || ret1 != ret) {
+		if (n) {
+			dev_err(tmpm->dev, "___K___ %s %u: (repeated %d) + %s(%x) => %x\n",
+				__func__, __LINE__, n, regname(reg1), reg1, ret1);
+			n = 0;
+		}
+		dev_err(tmpm->dev, "___K___ %s %u: %lx + %s(%x) => %x\n", __func__, __LINE__,
+			(ulong) tmpm->mbox, regname(reg), reg, ret);
+		ret1 = ret;
+		reg1 = reg;
+	} else {
+		++n;
+	}
+	return ret;
 }
 
 /*
@@ -53,6 +89,9 @@ static u32 read_mb_reg(struct tmpm *tmpm, u32 reg)
  */
 static void write_mb_reg(struct tmpm *tmpm, u32 reg, u32 val)
 {
+	if (in_probe)
+		dev_err(tmpm->dev, "___K___ %s %u: %lx + %s(%x) <= %x\n", __func__, __LINE__,
+			(ulong) tmpm->mbox, regname(reg), reg, val);
 	writel(val, tmpm->mbox + reg);
 }
 
@@ -406,7 +445,7 @@ static int submit_rb_entry(struct tmpm *tmpm, struct rb_entry *entry)
 
 	tail = read_tail(tmpm);
 	if (!CIRC_SPACE(index, tail, RB_SIZE)) {
-		dev_dbg(tmpm->dev, "(%s): no space in ring buffer - try again\n", __func__);
+		dev_err(tmpm->dev, "(%s): no space in ring buffer - try again\n", __func__);
 		return -EAGAIN;
 	}
 
@@ -728,7 +767,12 @@ static __init int init_tmpm_engine(struct tmpm *tmpm)
 	}
 
 	if (i == POLL_LOOPS)
+	{
+		pr_err("___K___ %s %u: -EIO\n", __func__, __LINE__);
+		for (int jj = 0; jj < 8; ++jj)
+			read_mb_reg(tmpm, jj * sizeof(u32));
 		return -EIO;
+	}
 
 	dev_dbg(dev, "(%s): Driver is initialized\n", __func__);
 
@@ -776,6 +820,8 @@ static __init int probe(struct platform_device *pdev)
 	struct tmpm *tmpm;
 	struct device *dev = &pdev->dev;
 	struct tmpm_device_data *tmpm_match;
+
+	in_probe = true;
 
 	tmpm_match = (struct tmpm_device_data *)acpi_device_get_match_data(dev);
 
@@ -827,6 +873,9 @@ static __init int probe(struct platform_device *pdev)
 		ret = -EIO;
 		goto err_tmpm;
 	}
+	dev_err(dev, "___K___ %s %u: devm_ioremap(%llx sz=%llx) => %lx\n", __func__, __LINE__,
+		tmpm->res->start, tmpm->res->end - tmpm->res->start + 1, (ulong) tmpm->mbox);
+
 	spin_lock_init(&tmpm->lock);
 
 	tmpm->irq = platform_get_irq(pdev, 0);
@@ -868,11 +917,13 @@ static __init int probe(struct platform_device *pdev)
 	if (cpu_feature_enabled(X86_FEATURE_SEV))
 		tmpm_sev_mask = 1UL << (cpuid_ebx(0x8000001f) & 0x3f);
 
-	dev_dbg(dev, "TMPM Identity mapping supported: %s\n",
-		tmpm_identity_mapping() ? "Yes." : "No.");
+	bool mapped = tmpm_identity_mapping();
+	dev_err(dev, "TMPM Identity mapping supported: %s\n", mapped ? "Yes." : "No.");
 
 	if (capabilities.support_reg & GC_SUP_PSMASH)
 		rmp_update_io_ops(&tmpm_rmp_ops);
+
+	in_probe = false;
 
 	return ret;
 
@@ -883,6 +934,8 @@ err_tmpm:
 	tmpm_iommu_disable();
 	platform_set_drvdata(tmpm_platform_dev, NULL);
 	devm_kfree(dev, tmpm);
+
+	in_probe = false;
 
 	return ret;
 }
