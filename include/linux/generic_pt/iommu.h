@@ -223,6 +223,8 @@ struct pt_iommu_cfg {
 #define IOMMU_PROTOTYPES(fmt)                                                  \
 	phys_addr_t pt_iommu_##fmt##_iova_to_phys(struct iommu_domain *domain, \
 						  dma_addr_t iova);            \
+	u64 *pt_iommu_##fmt##_ptep(struct iommu_domain *domain,                \
+				   dma_addr_t iova, size_t *size);             \
 	int pt_iommu_##fmt##_for_each(struct iommu_domain *domain,		\
 		iommu_domain_ops_for_each_fn fn, void *arg); \
 	int pt_iommu_##fmt##_map_pages(struct iommu_domain *domain,            \
@@ -254,6 +256,7 @@ struct pt_iommu_cfg {
  */
 #define IOMMU_PT_DOMAIN_OPS(fmt)                        \
 	.iova_to_phys = &pt_iommu_##fmt##_iova_to_phys, \
+	.ptep = &pt_iommu_##fmt##_ptep,			\
 	.for_each = &pt_iommu_##fmt##_for_each,		\
 	.map_pages = &pt_iommu_##fmt##_map_pages,       \
 	.unmap_pages = &pt_iommu_##fmt##_unmap_pages
