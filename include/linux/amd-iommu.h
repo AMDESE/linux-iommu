@@ -78,6 +78,5 @@ static inline bool amd_iommu_sev_tio_supported(void) { return false; }
 
 int amd_iommu_tmpm_enable(void);
 void amd_iommu_tmpm_disable(void);
-struct iommu_domain;
 
 #endif /* _ASM_X86_AMD_IOMMU_H */
