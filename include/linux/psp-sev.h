@@ -1160,4 +1160,17 @@ enum sdte_write_status {
 	SDTE_WRITE_RESERVED = 3,
 };
 
+/*
+ * Status codes from TIO_MSG_MMIO_CONFIG_REQ
+ */
+enum mmio_config_status {
+	MMIO_CONFIG_SUCCESS = 0,
+	MMIO_CONFIG_INVALID_TDI = 1,
+	MMIO_CONFIG_TDI_UNBOUND = 2,
+	 /* The provided MMIO range ID is not reported in the interface report */
+	MMIO_CONFIG_NOT_REPORTED = 3,
+	/* One or more attributes could not be changed */
+	MMIO_CONFIG_COULD_NOT_CHANGE = 4,
+};
+
 #endif	/* __PSP_SEV_H__ */

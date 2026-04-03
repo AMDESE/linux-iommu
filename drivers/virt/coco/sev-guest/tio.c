@@ -464,6 +464,106 @@ static int mmio_validate_range(struct snp_guest_dev *snp_dev, struct pci_dev *pd
 	return 0;
 }
 
+#ifdef SEV_TIO_GUEST_TRY_MAKE_MMIO_SHARED
+struct tio_msg_mmio_config_req {
+	u16 guest_device_id;
+	u16 reserved1;
+
+	u32 reserved2:2;
+	u32 is_non_tee_mem:1;
+	u32 reserved3:13;
+	u32 range_id:16;
+
+	u32 write:1; /* 0: read; 1: Write configuration of range */
+	u32 reserved4:31;
+
+	u8 reserved5[4];
+} __packed;
+
+struct tio_msg_mmio_config_rsp {
+	u16 guest_device_id;
+	u16 status; /* mmio_config_status */
+
+	u32 msix_table:1;
+	u32 msix_pba:1;
+	u32 is_non_tee_mem:1;
+	u32 is_mem_attr_updateable:1;
+	u32 reserved1:12;
+	u32 range_id:16;
+
+	u32 write:1; /* 0: read; 1: Write configuration of range */
+	u32 reserved2:31;
+
+	u8 reserved3[4];
+} __packed;
+
+static int mmio_config_get(struct snp_guest_dev *snp_dev, struct pci_dev *pdev,
+			   unsigned int range_id, bool *updateable, bool *is_non_tee,
+			   u64 *fw_err, u16 *status)
+{
+	struct snp_msg_desc *mdesc = snp_dev->msg_desc;
+	size_t resp_len = sizeof(struct tio_msg_mmio_config_rsp) + mdesc->ctx->authsize;
+	struct tio_msg_mmio_config_rsp *rsp __free(kfree_sensitive) = kzalloc(resp_len, GFP_KERNEL);
+	struct tio_msg_mmio_config_req req = {
+		.guest_device_id = ghcb_tio_sbdfn(pdev),
+		.is_non_tee_mem = 0,
+		.range_id = range_id,
+		.write = 0,
+	};
+	u64 bdfn = ghcb_tio_sbdfn(pdev);
+	int rc;
+
+	if (!rsp)
+		return -ENOMEM;
+
+	rc = handle_tio_guest_request(snp_dev, TIO_MSG_MMIO_CONFIG_REQ,
+			       &req, sizeof(req), rsp, resp_len,
+			       NULL, NULL, &bdfn, NULL, fw_err);
+	if (rc)
+		return rc;
+
+	*status = rsp->status;
+	*updateable = rsp->is_mem_attr_updateable;
+	*is_non_tee = rsp->is_non_tee_mem;
+
+	return 0;
+}
+
+static int mmio_config_range(struct snp_guest_dev *snp_dev, struct pci_dev *pdev,
+			     unsigned int range_id, resource_size_t start, resource_size_t size,
+			     bool tee, u64 *fw_err, u16 *status)
+{
+	struct snp_msg_desc *mdesc = snp_dev->msg_desc;
+	size_t resp_len = sizeof(struct tio_msg_mmio_config_rsp) + mdesc->ctx->authsize;
+	struct tio_msg_mmio_config_rsp *rsp __free(kfree_sensitive) = kzalloc(resp_len, GFP_KERNEL);
+	struct tio_msg_mmio_config_req req = {
+		.guest_device_id = ghcb_tio_sbdfn(pdev),
+		.is_non_tee_mem = !tee,
+		.range_id = range_id,
+		.write = 1,
+	};
+	u64 bdfn = ghcb_tio_sbdfn(pdev);
+	u64 mmio_val = MMIO_MK_VALIDATE(start, size, range_id, tee);
+	int rc;
+
+	if (!rsp)
+		return -ENOMEM;
+
+	if (tee)
+		mmio_val |= MMIO_CONFIG_TEE;
+
+	rc = handle_tio_guest_request(snp_dev, TIO_MSG_MMIO_CONFIG_REQ,
+			       &req, sizeof(req), rsp, resp_len,
+			       NULL, NULL, &bdfn, &mmio_val, fw_err);
+	if (rc)
+		return rc;
+
+	*status = rsp->status;
+
+	return 0;
+}
+#endif
+
 static bool get_range(struct pci_dev *pdev, struct tsm_blob *report, unsigned int index,
 		      unsigned int *range_id, resource_size_t *start, resource_size_t *size)
 {
@@ -611,6 +711,36 @@ static void tio_tdi_mmio_invalidate(struct pci_dev *pdev, struct snp_guest_dev *
 			continue;
 		}
 
+#ifdef SEV_TIO_GUEST_TRY_MAKE_MMIO_SHARED
+		bool updateable = false, is_non_tee = false;
+		u16 status = 0;
+
+		rc = mmio_config_get(snp_dev, pdev, range_id, &updateable,
+				     &is_non_tee, &fw_err, &status);
+		if (rc || fw_err) {
+			pci_err(pdev, "MMIO #%d %llx..%llx failed to get config\n",
+				range_id, r->start, r->end);
+			continue;
+		}
+
+		pci_notice(pdev, "[%d] #%d: updateable=%d is_non_tee=%d\n",
+			   i, range_id, updateable, is_non_tee);
+
+		if (!updateable || is_non_tee)
+			continue;
+
+		rc = mmio_config_range(snp_dev, pdev, range_id,
+				       r->start, r->end - r->start + 1,
+				       false, &fw_err, &status);
+		if (rc) {
+			pci_err(pdev, "MMIO #%d %llx..%llx failed to set config\n",
+				range_id, r->start, r->end);
+			continue;
+		}
+
+		pci_notice(pdev, "[%d] #%d: setting config rc=%d status=%d\n",
+			   i, range_id, rc, status);
+#endif
 		pci_notice(pdev, "MMIO #%d %llx..%llx invalidated\n",  range_id, start, end);
 	}
 
