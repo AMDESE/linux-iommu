@@ -1,0 +1,21 @@
+This branch addresses following comments from the bytedance
+> Static Per-CPU Interrupt Allocation
+> Dynamic IRTE Updates
+> Interrupt Handling & Wakeup 
+
+It introduces two static lists 'gappi_wakeup_list' and 'gappi_wakeup_list_lock'. 
+Everytime there a vCPU unload it is appended on the per-CPU list of the
+previous CPU on which it was running.  The IRTE is configured with the same
+destination and vector "POSTED_INTR_WAKEUP_VECTOR".
+
+The kvm_amd also registers a notification handler called
+'avic_gappi_wakeup_handler'. When given CPU receives an GAPPI interrupt, this
+handler iterates over the list of vCPUs assigned to that CPU and wakes the vCPU
+if has a pending bit in IRR.
+
+Advantages of this branch over the last one:
+1) The number of GAPPI interrupts are always fixed instead of allocated
+   dynamically when interrupt is allocated.
+2) There is no need to call the affinity change interface when vCPU is
+   migrated as every CPU has a static IDT entry called
+   "POSTED_INTR_WAKEUP_VECTOR".
