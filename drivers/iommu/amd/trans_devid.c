@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (C) 2025 Advanced Micro Devices, Inc.
+ *
+ * AMD vIOMMU translate-device-id pool per PCI segment.
+ */
+
+#include <linux/kernel.h>
+#include <linux/xarray.h>
+
+#include "amd_iommu.h"
+
+static inline enum trans_devid_state trans_devid_xa_get_state(void *entry)
+{
+	if (!entry)
+		return TRANS_DEVID_FREE;
+	if (WARN_ON_ONCE(!xa_is_value(entry)))
+		return TRANS_DEVID_FREE;
+	return (enum trans_devid_state)xa_to_value(entry);
+}
+
+static inline void *trans_devid_xa_mk_state(enum trans_devid_state s)
+{
+	return xa_mk_value((unsigned long)s);
+}
+
+void amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg)
+{
+	mutex_init(&pci_seg->trans_devid_mutex);
+	xa_init(&pci_seg->trans_devid_xa);
+}
+
+void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
+{
+	xa_destroy(&pci_seg->trans_devid_xa);
+}
+
+/**
+ * amd_iommu_trans_devid_reserve - occupy @id so it is never returned by alloc
+ *
+ * Reservation is done when attaching device to a domain (see amd_iommu_attach_device()).
+ *
+ * Note: Since PCI hot-plug devices are enumerated during runtime, they could clash
+ * with the translate-device-id allocation. In such case, amd_iommu_trans_devid_reserve()
+ * could fail with %-EBUSY. This can be avoided by reserving the hot-plug id range if it
+ * is known in advance.
+ *
+ * Return: 0 on success, %-EBUSY if @id is already allocated. A second reserve of
+ * an already-reserved @id succeeds.
+ */
+int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id)
+{
+	void *entry, *old;
+	int ret = 0;
+
+	mutex_lock(&pci_seg->trans_devid_mutex);
+	entry = xa_load(&pci_seg->trans_devid_xa, id);
+	switch (trans_devid_xa_get_state(entry)) {
+	case TRANS_DEVID_ALLOCATED:
+		ret = -EBUSY;
+		break;
+	case TRANS_DEVID_RESERVED:
+		break;
+	case TRANS_DEVID_FREE:
+		old = xa_store(&pci_seg->trans_devid_xa, id,
+			       trans_devid_xa_mk_state(TRANS_DEVID_RESERVED), GFP_KERNEL);
+		if (xa_is_err(old)) {
+			ret = xa_err(old);
+			break;
+		}
+		WARN_ON_ONCE(old);
+		break;
+	}
+	mutex_unlock(&pci_seg->trans_devid_mutex);
+
+	if (!ret)
+		pr_debug("%s: Reserved trans_devid %#x (seg %#x)\n", __func__, id,
+			 pci_seg->id);
+	return ret;
+}
