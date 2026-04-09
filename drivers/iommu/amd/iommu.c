@@ -213,7 +213,12 @@ void amd_iommu_update_dte(struct amd_iommu *iommu,
 			     struct dev_table_entry *new)
 {
 	update_dte256(iommu, dev_data, new);
-	clone_aliases(iommu, dev_data->dev);
+	/*
+	 * The dev_data for trans_devid does not have struct dev.
+	 * So clone_aliases is not supported for translate-device-id.
+	 */
+	if (dev_data->dev)
+		clone_aliases(iommu, dev_data->dev);
 	device_flush_dte(iommu, dev_data);
 	amd_iommu_completion_wait(iommu);
 }
@@ -1747,7 +1752,11 @@ static int device_flush_dte(struct amd_iommu *iommu, struct iommu_dev_data *dev_
 	u16 alias;
 	int ret;
 
-	if (dev_is_pci(dev_data->dev))
+	/*
+	 * The dev_data for trans_devid does not have struct dev.
+	 * So, it is not considered as a PCI device.
+	 */
+	if (dev_data->dev && dev_is_pci(dev_data->dev))
 		pdev = to_pci_dev(dev_data->dev);
 
 	if (pdev)
@@ -3274,6 +3283,75 @@ static bool amd_iommu_enforce_cache_coherency(struct iommu_domain *domain)
 	/* IOMMU_PTE_FC is always set */
 	return true;
 }
+
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+
+void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
+						  u16 gid, u32 devid)
+{
+	writeq((devid & 0xFFFFULL) << 16,
+	       VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) +
+	       VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
+}
+
+int amd_iommu_set_translate_dte(struct iommufd_viommu *viommu)
+{
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu =
+		container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	struct protection_domain *pdom = aviommu->parent;
+	u16 gid = aviommu->gid;
+	u32 trans_devid = aviommu->trans_devid;
+	struct dev_table_entry new = {};
+	struct iommu_dev_data *trans_dev_data;
+	struct pt_iommu_amdv1_hw_info pt_info;
+
+	trans_dev_data = search_dev_data(iommu, trans_devid);
+	if (!trans_dev_data) {
+		trans_dev_data = amd_iommu_alloc_dev_data(iommu, trans_devid);
+		if (!trans_dev_data) {
+			pr_err("%s: Failed to allocate dev_data for translate-device-id %#x\n",
+			       __func__, trans_devid);
+			return -ENOMEM;
+		}
+	}
+
+	trans_dev_data->dev = NULL;
+	trans_dev_data->devid = trans_devid;
+	trans_dev_data->domain = pdom;
+
+	amd_iommu_make_clear_dte(iommu, trans_devid, &new);
+	/* Setup DTE for v1 page table at the offset specified by trans_devid */
+	pt_iommu_amdv1_hw_info(&pdom->amdv1, &pt_info);
+
+	pr_debug("%s: gid=%#x, iommu_devid=%#x, devid=%#x, host_pt_root=%#llx, mode=%#x\n",
+		 __func__, gid, iommu->devid, trans_devid, pt_info.host_pt_root, pt_info.mode);
+
+	amd_iommu_set_dte_v1(trans_dev_data, pdom, pdom->id, &pt_info, &new);
+	amd_iommu_update_dte(iommu, trans_dev_data, &new);
+	return 0;
+}
+
+void amd_iommu_clear_translate_dte(struct amd_iommu *iommu, u32 trans_devid)
+{
+	struct dev_table_entry new = {};
+	struct iommu_dev_data *trans_dev_data;
+
+	pr_debug("%s: iommu_devid=%#x, trans_devid=%#x\n",
+		 __func__, iommu->devid, trans_devid);
+
+	trans_dev_data = search_dev_data(iommu, trans_devid);
+	if (!trans_dev_data) {
+		WARN_ON_ONCE(1);
+		return;
+	}
+
+	amd_iommu_make_clear_dte(iommu, trans_devid, &new);
+	amd_iommu_update_dte(iommu, trans_dev_data, &new);
+	amd_iommu_free_dev_data(iommu, trans_dev_data);
+}
+#endif /* CONFIG_AMD_IOMMU_IOMMUFD */
 
 const struct iommu_ops amd_iommu_ops = {
 	.capable = amd_iommu_capable,
