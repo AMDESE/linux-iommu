@@ -3058,7 +3058,7 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 #if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
 	/* Translate-device-id reservation must be done before setting up
 	 * the DTE for the device to make sure that the id has not been allocated
-	 * yet. (See amd_iommu_trans_devid_alloc().)
+	 * yet. (See trans_devid_alloc() in trans_devid.c.)
 	 */
 	ret = amd_iommu_trans_devid_reserve(iommu->pci_seg, dev_data->devid);
 	if (ret) {
