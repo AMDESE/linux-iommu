@@ -232,6 +232,11 @@ static inline void
 amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg) { }
 #endif
 
+int amd_iommu_set_translate_dte(struct iommufd_viommu *viommu);
+void amd_iommu_clear_translate_dte(struct amd_iommu *iommu, u32 trans_devid);
+void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
+						  u16 gid, u32 trans_devid);
+
 static inline void
 amd_iommu_make_clear_dte(struct amd_iommu *iommu, u16 devid,
 			 struct dev_table_entry *new)
