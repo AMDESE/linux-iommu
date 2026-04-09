@@ -216,6 +216,18 @@ void amd_iommu_update_dte(struct amd_iommu *iommu,
 			  struct dev_table_entry *new);
 int amd_iommu_completion_wait(struct amd_iommu *iommu);
 
+/* Per-segment translate-device-id pool (CONFIG_AMD_IOMMU_IOMMUFD) */
+#ifdef CONFIG_AMD_IOMMU_IOMMUFD
+void amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg);
+void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg);
+int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id);
+#else
+static inline void
+amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg) { }
+static inline void
+amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg) { }
+#endif
+
 void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
 				 struct protection_domain *pdom,
 				 u32 devid);
