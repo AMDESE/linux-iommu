@@ -213,6 +213,13 @@ void amd_iommu_update_dte(struct amd_iommu *iommu,
 			  struct iommu_dev_data *dev_data,
 			  struct dev_table_entry *new);
 
+int amd_iommu_set_translate_dte(struct iommufd_viommu *viommu);
+void amd_iommu_clear_translate_dte(struct amd_iommu *iommu,
+				   struct iommu_dev_data *dev_data,
+				   u16 trans_devid);
+void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
+						  u16 gid, u32 trans_devid);
+
 static inline void
 amd_iommu_make_clear_dte(struct amd_iommu *iommu, u16 devid,
 			 struct dev_table_entry *new)
