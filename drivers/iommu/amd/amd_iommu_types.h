@@ -489,6 +489,7 @@ extern bool amdr_ivrs_remap_support;
 /* VIOMMU stuff */
 #define VIOMMU_VF_MMIO_ENTRY_SIZE		4096
 #define VIOMMU_VFCTRL_MMIO_ENTRY_SIZE		64
+#define VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET	0x10
 
 /* Host ioremap/request_mem_region sizes for VF / VF_CNTL BARs */
 #define VIOMMU_VF_MMIO_MAP_SIZE		0x10000000UL
@@ -551,6 +552,9 @@ struct amd_iommu_viommu {
 
 	u64 *devid_table;
 	u64 *domid_table;
+	u16 trans_devid;
+	/* Synthetic DTE; not stored in pci_seg->dev_data_xa */
+	struct iommu_dev_data *trans_dev_data;
 
 	/*
 	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells

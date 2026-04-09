@@ -148,11 +148,11 @@ static void write_dte_lower128(struct dev_table_entry *ptr, struct dev_table_ent
  * So, only consider control bits related to DMA when updating the entry.
  */
 static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
-			  struct dev_table_entry *new)
+			  u16 devid, struct dev_table_entry *new)
 {
 	unsigned long flags;
 	struct dev_table_entry *dev_table = get_dev_table(iommu);
-	struct dev_table_entry *ptr = &dev_table[dev_data->devid];
+	struct dev_table_entry *ptr = &dev_table[devid];
 
 	spin_lock_irqsave(&dev_data->dte_lock, flags);
 
@@ -160,12 +160,12 @@ static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_da
 		/* Existing DTE is not valid. */
 		write_dte_upper128(ptr, new);
 		write_dte_lower128(ptr, new);
-		iommu_flush_dte_sync(iommu, dev_data->devid);
+		iommu_flush_dte_sync(iommu, devid);
 	} else if (!(new->data[0] & DTE_FLAG_V)) {
 		/* Existing DTE is valid. New DTE is not valid.  */
 		write_dte_lower128(ptr, new);
 		write_dte_upper128(ptr, new);
-		iommu_flush_dte_sync(iommu, dev_data->devid);
+		iommu_flush_dte_sync(iommu, devid);
 	} else if (!FIELD_GET(DTE_FLAG_GV, ptr->data[0])) {
 		/*
 		 * Both DTEs are valid.
@@ -173,7 +173,7 @@ static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_da
 		 */
 		write_dte_upper128(ptr, new);
 		write_dte_lower128(ptr, new);
-		iommu_flush_dte_sync(iommu, dev_data->devid);
+		iommu_flush_dte_sync(iommu, devid);
 	} else if (!FIELD_GET(DTE_FLAG_GV, new->data[0])) {
 		/*
 		 * Both DTEs are valid.
@@ -182,7 +182,7 @@ static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_da
 		 */
 		write_dte_lower128(ptr, new);
 		write_dte_upper128(ptr, new);
-		iommu_flush_dte_sync(iommu, dev_data->devid);
+		iommu_flush_dte_sync(iommu, devid);
 	} else if (FIELD_GET(DTE_GPT_LEVEL_MASK, ptr->data[2]) !=
 		   FIELD_GET(DTE_GPT_LEVEL_MASK, new->data[2])) {
 		/*
@@ -195,12 +195,12 @@ static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_da
 
 		/* First disable DTE */
 		write_dte_lower128(ptr, &clear);
-		iommu_flush_dte_sync(iommu, dev_data->devid);
+		iommu_flush_dte_sync(iommu, devid);
 
 		/* Then update DTE */
 		write_dte_upper128(ptr, new);
 		write_dte_lower128(ptr, new);
-		iommu_flush_dte_sync(iommu, dev_data->devid);
+		iommu_flush_dte_sync(iommu, devid);
 	} else {
 		/*
 		 * Both DTEs are valid and have guest page table,
@@ -217,7 +217,7 @@ void amd_iommu_update_dte(struct amd_iommu *iommu,
 			     struct iommu_dev_data *dev_data,
 			     struct dev_table_entry *new)
 {
-	update_dte256(iommu, dev_data, new);
+	update_dte256(iommu, dev_data, dev_data->devid, new);
 	/*
 	 * Synthetic DTEs (vIOMMU self, translate-device-id) leave
 	 * dev_data->dev NULL so clone_aliases() is skipped.
@@ -497,7 +497,7 @@ static int clone_alias(struct pci_dev *pdev_origin, u16 alias, void *data)
 		ret = -EINVAL;
 		goto out;
 	}
-	update_dte256(iommu, alias_data, &new);
+	update_dte256(iommu, alias_data, alias, &new);
 
 	amd_iommu_set_rlookup_table(iommu, alias);
 out:
@@ -2850,28 +2850,37 @@ static spinlock_t *amd_iommu_get_top_lock(struct pt_iommu *iommupt)
 
 #if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
 /*
- * The vIOMMU private IPA domain programs a synthetic DTE for the
- * IOMMU's own requester ID so hardware can DMA to backing store.
- * That object is not on pdom->dev_list: it is not an IOMMU-API
- * attach, and walkers such as rlookup and clone_aliases assume a
- * real struct device.
+ * Synthetic DTEs are not on pdom->dev_list: they are not IOMMU-API
+ * attaches, and walkers such as rlookup and clone_aliases assume a
+ * real struct device. amd_iommu_change_top() therefore misses them.
  *
- * amd_iommu_change_top() therefore misses it. Early maps fit under
- * the initial page-table top (PT_FEAT_DYNAMIC_TOP). Later DevID and
- * DomID maps at high IPA call increase_top(); the old root stays
- * live as a child of the new one, but the self DTE still holds the
- * old MODE and would not translate those IOVAs.
+ * 1. The vIOMMU private IPA domain programs a DTE for the IOMMU's
+ *    own requester ID (iommu->viommu_dev_data) so hardware can DMA
+ *    to backing store. Early maps fit under the initial page-table
+ *    top (PT_FEAT_DYNAMIC_TOP). Later DevID and DomID maps at high
+ *    IPA call increase_top(); the old root stays live as a child of
+ *    the new one, but the self DTE still holds the old MODE and
+ *    would not translate those IOVAs.
+ *
+ * 2. Each vIOMMU's translate-device-id DTE (aviommu->trans_dev_data)
+ *    points at the nest-parent v1 table for GPA->SPA. That parent is
+ *    also DYNAMIC_TOP. Guest maps of high GPA call increase_top() on
+ *    the nest parent; the translate DTE would otherwise keep the old
+ *    MODE and host_pt_root.
  *
  * Walk iommu_array (from amd_iommu_pdom_bind_iommu()) and rewrite
  * iommu->viommu_dev_data when this domain is that IOMMU's private
- * IPA table. set_dte_entry() skips clone_aliases() because the
- * synthetic DTE has no struct device.
+ * IPA table. Walk viommu_list and rewrite each trans_dev_data when
+ * this domain is a nest parent. set_dte_entry() skips clone_aliases()
+ * because those objects have no struct device. Use the vIOMMU's
+ * IOMMU, not rlookup.
  */
 static void update_viommu_self_dte(struct protection_domain *pdom,
 				   phys_addr_t top_paddr,
 				   unsigned int top_level)
 {
 	struct pdom_iommu_info *pdom_iommu_info;
+	struct amd_iommu_viommu *aviommu;
 	unsigned long i;
 
 	lockdep_assert_held(&pdom->lock);
@@ -2882,6 +2891,17 @@ static void update_viommu_self_dte(struct protection_domain *pdom,
 		if (iommu->viommu_pdom != pdom || !iommu->viommu_dev_data)
 			continue;
 		set_dte_entry(iommu, iommu->viommu_dev_data, top_paddr,
+			      top_level);
+	}
+
+	list_for_each_entry(aviommu, &pdom->viommu_list, pdom_list) {
+		struct amd_iommu *iommu;
+
+		if (!aviommu->trans_dev_data)
+			continue;
+		iommu = container_of(aviommu->core.iommu_dev,
+				     struct amd_iommu, iommu);
+		set_dte_entry(iommu, aviommu->trans_dev_data, top_paddr,
 			      top_level);
 	}
 }
@@ -3462,6 +3482,95 @@ static bool amd_iommu_enforce_cache_coherency(struct iommu_domain *domain)
 	/* IOMMU_PTE_FC is always set */
 	return true;
 }
+
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+
+void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
+						  u16 gid, u32 devid)
+{
+	writeq((devid & 0xFFFFULL) << 16,
+	       VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) +
+	       VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
+}
+
+int amd_iommu_set_translate_dte(struct iommufd_viommu *viommu)
+{
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu =
+		container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	struct protection_domain *pdom = aviommu->parent;
+	u16 gid = aviommu->gid;
+	u16 trans_devid = aviommu->trans_devid;
+	struct iommu_dev_data *trans_dev_data;
+	unsigned long flags;
+
+	if (!aviommu->trans_dev_data) {
+		aviommu->trans_dev_data =
+			amd_iommu_alloc_dev_data(trans_devid);
+		if (!aviommu->trans_dev_data) {
+			pr_err("%s: Failed to allocate dev_data for translate-device-id %#x\n",
+			       __func__, trans_devid);
+			return -ENOMEM;
+		}
+	}
+
+	trans_dev_data = aviommu->trans_dev_data;
+	trans_dev_data->dev = NULL;
+	trans_dev_data->domain = pdom;
+	/*
+	 * Leave off pdom->dev_list: this is not an IOMMU-API attach.
+	 * Hold pdom->lock so change_top() cannot grow the nest-parent
+	 * top between the sample and the DTE commit. Publish devid
+	 * under that lock; it is the live TransDevID for
+	 * update_viommu_self_dte(). If this vIOMMU is not yet on
+	 * viommu_list, add it before dropping the lock so a concurrent
+	 * increase_top() cannot miss the new DTE.
+	 */
+
+	spin_lock_irqsave(&pdom->lock, flags);
+	trans_dev_data->devid = trans_devid;
+	set_dte_entry(iommu, trans_dev_data, 0, 0);
+	if (list_empty(&aviommu->pdom_list))
+		list_add(&aviommu->pdom_list, &pdom->viommu_list);
+	spin_unlock_irqrestore(&pdom->lock, flags);
+
+	pr_debug("%s: gid=%#x, iommu_devid=%#x, devid=%#x\n",
+		 __func__, gid, iommu->devid, trans_devid);
+	return 0;
+}
+
+static void amd_iommu_update_dte_slot(struct amd_iommu *iommu,
+				      struct iommu_dev_data *dev_data,
+				      u16 devid, struct dev_table_entry *new)
+{
+	update_dte256(iommu, dev_data, devid, new);
+	if (dev_data->dev)
+		clone_aliases(iommu, dev_data->dev);
+	iommu_flush_dte(iommu, devid);
+	iommu_completion_wait(iommu);
+}
+
+void amd_iommu_clear_translate_dte(struct amd_iommu *iommu,
+				   struct iommu_dev_data *dev_data,
+				   u16 trans_devid)
+{
+	struct dev_table_entry new = {};
+
+	if (!dev_data)
+		return;
+
+	pr_debug("%s: iommu_devid=%#x, trans_devid=%#x\n",
+		 __func__, iommu->devid, trans_devid);
+
+	/*
+	 * Clear @trans_devid without swapping the live
+	 * trans_dev_data->devid. change_top() indexes that field.
+	 */
+	amd_iommu_make_clear_dte(iommu, trans_devid, &new);
+	amd_iommu_update_dte_slot(iommu, dev_data, trans_devid, &new);
+}
+#endif /* CONFIG_AMD_IOMMU_IOMMUFD */
 
 const struct iommu_ops amd_iommu_ops = {
 	.capable = amd_iommu_capable,
