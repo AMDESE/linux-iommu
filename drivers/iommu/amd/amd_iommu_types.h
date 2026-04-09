@@ -504,6 +504,7 @@ extern bool amdr_ivrs_remap_support;
 /* VIOMMU stuff */
 #define VIOMMU_VF_MMIO_ENTRY_SIZE		4096
 #define VIOMMU_VFCTRL_MMIO_ENTRY_SIZE		64
+#define VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET	0x10
 
 #define VIOMMU_VF_MMIO_BASE(iommu, guestId) \
 	(iommu->vf_base + (guestId * VIOMMU_VF_MMIO_ENTRY_SIZE))
