@@ -126,3 +126,61 @@ int amd_iommu_trans_devid_reserve_pci_aliases(struct amd_iommu *iommu,
 	return pci_for_each_dma_alias(pdev, reserve_trans_devid_each_dma_alias,
 				      pci_seg);
 }
+
+/**
+ * amd_iommu_trans_devid_alloc - allocate a translate-device-id for @pci_seg
+ *
+ * The trans_devid is allocated from the highest id to the lowest id.
+ * Generally, the PCI devices enumerated from the beginning of the bus range.
+ * Therefore, ids in the high range are likely to not be used.
+ *
+ * Each vIOMMU receives its own translate-device-id from the per-segment pool.
+ *
+ * Return: allocated id on success, negative errno on failure.
+ */
+int amd_iommu_trans_devid_alloc(struct amd_iommu_pci_seg *pci_seg)
+{
+	int id;
+
+	mutex_lock(&pci_seg->trans_devid_mutex);
+	for (id = U16_MAX; id >= 0; id--) {
+		void *entry, *old;
+
+		entry = xa_load(&pci_seg->trans_devid_xa, id);
+		if (entry)
+			continue;
+
+		old = xa_store(&pci_seg->trans_devid_xa, id,
+			       trans_devid_xa_mk_state(TRANS_DEVID_ALLOCATED), GFP_KERNEL);
+		if (xa_is_err(old)) {
+			int err = xa_err(old);
+
+			mutex_unlock(&pci_seg->trans_devid_mutex);
+			return err;
+		}
+		WARN_ON_ONCE(old);
+		mutex_unlock(&pci_seg->trans_devid_mutex);
+		pr_debug("%s: Allocated trans_devid %#x (seg %#x)\n", __func__, id,
+			 pci_seg->id);
+		return id;
+	}
+	pr_err("%s: No free trans_devid found (seg %#x)\n", __func__, pci_seg->id);
+	mutex_unlock(&pci_seg->trans_devid_mutex);
+	return -ENOSPC;
+}
+
+/**
+ * amd_iommu_trans_devid_free - return @id to the per-segment pool
+ */
+void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id)
+{
+	void *old;
+
+	mutex_lock(&pci_seg->trans_devid_mutex);
+	old = xa_erase(&pci_seg->trans_devid_xa, id);
+	if (WARN_ON_ONCE(!old || trans_devid_xa_get_state(old) == TRANS_DEVID_FREE))
+		goto out;
+	pr_debug("%s: Freed trans_devid %#x (seg %#x)\n", __func__, id, pci_seg->id);
+out:
+	mutex_unlock(&pci_seg->trans_devid_mutex);
+}
