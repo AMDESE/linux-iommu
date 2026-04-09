@@ -558,6 +558,7 @@ struct amd_iommu_viommu {
 
 	u64 *devid_table;
 	u64 *domid_table;
+	u16 trans_devid;
 };
 
 /*
@@ -616,6 +617,11 @@ enum trans_devid_state {
 	TRANS_DEVID_FREE = 0,
 	TRANS_DEVID_RESERVED,
 	TRANS_DEVID_ALLOCATED,
+};
+
+struct amd_iommu_kvmfd_trans_entry {
+	refcount_t refs;
+	u16 trans_devid;
 };
 #endif
 
@@ -688,6 +694,13 @@ struct amd_iommu_pci_seg {
 	 */
 	struct mutex trans_devid_mutex;
 	struct xarray trans_devid_xa;
+
+	/*
+	 * Per-segment kvmfd mapping. The xarray is indexed by the kvmfd.
+	 * Values are struct amd_iommu_kvmfd_trans_entry * or xa_mk_value(trans_devid).
+	 */
+	struct mutex kvmfd_xa_mutex;
+	struct xarray kvmfd_xa;
 #endif
 };
 

@@ -64,6 +64,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	int ret;
 	phys_addr_t page_base;
 	unsigned long flags;
+	u16 trans_devid;
 	struct iommu_viommu_amd data;
 	struct protection_domain *pdom = to_pdomain(parent);
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
@@ -103,8 +104,16 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 		goto err_kvmfd;
 	}
 
+	ret = amd_iommu_get_trans_devid_by_kvmfd(iommu->pci_seg, data.kvmfd,
+						 &trans_devid);
+	if (ret)
+		goto err_kvmfd;
+
 	/* Reset vIOMMU MMIOs to initialize the vIOMMU */
 	iommu_reset_vmmio(iommu, aviommu->gid);
+
+	amd_iommu_set_translate_dte(iommu, aviommu->gid, pdom, trans_devid);
+	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, trans_devid);
 
 	ret = amd_viommu_init_one(iommu, aviommu);
 	if (ret)
@@ -116,6 +125,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		goto err_init;
 
+	aviommu->trans_devid = trans_devid;
 	aviommu->kvmfd = data.kvmfd;
 	viommu->ops = &amd_viommu_ops;
 
@@ -125,6 +135,9 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 
 	return 0;
 err_init:
+	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
+	amd_iommu_clear_translate_dte(iommu, aviommu->gid, trans_devid);
+	amd_iommu_free_trans_devid_by_kvmfd(iommu->pci_seg, data.kvmfd);
 err_kvmfd:
 	iommufd_viommu_destroy_mmap(&aviommu->core, data.out_vfmmio_mmap_offset);
 err_mmap:
@@ -148,6 +161,7 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	xa_destroy(&aviommu->gdomid_array);
 	amd_iommu_gid_free(aviommu->gid);
 	amd_viommu_uninit_one(iommu, aviommu);
+	amd_iommu_free_trans_devid_by_kvmfd(iommu->pci_seg, aviommu->kvmfd);
 }
 
 /*
@@ -162,7 +176,7 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 
 	if (!pdev) {
-		pr_err();
+		pr_err("%s: not a PCI device\n", __func__);
 		return -EINVAL;
 	}
 
