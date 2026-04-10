@@ -3079,6 +3079,13 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 		pr_err("%s: Failed to reserve device id %#x\n", __func__, dev_data->devid);
 		return ret;
 	}
+
+	ret = amd_iommu_trans_devid_reserve_pci_aliases(iommu, dev);
+	if (ret) {
+		pr_err("%s: Failed to reserve translate devid for alias of %#x (err %d)\n",
+		       __func__, dev_data->devid, ret);
+		return ret;
+	}
 #endif
 
 	if (dev_data->domain)
