@@ -2404,26 +2404,28 @@ static int __init iommu_init_pci(struct amd_iommu *iommu)
 	if (check_feature(FEATURE_PPR) && amd_iommu_alloc_ppr_log(iommu))
 		return -ENOMEM;
 
-	/*
-	 * vIOMMU is advertised in this IOMMU's EFR[VIOMMUSup]
-	 * (iommu->features). Do not use check_feature()/amd_iommu_efr;
-	 * that global mask is the AND of every IOMMU and can hide the
-	 * bit on mixed systems.
-	 */
-	if (iommu->features & FEATURE_VIOMMU) {
-		ret = amd_viommu_init(iommu);
-		if (ret)
-			pr_err("Failed to initialize vIOMMU on %s\n",
-			       pci_name(iommu->dev));
-	}
-
 	if (iommu->cap & (1UL << IOMMU_CAP_NPCACHE)) {
 		pr_info("Using strict mode due to virtualization\n");
 		iommu_set_dma_strict();
 		amd_iommu_np_cache = true;
 	}
 
-	init_iommu_perf_ctr(iommu);
+	if (!amd_iommu_np_cache) {
+		/*
+		 * vIOMMU is advertised in this IOMMU's EFR[VIOMMUSup]
+		 * (iommu->features). Do not use check_feature()/amd_iommu_efr;
+		 * that global mask is the AND of every IOMMU and can hide the
+		 * bit on mixed systems.
+		 */
+		if (iommu->features & FEATURE_VIOMMU) {
+			ret = amd_viommu_init(iommu);
+			if (ret)
+				pr_err("Failed to initialize vIOMMU on %s\n",
+				       pci_name(iommu->dev));
+		}
+
+		init_iommu_perf_ctr(iommu);
+	}
 
 	if (is_rd890_iommu(iommu->dev)) {
 		int i, j;
