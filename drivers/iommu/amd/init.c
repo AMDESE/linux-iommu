@@ -2036,6 +2036,10 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h,
 		if (h->efr_attr & BIT(IOMMU_IVHD_ATTR_SVIOMMU_SHIFT)) {
 			pr_info("Secure vIOMMU Guest.\n");
 			amd_iommu_sviommu = true;
+			if (iommu->mmio_phys_end != MMIO_CNTR_CONF_OFFSET) {
+				pr_warn("BIOS Bug: Perf counters are not supported inside guest, adjusting MMIO size\n");
+				iommu->mmio_phys_end = MMIO_CNTR_CONF_OFFSET;
+			}
 		}
 
 		early_iommu_features_init(iommu, h);
