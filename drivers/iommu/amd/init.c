@@ -2333,19 +2333,22 @@ static int __init iommu_init_pci(struct amd_iommu *iommu)
 	if (check_feature(FEATURE_PPR) && amd_iommu_alloc_ppr_log(iommu))
 		return -ENOMEM;
 
-	ret = amd_viommu_init(iommu);
-	if (ret) {
-		pr_err("Failed to initialize vIOMMU.\n");
-		amd_iommu_viommu = false;
-	}
-
 	if (iommu->cap & (1UL << IOMMU_CAP_NPCACHE)) {
 		pr_info("Using strict mode due to virtualization\n");
 		iommu_set_dma_strict();
 		amd_iommu_np_cache = true;
 	}
 
-	init_iommu_perf_ctr(iommu);
+	if (!amd_iommu_np_cache) {
+		ret = amd_viommu_init(iommu);
+		if (ret) {
+			amd_iommu_viommu = false;
+			pr_err("Failed to initialize vIOMMU.\n");
+			ret = 0;
+		}
+
+		init_iommu_perf_ctr(iommu);
+	}
 
 	if (is_rd890_iommu(iommu->dev)) {
 		int i, j;
