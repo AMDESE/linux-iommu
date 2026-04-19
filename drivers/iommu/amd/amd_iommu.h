@@ -235,12 +235,6 @@ int amd_iommu_get_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg,
 				       u32 kvmfd, u16 *trans_devid);
 void amd_iommu_free_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg,
 					 u32 kvmfd);
-#else
-static inline void
-amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg) { }
-static inline void
-amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg) { }
-#endif
 
 void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
 				 struct protection_domain *pdom,
@@ -248,6 +242,22 @@ void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
 void amd_iommu_clear_translate_dte(struct amd_iommu *iommu, u16 gid, u32 devid);
 void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
 						  u16 gid, u32 trans_devid);
+
+#else
+static inline void
+amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg) { }
+static inline void
+amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg) { }
+
+static inline void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
+					       struct protection_domain *pdom,
+					       u32 devid) { }
+static inline void amd_iommu_clear_translate_dte(struct amd_iommu *iommu,
+						 u16 gid, u32 devid) { }
+static inline void
+amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
+					     u16 gid, u32 trans_devid) { }
+#endif
 
 static inline void
 amd_iommu_make_clear_dte(struct iommu_dev_data *dev_data, struct dev_table_entry *new)
