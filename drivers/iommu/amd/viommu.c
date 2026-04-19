@@ -156,7 +156,7 @@ static void *alloc_private_subregion(struct amd_iommu *iommu, u64 base, size_t s
 	return region;
 
 err_out:
-	free_pages((unsigned long)region, get_order(size));
+	iommu_free_pages(region);
 	return NULL;
 }
 
@@ -204,11 +204,12 @@ static int viommu_private_space_init(struct amd_iommu *iommu)
 err_out:
 	for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++) {
 		if (iommu->viommu_priv_region[i])
-			free_pages((unsigned long)iommu->viommu_priv_region[i],
-				    get_order(VIOMMU_PRIV_SUBREGION_SIZE));
+			iommu_free_pages(iommu->viommu_priv_region[i]);
 	}
 	if (dom)
 		amd_iommu_domain_free(dom);
+
+	iommu->viommu_pdom = NULL;
 	return -ENOMEM;
 }
 
