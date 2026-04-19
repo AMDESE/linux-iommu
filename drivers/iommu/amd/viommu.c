@@ -111,7 +111,9 @@ static int __init viommu_vf_vfcntl_init(struct amd_iommu *iommu)
 	iommu->vfctrl_base = iommu_map_mmio_space(vf_cntl_phys, 0x400000);
 	if (!iommu->vfctrl_base) {
 		pr_err("Can't reserve vfctrl_base\n");
-		goto err_out;
+		iounmap(iommu->vf_base);
+		iommu->vf_base = NULL;
+		return -ENOMEM;
 	}
 
 	/* Track VF MMIO base addess */
@@ -120,10 +122,6 @@ static int __init viommu_vf_vfcntl_init(struct amd_iommu *iommu)
 	pr_debug("%s: IOMMU device:%s, vf_base:%#llx, vfctrl_base:%#llx\n",
 		 __func__, pci_name(iommu->dev), vf_phys, vf_cntl_phys);
 	return 0;
-err_out:
-	iommu_unmap_mmio_space(iommu);
-	iommu->vf_base = NULL;
-	return -ENOMEM;
 }
 
 static void *alloc_private_subregion(struct amd_iommu *iommu, u64 base, size_t size)
