@@ -546,13 +546,10 @@ static bool ide_xt_supported(struct pci_dev *pdev)
 	if (!xt_support)
 		return false;
 
-	pci_read_config_dword(pdev, pdev->ide_cap + PCI_IDE_CAP, &val);
-	if ((val & PCI_IDE_CAP_XT_SUP)) {
-		pr_info("%s: PCI_IDE_CAP_XT_SUP enabled\n", __func__);
+	val = pci_read_config_dword(pdev, pdev->ide_cap + PCI_IDE_CAP, &val);
+	if ((val & PCI_IDE_CAP_XT_SUP))
 		return true;
-	}
 
-	pr_info("%s: PCI_IDE_CAP_XT_SUP disabled\n", __func__);
 	return false;
 }
 
