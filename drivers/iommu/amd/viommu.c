@@ -272,9 +272,15 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 {
 	int ret;
 
-	if (!amd_iommu_viommu ||
-	    !check_feature(FEATURE_VIOMMU))
+	if (!check_feature(FEATURE_VIOMMU)) {
+		amd_iommu_viommu = false;
 		return 0;
+	}
+
+	if (!amd_iommu_viommu) {
+		pr_info("vIOMMU is disabled by kernel boot option\n");
+		return 0;
+	}
 
 	ret = viommu_init_pci_vsc(iommu);
 	if (ret)
