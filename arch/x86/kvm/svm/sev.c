@@ -2939,7 +2939,7 @@ static int snp_decommission_context(struct kvm *kvm)
 {
 	struct kvm_sev_info *sev = to_kvm_sev_info(kvm);
 	struct sev_data_snp_addr data = {};
-	int ret;
+	int ret, psp_ret = 0;
 
 	/* If context is not created then do nothing */
 	if (!sev->snp_context)
@@ -2948,10 +2948,10 @@ static int snp_decommission_context(struct kvm *kvm)
 	/* Do the decommision, which will unbind the ASID from the SNP context */
 	data.address = __sme_pa(sev->snp_context);
 	down_write(&sev_deactivate_lock);
-	ret = sev_do_cmd(SEV_CMD_SNP_DECOMMISSION, &data, NULL);
+	ret = sev_do_cmd(SEV_CMD_SNP_DECOMMISSION, &data, &psp_ret);
 	up_write(&sev_deactivate_lock);
 
-	if (WARN_ONCE(ret, "Failed to release guest context, ret %d", ret))
+	if (WARN_ONCE(ret, "Failed to release guest context, ret %d, psp_ret %#x", ret, psp_ret))
 		return ret;
 
 	snp_free_firmware_page(sev->snp_context);
