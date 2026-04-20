@@ -77,6 +77,11 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	xa_init_flags(&aviommu->gdomid_array, XA_FLAGS_ALLOC1);
 	aviommu->parent = pdom;
 
+	if (!amd_iommu_viommu) {
+		pr_warn("vIOMMU is not setup\n");
+		return -EOPNOTSUPP;
+	}
+
 	if (!user_data)
 		return -EINVAL;
 
