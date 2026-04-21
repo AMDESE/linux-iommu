@@ -137,3 +137,17 @@ int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
 
 	return sev_guest_ops->setup_mmio(iommu->devid, &data);
 }
+
+int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
+{
+	struct amd_sviommu_trans_sdte data = {
+		.vtom = vtom,
+		.enable = enable,
+	};
+
+	if (!sev_guest_ops || !sev_guest_ops->setup_trans_sdte)
+		return -EINVAL;
+
+	pr_debug("%s: vtom=%#llx enable=%d\n", __func__, vtom, enable);
+	return sev_guest_ops->setup_trans_sdte(iommu->devid, &data);
+}
