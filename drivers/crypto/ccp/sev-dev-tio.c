@@ -1883,6 +1883,46 @@ int sev_tio_tdi_status_fin(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi
 /* Secure vIOMMU support */
 
 
+/* Check if vIOMMU is enabled or not */
+static bool sev_tio_viommu_present(void)
+{
+	struct sev_user_data_snp_status *status;
+	struct sev_data_snp_addr addr;
+	struct page *status_page;
+	void *data;
+	int psp_ret, ret;
+	bool present = false;
+
+	status_page = alloc_page(GFP_KERNEL_ACCOUNT);
+	if (!status_page)
+		return present;
+
+	data = page_address(status_page);
+	if (rmp_mark_pages_firmware(__pa(data), 1, true))
+		goto out_err;
+
+	addr.address = __psp_pa(data);
+	ret = __sev_do_cmd_locked(SEV_CMD_SNP_PLATFORM_STATUS, &addr, &psp_ret);
+	if (ret) {
+		pr_info("%s: Failed to get SNP platform status: ret=%d, psp_ret=%#x\n",
+			__func__, ret, psp_ret);
+		goto out_reclaim;
+	}
+
+	status = (void *)data;
+	if (status->viommu_en) {
+		pr_info_once("%s: secure vIOMMU is enabled\n", __func__);
+		present = true;
+	}
+
+out_reclaim:
+	snp_reclaim_pages(__pa(data), 1, true);
+
+out_err:
+	__free_pages(status_page, 0);
+	return present;
+}
+
 struct sev_data_tio_viommu {
 	u32 length;		/* In */
 	u32 reserved1;
@@ -1903,6 +1943,11 @@ static int sev_tio_viommu_init_locked(struct amd_sviommu *sv)
 
 	if (WARN_ON(!sv))
 		return 0;
+
+	if (!sev_tio_viommu_present()) {
+		pr_notice("Platform doesn't support secure vIOMMU\n");
+		return -EOPNOTSUPP;
+	}
 
 	v.pci_segid = sv->segid;
 	v.iommu_devid = sv->devid;
