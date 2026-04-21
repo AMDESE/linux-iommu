@@ -250,7 +250,9 @@ struct sev_user_data_snp_status {
 	__u32 rapl_dis:1;		/* Out */
 	__u32 ciphertext_hiding_cap:1;	/* Out */
 	__u32 ciphertext_hiding_en:1;	/* Out */
-	__u32 rsvd1:25;
+	__u32 rsvd1:1;			/* Out */
+	__u32 viommu_en:1;		/* Out */
+	__u32 rsvd2:23;
 	__u32 guest_count;		/* Out */
 	__u64 current_tcb_version;	/* Out */
 	__u64 reported_tcb_version;	/* Out */
