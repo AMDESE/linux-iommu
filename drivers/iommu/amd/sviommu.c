@@ -178,3 +178,27 @@ int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
 
 	return rc;
 }
+
+int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bool set)
+{
+	struct amd_sviommu_mapping_data data;
+	int rc;
+
+	if (!sev_guest_ops || !sev_guest_ops->mapping_update) {
+		return -EINVAL;
+	}
+
+	pr_debug("%s: viommu_devid=%#x, domid=%#x, devid=%#x\n",
+		 __func__, iommu->devid, domid, devid);
+
+	data.viommu_devid = iommu->devid;
+	data.devid = devid;
+	data.domid = domid;
+	data.set = set;
+
+	rc = sev_guest_ops->mapping_update(&data);
+	if (rc)
+		pr_err("%s: Domain ID mapping setup error (%d)\n", __func__, rc);
+
+	return rc;
+}
