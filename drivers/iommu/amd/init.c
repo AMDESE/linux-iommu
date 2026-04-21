@@ -231,6 +231,7 @@ static enum iommu_init_state init_state = IOMMU_START_STATE;
 
 static int amd_iommu_enable_interrupts(void);
 static void init_device_table_dma(struct amd_iommu_pci_seg *pci_seg);
+static void iommu_event_buffer_update(struct amd_iommu *iommu, bool enable);
 
 static bool amd_iommu_pre_enabled = true;
 
@@ -488,8 +489,7 @@ static void iommu_disable(struct amd_iommu *iommu)
 	iommu_cmdbuf_update(iommu, false);
 
 	/* Disable event logging and event interrupts */
-	iommu_feature_disable(iommu, CONTROL_EVT_INT_EN);
-	iommu_feature_disable(iommu, CONTROL_EVT_LOG_EN);
+	iommu_event_buffer_update(iommu, false);
 
 	/* Disable IOMMU GA_LOG */
 	iommu_feature_disable(iommu, CONTROL_GALOG_EN);
@@ -907,6 +907,9 @@ static int __init alloc_event_buffer(struct amd_iommu *iommu)
 	iommu->evt_buf = iommu_alloc_4k_pages(iommu, GFP_KERNEL,
 					      EVT_BUFFER_SIZE);
 
+	/* Hardcoded to 8K ring buffer */
+	iommu->evt_buf_len = 0x9;
+
 	return iommu->evt_buf ? 0 : -ENOMEM;
 }
 
@@ -916,29 +919,39 @@ static void iommu_enable_event_buffer(struct amd_iommu *iommu)
 
 	BUG_ON(iommu->evt_buf == NULL);
 
-	if (!is_kdump_kernel()) {
+	/* set head and tail to zero manually */
+	writel(0x00, iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
+	writel(0x00, iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
+
+	if (amd_iommu_sviommu_guest()) {
+		amd_sviommu_setup_evt_log(iommu, true);
+	} else if (!is_kdump_kernel()) {
 		/*
 		 * Event buffer is re-used for kdump kernel and setting
 		 * of MMIO register is not required.
 		 */
 		entry = iommu_virt_to_phys(iommu->evt_buf) | EVT_LEN_MASK;
+
 		memcpy_toio(iommu->mmio_base + MMIO_EVT_BUF_OFFSET,
 			    &entry, sizeof(entry));
+
+		iommu_feature_enable(iommu, CONTROL_EVT_LOG_EN);
 	}
-
-	/* set head and tail to zero manually */
-	writel(0x00, iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
-	writel(0x00, iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
-
-	iommu_feature_enable(iommu, CONTROL_EVT_LOG_EN);
 }
 
-/*
- * This function disables the event log buffer
- */
-static void iommu_disable_event_buffer(struct amd_iommu *iommu)
+static void iommu_event_buffer_update(struct amd_iommu *iommu, bool enable)
 {
-	iommu_feature_disable(iommu, CONTROL_EVT_LOG_EN);
+	if (amd_iommu_sviommu_guest()) {
+		amd_sviommu_setup_evt_log(iommu, enable);
+	} else {
+		if (enable) {
+			iommu_feature_enable(iommu, CONTROL_EVT_INT_EN);
+			iommu_feature_enable(iommu, CONTROL_EVT_LOG_EN);
+		} else {
+			iommu_feature_disable(iommu, CONTROL_EVT_LOG_EN);
+			iommu_feature_disable(iommu, CONTROL_EVT_INT_EN);
+		}
+	}
 }
 
 static void __init free_event_buffer(struct amd_iommu *iommu)
@@ -3034,7 +3047,7 @@ static void early_enable_iommus(void)
 
 		for_each_iommu(iommu) {
 			iommu_cmdbuf_update(iommu, false);
-			iommu_disable_event_buffer(iommu);
+			iommu_event_buffer_update(iommu, false);
 			iommu_disable_irtcachedis(iommu);
 			iommu_command_buffer_init(iommu);
 			iommu_enable_event_buffer(iommu);
