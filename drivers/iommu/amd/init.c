@@ -509,16 +509,56 @@ static void iommu_disable(struct amd_iommu *iommu)
  * mapping and unmapping functions for the IOMMU MMIO space. Each AMD IOMMU in
  * the system has one.
  */
-u8 __iomem * __init iommu_map_mmio_space(u64 address, u64 end)
+
+static bool iommu_reserve_mem_region(u64 address, u64 end)
 {
 	if (!request_mem_region(address, end, "amd_iommu")) {
 		pr_err("Can not reserve memory region %llx-%llx for mmio\n",
 			address, end);
 		pr_err("This is a BIOS bug. Please contact your hardware vendor\n");
-		return NULL;
+		return false;
 	}
 
+	return true;
+}
+
+u8 __iomem * __init iommu_map_mmio_space(u64 address, u64 end)
+{
+	if (!iommu_reserve_mem_region(address, end))
+		return NULL;
+
 	return (u8 __iomem *)ioremap(address, end);
+}
+
+static int iommu_map_mmio_space_encrypted(void)
+{
+	struct amd_iommu *iommu;
+	int ret = 0;
+
+	if (!amd_iommu_sviommu_guest())
+		return ret;
+
+	for_each_iommu(iommu) {
+		if (!iommu_reserve_mem_region(iommu->mmio_phys,
+					      iommu->mmio_phys_end)) {
+			return -EINVAL;
+		}
+
+		ret = amd_sviommu_setup_mmio(iommu);
+		if (ret) {
+			pr_err("Failed to setup secure MMIO\n");
+			return ret;
+		}
+
+		iommu->mmio_base = ioremap_encrypted(iommu->mmio_phys,
+						     iommu->mmio_phys_end);
+		if (!iommu->mmio_base) {
+			pr_err("Failed to ioremap secure MMIO BAR\n");
+			return -EINVAL;
+		}
+	}
+
+	return ret;
 }
 
 void __init iommu_unmap_mmio_space(struct amd_iommu *iommu)
@@ -1999,10 +2039,12 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h,
 		return -EINVAL;
 	}
 
-	iommu->mmio_base = iommu_map_mmio_space(iommu->mmio_phys,
-						iommu->mmio_phys_end);
-	if (!iommu->mmio_base)
-		return -ENOMEM;
+	if (!amd_iommu_sviommu_guest()) {
+		iommu->mmio_base = iommu_map_mmio_space(iommu->mmio_phys,
+							iommu->mmio_phys_end);
+		if (!iommu->mmio_base)
+			return -ENOMEM;
+	}
 
 	return init_iommu_from_acpi(iommu, h);
 }
@@ -2017,6 +2059,10 @@ static int __init init_iommu_one_late(struct amd_iommu *iommu)
 
 	iommu->int_enabled = false;
 
+	/* Yet to configure mmio_base */
+	if (amd_iommu_sviommu_guest())
+		goto skip_init_trans;
+
 	init_translation_status(iommu);
 	if (translation_pre_enabled(iommu) && !is_kdump_kernel()) {
 		iommu_disable(iommu);
@@ -2024,6 +2070,11 @@ static int __init init_iommu_one_late(struct amd_iommu *iommu)
 		pr_warn("Translation was enabled for IOMMU:%d but we are not in kdump mode\n",
 			iommu->index);
 	}
+
+skip_init_trans:
+	/* Note: For secure vIOMMU, TRANS_PRE_ENABLED flag is not set. Hence this
+	 * works for now
+	 */
 	if (amd_iommu_pre_enabled)
 		amd_iommu_pre_enabled = translation_pre_enabled(iommu);
 
@@ -3520,9 +3571,12 @@ static int __init state_next(void)
 		}
 		break;
 	case IOMMU_ACPI_FINISHED:
-		early_enable_iommus();
-		x86_platform.iommu_shutdown = disable_iommus;
-		init_state = IOMMU_ENABLED;
+		ret = iommu_map_mmio_space_encrypted();
+		if (!ret) {
+			early_enable_iommus();
+			x86_platform.iommu_shutdown = disable_iommus;
+		}
+		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_ENABLED;
 		break;
 	case IOMMU_ENABLED:
 		register_syscore(&amd_iommu_syscore);
