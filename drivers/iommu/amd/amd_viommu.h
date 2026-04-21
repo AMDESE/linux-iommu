@@ -6,6 +6,8 @@
 #ifndef AMD_VIOMMU_H
 #define AMD_VIOMMU_H
 
+#include <linux/amd-iommu.h>
+
 /* Extended Interrupt Remapping */
 enum ext_intremap_type {
 	EXT_INTREMAP_EVENT = 0,
@@ -43,6 +45,7 @@ int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_mmio(struct amd_iommu *iommu);
 int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable);
 int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bool set);
+int amd_sviommu_sdte_update(u16 iommu_devid, u16 devid, struct sdte *s);
 
 #else
 
@@ -112,6 +115,11 @@ static inline int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom
 }
 
 static inline int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bool set)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int amd_sviommu_sdte_update(u16 iommu_devid, u16 devid, struct sdte *s)
 {
 	return -EOPNOTSUPP;
 }

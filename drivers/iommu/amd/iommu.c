@@ -98,6 +98,8 @@ static int amd_iommu_tsm_enable(struct iommu_domain *dom, struct device *dev);
 
 static void clone_aliases(struct amd_iommu *iommu, struct device *dev);
 
+static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
+			  struct dev_table_entry *new);
 /****************************************************************************
  *
  * Helper functions
@@ -149,7 +151,7 @@ static void write_dte_lower128(struct dev_table_entry *ptr, struct dev_table_ent
  * This function is used only by code, which updates DMA translation part of the DTE.
  * So, only consider control bits related to DMA when updating the entry.
  */
-static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
+static void __update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
 			  struct dev_table_entry *new)
 {
 	unsigned long flags;
@@ -258,6 +260,112 @@ static inline bool pdom_is_in_pt_mode(struct protection_domain *pdom)
 static inline bool pdom_is_sva_capable(struct protection_domain *pdom)
 {
 	return pdom_is_v2_pgtbl_mode(pdom) || pdom_is_in_pt_mode(pdom);
+}
+
+static void update_sdte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
+			struct dev_table_entry *new)
+{
+	struct protection_domain *pdom = dev_data->domain;
+	struct sdte sdte = { 0 };
+
+	/* Clear sDTE entry */
+	if (pdom == NULL) {
+		sdte.v = 0;
+		goto sdte_update;
+	}
+
+	sdte.v	= FIELD_GET(DTE_FLAG_V, new->data[0]);
+	sdte.ir	= FIELD_GET(DTE_FLAG_IR, new->data128[0]);
+	sdte.iw	= FIELD_GET(DTE_FLAG_IW, new->data128[0]);
+	sdte.domain_id = FIELD_GET(DTE_DOMID_MASK, new->data[1]);
+	sdte.guest_device_id = dev_data->devid;
+	sdte.vmpl = 0;
+	sdte.vtom_en = 0;
+	sdte.vtom = 0;
+	/* Always enable viommu_en and gv bit */
+	sdte.viommu_en	= 1;
+
+	/*
+	 * In passthrough mode if device doesn't support PASID then
+	 * attach_device path won't allocate gcr3_info related fields.
+	 * Hence hardcode sdte.gv instead of fetching it from DTE[GV].
+	 */
+	sdte.gv	          = 1;
+
+	/* Guest Page table related fields */
+	sdte.glx	  = FIELD_GET(DTE_GLX, new->data[0]);
+	sdte.giov	  = FIELD_GET(DTE_FLAG_GIOV, new->data[0]);
+	sdte.gcr3_tbl_rp0 = FIELD_GET(DTE_GCR3_14_12, new->data[0]);
+	sdte.gcr3_tbl_rp1 = FIELD_GET(DTE_GCR3_30_15, new->data[1]);
+	sdte.gcr3_tbl_rp2 = FIELD_GET(DTE_GCR3_51_31, new->data[1]);
+	sdte.gpm	  = FIELD_GET(DTE_GPT_LEVEL_MASK, new->data[2]);
+
+
+	pr_debug("%s: iommu_devid=%#x, devid=%#x ATS=%lld\n",
+		 __func__, iommu->devid, dev_data->devid,
+		 FIELD_GET(DTE_FLAG_IOTLB, new->data[1]));
+	pr_debug("%s: gdomain id 0x%x gcr3 rp0 0x%x 0x%x 0x%x\n",
+		 __func__, sdte.domain_id, sdte.gcr3_tbl_rp0,
+		 sdte.gcr3_tbl_rp1, sdte.gcr3_tbl_rp2);
+
+sdte_update:
+	amd_sviommu_sdte_update(iommu->devid, dev_data->devid, &sdte);
+}
+
+int amd_iommu_update_sdte(struct pci_dev *pdev, bool set)
+{
+	struct iommu_dev_data *dev_data;
+	struct amd_iommu *iommu;
+	struct dev_table_entry new = { 0 };
+	int ret;
+	u16 domid = 0;
+	u16 devid = pci_dev_id(pdev);
+
+	dev_data = dev_iommu_priv_get(&pdev->dev);
+	if (!dev_data)
+		return -EINVAL;
+
+	iommu = get_amd_iommu_from_dev_data(dev_data);
+	if (!iommu)
+		return -EINVAL;
+
+	/* sDTE update */
+	get_dte256(iommu, dev_data, &new);
+	update_sdte(iommu, dev_data, &new);
+
+	/*
+	 * If guest page table is enabled then we want to configure per device
+	 * domain ID. Otherwise its in passthrough mode use single doamin ID
+	 * from protection domain structure.
+	 */
+	if (dev_data->gcr3_info.domid)
+		domid = dev_data->gcr3_info.domid;
+	else if (dev_data->domain)
+		domid = dev_data->domain->id;
+
+	/* Update Mapping table */
+	ret = amd_sviommu_mapping_update(iommu, domid, devid, set);
+
+	if (set)
+		dev_data->sdte_enabled = 1;
+	else
+		dev_data->sdte_enabled = 0;
+
+	pr_notice("sDTE updated\n");
+
+	return ret;
+
+}
+EXPORT_SYMBOL_GPL(amd_iommu_update_sdte);
+
+static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
+			  struct dev_table_entry *new)
+{
+	__update_dte256(iommu, dev_data, new);
+
+	/* sDTE can be updated only after TDI_BIND is complete */
+	if (dev_data->sdte_enabled)
+		amd_iommu_update_sdte(to_pci_dev(dev_data->dev), true);
 }
 
 int amd_iommu_gid_alloc(void)

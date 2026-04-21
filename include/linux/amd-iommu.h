@@ -72,6 +72,7 @@ struct amd_sviommu_guest_ops {
 	int (*setup_mmio)(u16 devid, void *data);
 	int (*setup_trans_sdte)(u16 devid, void *data);
 	int (*mapping_update)(void *data);
+	int (*sdte_update)(void *data);
 };
 
 #ifdef CONFIG_AMD_IOMMU
@@ -87,9 +88,14 @@ int amd_iommu_sviommu_init(void);
 bool amd_iommu_sviommu_guest(void);
 /* SNP Guest SVIOMMU Function */
 int amd_sviommu_register_guest_ops(const struct amd_sviommu_guest_ops *ops);
+int amd_iommu_update_sdte(struct pci_dev *pdev, bool set);
 
 #else /* CONFIG_AMD_IOMMU */
 
+static inline int amd_iommu_update_sdte(struct pci_dev *pdev, bool set)
+{
+	return -ENODEV;
+}
 static inline void amd_iommu_detect(void) { }
 static inline u16 amd_iommu_get_dev_domid(struct pci_dev *pdev) { return -EOPNOTSUPP; }
 static inline void amd_iommu_clear_dev_domid(struct pci_dev *pdev) {}
@@ -209,5 +215,11 @@ struct sdte {
 	__u32 reserved14         : 27;
 	__u8  reserved15[0x40-0x30];
 } __packed;
+
+struct amd_sviommu_sdte_data {
+	u16 viommu_devid;
+	u16 devid;
+	struct sdte *sdte;
+};
 
 #endif /* _ASM_X86_AMD_IOMMU_H */
