@@ -283,6 +283,8 @@ def parse_tdi_status(data):
     off += 4
     id_reserved = data[off:off+8]
     off += 8
+    fw_tdi_id = struct.unpack_from('<Q', data, off)[0]
+    off += 8
     print("status={}".format(tdi_status_to_str(status)))
     print(f"state={state}:{tdisp_state_to_str(state)}")
     print(f"meas_digest_fresh={meas_digest_fresh}")
@@ -297,6 +299,7 @@ def parse_tdi_status(data):
     print(f"Certs digest: {hex_dump(certs_digest, 48, False)}...")
     print(f"Measurements digest: {hex_dump(meas_digest, 48, False)}...")
     print(f"Interface report digest: {hex_dump(interface_report_digest, 48, False)}...")
+    print(f"FW TDI ID: {fw_tdi_id}")
 
 def parse_dev_status(data):
     """Parse and display tsm_dev_status struct from buffer, using tsm_dev_status_show() logic"""
