@@ -55,3 +55,35 @@ int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable)
 	pr_debug("%s: data=%#llx\n", __func__, data.data);
 	return sev_guest_ops->setup_cmdbuf(iommu->devid, &data.data);
 }
+
+struct guest_evt_buf_data {
+	union {
+		u64 data;
+		struct {
+			u64 evtlen	    : 4,
+			    evtblen	    : 4,
+			    evtlog_en	    : 1,
+			    evtint_en       : 1,
+			    dual_evtlog_en  : 2,
+			    evtbase	    : 40,
+			    reserved        : 12;
+		};
+	};
+};
+
+int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable)
+{
+	struct guest_evt_buf_data data;
+
+	memset(&data, 0, sizeof(struct guest_evt_buf_data));
+	data.evtlen = iommu->evt_buf_len;
+	data.evtlog_en = enable;
+	data.evtint_en = enable;
+	data.evtbase = (iommu_virt_to_phys(iommu->evt_buf) >> 12);
+
+	if (!sev_guest_ops || !sev_guest_ops->setup_evtlog)
+		return -EINVAL;
+
+	pr_debug("%s: data=%#llx\n", __func__, data.data);
+	return sev_guest_ops->setup_evtlog(iommu->devid, &data.data);
+}
