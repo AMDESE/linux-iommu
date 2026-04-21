@@ -57,6 +57,7 @@ struct amd_sviommu_guest_ops {
 	int (*setup_cmdbuf)(u16 devid, void *data);
 	int (*setup_evtlog)(u16 devid, void *data);
 	int (*setup_pprlog)(u16 devid, void *data);
+	int (*setup_mmio)(u16 devid, void *data);
 };
 
 #ifdef CONFIG_AMD_IOMMU

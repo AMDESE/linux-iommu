@@ -124,3 +124,16 @@ int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable)
 	pr_debug("%s: data=%#llx\n", __func__, data.data);
 	return sev_guest_ops->setup_pprlog(iommu->devid, &data.data);
 }
+
+int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
+{
+	/* 3rd 4K of MMIO space */
+	u64 data = iommu->mmio_phys + 0x2000;
+
+	pr_debug("%s: MMIO addr 0x%llx\n", __func__, data);
+
+	if (!sev_guest_ops || !sev_guest_ops->setup_mmio)
+		return -EINVAL;
+
+	return sev_guest_ops->setup_mmio(iommu->devid, &data);
+}
