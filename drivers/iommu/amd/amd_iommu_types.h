@@ -444,6 +444,9 @@
 /* IOMMU HATDIS for IVHD type 11h and 40h */
 #define IOMMU_IVHD_ATTR_HATDIS_SHIFT	0
 
+/* Secure vIOMMU instance */
+#define IOMMU_IVHD_ATTR_SVIOMMU_SHIFT	1
+
 /* IOMMU Extended Feature Register (EFR) */
 #define IOMMU_EFR_XTSUP_SHIFT	2
 #define IOMMU_EFR_GASUP_SHIFT	7
