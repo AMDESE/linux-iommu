@@ -396,6 +396,7 @@ struct tsm_tdi_status {
 	__u8 interface_report_digest[48];
 	__u64 intf_report_counter;
 	struct tdisp_interface_id id;
+	__u64 tdi_id;
 } __packed;
 
 struct tsm_dsm_status {
