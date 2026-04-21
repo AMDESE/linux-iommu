@@ -810,6 +810,7 @@ struct amd_iommu {
 
 	/* event buffer virtual address */
 	u8 *evt_buf;
+	u32 evt_buf_len;
 
 	/* Name for event log interrupt */
 	unsigned char evt_irq_name[16];
