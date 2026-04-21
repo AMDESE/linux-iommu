@@ -425,7 +425,7 @@ cleanup:
 }
 EXPORT_SYMBOL_GPL(snp_reclaim_pages);
 
-static int rmp_mark_pages_firmware(unsigned long paddr, unsigned int npages, bool locked)
+int rmp_mark_pages_firmware(unsigned long paddr, unsigned int npages, bool locked)
 {
 	unsigned long pfn = __sme_clr(paddr) >> PAGE_SHIFT;
 	int rc, i;

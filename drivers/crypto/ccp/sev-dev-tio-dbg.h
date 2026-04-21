@@ -24,6 +24,9 @@ static inline const char *tio_cmd_to_str(int cmd)
 	case SEV_CMD_TIO_ASID_FENCE_STATUS: return "ASID_FENCE_STATUS";
 	case SEV_CMD_TIO_TDI_INFO: return "TDI_INFO";
 	case SEV_CMD_TIO_ROLL_KEY: return "ROLL_KEY";
+	case SEV_CMD_TIO_VIOMMU_INIT: return "VIOMMU_INIT";
+	case SEV_CMD_TIO_VIOMMU_GUEST_INIT: return "VIOMMU_GUEST_INIT";
+	case SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN: return "VIOMMU_GUEST_SHUTDOWN";
 	}
 	return "UNKNOWN";
 }
