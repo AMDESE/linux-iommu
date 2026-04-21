@@ -165,6 +165,12 @@ enum sev_cmd {
 	SEV_CMD_TIO_TDI_INFO		= 0x0E3,
 	SEV_CMD_TDI_DIGEST_REPORT       = 0x0E4,
 	SEV_CMD_TIO_ROLL_KEY		= 0x0E5,
+
+	/* Secure vIOMMU specific commands */
+	SEV_CMD_TIO_VIOMMU_INIT			= 0x0E6,
+	SEV_CMD_TIO_VIOMMU_GUEST_INIT		= 0x0E8,
+	SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN	= 0x0E9,
+
 	SEV_CMD_MAX,
 };
 
@@ -1076,6 +1082,7 @@ void *snp_alloc_firmware_page(gfp_t mask);
 int snp_reclaim_pages(unsigned long paddr, unsigned int npages, bool locked);
 void snp_free_firmware_page(void *addr);
 int rmp_make_hv_fixed(u64 pfn, unsigned int pages);
+int rmp_mark_pages_firmware(unsigned long paddr, unsigned int npages, bool locked);
 void sev_platform_shutdown(void);
 bool sev_is_snp_ciphertext_hiding_supported(void);
 u64 sev_get_snp_policy_bits(void);
