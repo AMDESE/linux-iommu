@@ -174,6 +174,9 @@ u64 amd_iommu_efr2;
 /* Host (v1) page table is not supported*/
 bool amd_iommu_hatdis;
 
+/* Secure vIOMMU guest */
+static bool amd_iommu_sviommu;
+
 /* SNP is enabled on the system? */
 bool amd_iommu_snp_en;
 EXPORT_SYMBOL(amd_iommu_snp_en);
@@ -1958,6 +1961,10 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h,
 		if (h->efr_attr & BIT(IOMMU_IVHD_ATTR_HATDIS_SHIFT)) {
 			pr_warn_once("Host Address Translation is not supported.\n");
 			amd_iommu_hatdis = true;
+		}
+		if (h->efr_attr & BIT(IOMMU_IVHD_ATTR_SVIOMMU_SHIFT)) {
+			pr_info("Secure vIOMMU Guest.\n");
+			amd_iommu_sviommu = true;
 		}
 
 		early_iommu_features_init(iommu, h);
@@ -4173,6 +4180,12 @@ bool amd_iommu_sviommu_supported(void)
 }
 EXPORT_SYMBOL_GPL(amd_iommu_sviommu_supported);
 #endif
+
+bool amd_iommu_sviommu_guest(void)
+{
+	return amd_iommu_sviommu;
+}
+EXPORT_SYMBOL_GPL(amd_iommu_sviommu_guest);
 
 int amd_iommu_tmpm_enable(void)
 {
