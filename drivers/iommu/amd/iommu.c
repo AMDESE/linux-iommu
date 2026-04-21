@@ -99,6 +99,10 @@ static int amd_iommu_tsm_enable(struct iommu_domain *dom, struct device *dev);
 
 static void clone_aliases(struct amd_iommu *iommu, struct device *dev);
 
+static int __iommu_queue_command_sync(struct amd_iommu *iommu,
+				      struct iommu_cmd *cmd,
+				      bool sync);
+
 static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
 			  struct dev_table_entry *new);
 /****************************************************************************
@@ -1254,6 +1258,54 @@ static void iommu_poll_events(struct amd_iommu *iommu)
 		writel(head, iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
 	}
 
+}
+
+/*
+ * Build illegal commands so that IOMMU generates events.
+ *   1. ILLEGAL_DEV_TABLE_ENTRY
+ *   2. IO_PAGE_FAULT
+ *   5. ILLEGAL_COMMAND_ERROR
+ */
+static void build_illegal_command(struct iommu_cmd *cmd)
+{
+	memset(cmd, 0, sizeof(*cmd));
+
+	cmd->data[0]  = 0xDEADBEEF;
+	cmd->data[1]  = 0xDEADBEEF;
+	cmd->data[2]  = 0xDEADBEEF;
+	cmd->data[3]  = 0xDEADBEEF;
+
+	CMD_SET_TYPE(cmd, CMD_INV_DEV_ENTRY);
+}
+
+static void inject_illegal_command(struct amd_iommu *iommu)
+{
+	struct iommu_cmd cmd;
+	unsigned long flags;
+
+	build_illegal_command(&cmd);
+
+	pr_debug("%s: Injecting invalid command.\n"
+		 "  CMD[0]=%#08x CMD[1]=%#08x CMD[2]=%#08x CMD[3]=%#08x\n",
+		 __func__, cmd.data[0], cmd.data[1], cmd.data[2], cmd.data[3]);
+
+	raw_spin_lock_irqsave(&iommu->lock, flags);
+	__iommu_queue_command_sync(iommu, &cmd, true);
+	raw_spin_unlock_irqrestore(&iommu->lock, flags);
+
+	amd_iommu_completion_wait(iommu);
+}
+
+void amd_iommu_inject_event(struct amd_iommu *iommu, u32 evtid)
+{
+	switch (evtid) {
+	case 5:
+		inject_illegal_command(iommu);
+		break;
+	default:
+		pr_err("%s: Invalid event ID %#x\n", __func__, evtid);
+		break;
+	}
 }
 
 int amd_iommu_register_svm_ops(const struct amd_iommu_svm_ops *ops)
