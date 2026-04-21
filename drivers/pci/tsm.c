@@ -867,23 +867,24 @@ static ssize_t meas_show(struct device *dev, struct device_attribute *attr, char
 	if (!tsm)
 		return sysfs_emit(buf, "\n");
 
-	if (!tsm->meas && tsm->dsm_dev) {
-		struct pci_dev *pdev = to_pci_dev(dev);
-		const struct pci_tsm_ops *ops;
-		int rc;
+	struct pci_dev *pdev = to_pci_dev(dev);
+	const struct pci_tsm_ops *ops;
+	int rc;
 
-		ACQUIRE(rwsem_write_kill, lock)(&pci_tsm_rwsem);
-		if ((rc = ACQUIRE_ERR(rwsem_write_kill, &lock)))
-			return rc;
+	ACQUIRE(rwsem_write_kill, lock)(&pci_tsm_rwsem);
+	if ((rc = ACQUIRE_ERR(rwsem_write_kill, &lock)))
+		return rc;
 
-		ops = pdev->tsm->tsm_dev->pci_ops;
-		rc = ops->measurements(tsm->dsm_dev);
-		if (rc)
-			return rc;
-
+	if (tsm->dsm_dev)
 		tsm = tsm->dsm_dev->tsm;
-	}
+
+	ops = pdev->tsm->tsm_dev->pci_ops;
+
 	guard(mutex)(&tsm->lock2);
+
+	rc = ops->measurements(tsm->pdev);
+	if (rc)
+		return rc;
 
 	return blob_show(tsm->meas, buf, PAGE_SIZE);
 }
@@ -898,13 +899,16 @@ static ssize_t meas_nonce_store(struct device *dev, struct device_attribute *att
 	if (!tsm)
 		return -EINVAL;
 
-	if (!tsm->meas && tsm->dsm_dev)
+	if (tsm->dsm_dev)
 		tsm = tsm->dsm_dev->tsm;
 
 	guard(mutex)(&tsm->lock2);
 
 	memset(tsm->nonce, 0, sizeof(tsm->nonce));
 	memcpy(tsm->nonce, buf, min(count, sizeof(tsm->nonce)));
+	tsm_blob_free(tsm->meas);
+	tsm->meas = NULL;
+
 	return count;
 }
 
