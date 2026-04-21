@@ -98,6 +98,7 @@ int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_mmio(struct amd_iommu *iommu);
+int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable);
 
 #else
 
@@ -182,6 +183,11 @@ static inline int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable
 }
 
 static inline int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
 {
 	return -EOPNOTSUPP;
 }

@@ -564,6 +564,12 @@ static int iommu_map_mmio_space_encrypted(void)
 			release_mem_region(iommu->mmio_phys, iommu->mmio_phys_end);
 			return -EINVAL;
 		}
+
+		ret = amd_sviommu_setup_trans_sdte(iommu, 0, true);
+		if (ret) {
+			pr_err("Failed to enable translation DTE\n");
+			return ret;
+		}
 	}
 
 	return ret;
