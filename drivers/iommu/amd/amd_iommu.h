@@ -289,4 +289,10 @@ amd_iommu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 int amd_iommu_gid_alloc(void);
 void amd_iommu_gid_free(int gid);
 bool amd_viommu_is_secure_guest(u16 gid);
+int amd_viommu_sviommu_guest_init(struct amd_iommu *iommu,
+				  struct amd_iommu_viommu *viommu);
+int amd_viommu_sviommu_guest_shutdown(struct amd_iommu *iommu,
+				      struct amd_iommu_viommu *viommu);
+int iommu_make_shared(void *va, size_t size);
+
 #endif /* AMD_IOMMU_H */
