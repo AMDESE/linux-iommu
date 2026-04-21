@@ -47,6 +47,11 @@ struct amd_sviommu_guest {
 	u64 vfmmio_addr;
 };
 
+struct amd_sviommu_trans_sdte {
+	u64 vtom;
+	bool enable;
+};
+
 struct amd_iommu_ccp_ops {
 	int (*sev_tio_viommu_init)(struct amd_sviommu *sv);
 	int (*sev_tio_viommu_guest_init)(struct amd_sviommu_guest *g);
@@ -58,6 +63,7 @@ struct amd_sviommu_guest_ops {
 	int (*setup_evtlog)(u16 devid, void *data);
 	int (*setup_pprlog)(u16 devid, void *data);
 	int (*setup_mmio)(u16 devid, void *data);
+	int (*setup_trans_sdte)(u16 devid, void *data);
 };
 
 #ifdef CONFIG_AMD_IOMMU

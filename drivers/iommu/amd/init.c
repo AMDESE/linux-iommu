@@ -556,6 +556,12 @@ static int iommu_map_mmio_space_encrypted(void)
 			pr_err("Failed to ioremap secure MMIO BAR\n");
 			return -EINVAL;
 		}
+
+		ret = amd_sviommu_setup_trans_sdte(iommu, 0, true);
+		if (ret) {
+			pr_err("Failed to enable translation DTE\n");
+			return ret;
+		}
 	}
 
 	return ret;
