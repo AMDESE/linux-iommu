@@ -467,8 +467,7 @@ static int mmio_validate_range(struct snp_guest_dev *snp_dev, struct pci_dev *pd
 
 #ifdef SEV_TIO_GUEST_TRY_MAKE_MMIO_SHARED
 struct tio_msg_mmio_config_req {
-	u16 guest_device_id;
-	u16 reserved1;
+	u64 tdi_id;
 
 	u32 reserved2:2;
 	u32 is_non_tee_mem:1;
@@ -477,13 +476,12 @@ struct tio_msg_mmio_config_req {
 
 	u32 write:1; /* 0: read; 1: Write configuration of range */
 	u32 reserved4:31;
-
-	u8 reserved5[4];
 } __packed;
 
 struct tio_msg_mmio_config_rsp {
-	u16 guest_device_id;
+	u64 tdi_id;
 	u16 status; /* mmio_config_status */
+	u8 reserved[2];
 
 	u32 msix_table:1;
 	u32 msix_pba:1;
@@ -495,7 +493,7 @@ struct tio_msg_mmio_config_rsp {
 	u32 write:1; /* 0: read; 1: Write configuration of range */
 	u32 reserved2:31;
 
-	u8 reserved3[4];
+	u8 reserved3[12];
 } __packed;
 
 static int mmio_config_get(struct snp_guest_dev *snp_dev, struct pci_dev *pdev,
