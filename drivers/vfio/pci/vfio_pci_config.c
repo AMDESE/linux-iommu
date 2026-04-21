@@ -95,7 +95,7 @@ static const u16 pci_ext_cap_length[PCI_EXT_CAP_ID_MAX + 1] = {
 	[PCI_EXT_CAP_ID_LTR]	=	PCI_EXT_CAP_LTR_SIZEOF,
 	[PCI_EXT_CAP_ID_SECPCI]	=	0,	/* not yet */
 	[PCI_EXT_CAP_ID_PMUX]	=	0,	/* not yet */
-	[PCI_EXT_CAP_ID_PASID]	=	0,	/* not yet */
+	[PCI_EXT_CAP_ID_PASID]	=	PCI_EXT_CAP_PASID_SIZEOF,
 	[PCI_EXT_CAP_ID_DVSEC]	=	0xFF,
 };
 
@@ -282,6 +282,72 @@ static int vfio_raw_config_write(struct vfio_pci_core_device *vdev, int pos,
 
 	return count;
 }
+
+#ifdef CONFIG_PCI_PASID
+/*
+ * PASID ecap writes: guests must not rewrite the extended capability header or
+ * feature register without validation. The control register follows the same
+ * EXEC/PRIV masking rules as pci_enable_pasid(); VFs target the physical
+ * function registers that own PASID state.
+ */
+static int vfio_pasid_config_write(struct vfio_pci_core_device *vdev, int pos,
+				   int count, struct perm_bits *perm,
+				   int offset, __le32 val)
+{
+	struct pci_dev *pdev = vdev->pdev;
+	struct pci_dev *tgt = pdev->is_virtfn ? pci_physfn(pdev) : pdev;
+	u16 pasid_off = tgt->pasid_cap;
+	u16 supported, old_ctrl, new_ctrl, allowed_mask;
+	const u8 *val_bytes = (const u8 *)&val;
+	unsigned int i;
+	int ret;
+
+	if (!pasid_off)
+		return -EINVAL;
+
+	/* Guest write only touches header / feature half: ignore */
+	if (offset + count <= PCI_PASID_CTRL)
+		return count;
+
+	if (offset >= PCI_EXT_CAP_PASID_SIZEOF)
+		return count;
+
+	ret = pci_user_read_config_word(tgt, pasid_off + PCI_PASID_CAP,
+					&supported);
+	if (ret)
+		return ret;
+	supported &= PCI_PASID_CAP_EXEC | PCI_PASID_CAP_PRIV;
+	allowed_mask = PCI_PASID_CTRL_ENABLE | supported;
+
+	ret = pci_user_read_config_word(tgt, pasid_off + PCI_PASID_CTRL,
+					&old_ctrl);
+	if (ret)
+		return ret;
+
+	new_ctrl = old_ctrl;
+	for (i = 0; i < count; i++) {
+		unsigned int abs_rel = offset + (unsigned int)i;
+
+		if (abs_rel >= PCI_PASID_CTRL &&
+		    abs_rel < PCI_EXT_CAP_PASID_SIZEOF) {
+			unsigned int byte_in_ctrl = abs_rel - PCI_PASID_CTRL;
+
+			new_ctrl &= ~(0xffU << (8 * byte_in_ctrl));
+			new_ctrl |= (u16)val_bytes[i] << (8 * byte_in_ctrl);
+		}
+	}
+
+	new_ctrl = (new_ctrl & allowed_mask) | (old_ctrl & ~allowed_mask);
+
+	ret = pci_user_write_config_word(tgt, pasid_off + PCI_PASID_CTRL,
+					 new_ctrl);
+
+//	printk("DEBUG: %s: pasid=%#x, pos=%#x, count=%#x, val=%#x, ret=%d\n",
+//		__func__, pasid_off, pos, count, val, ret);
+
+	return ret ? ret : count;
+}
+#endif
 
 static int vfio_raw_config_read(struct vfio_pci_core_device *vdev, int pos,
 				int count, struct perm_bits *perm,
@@ -1122,6 +1188,9 @@ int __init vfio_pci_init_perm_bits(void)
 	ret |= init_pci_ext_cap_pwr_perm(&ecap_perms[PCI_EXT_CAP_ID_PWR]);
 	ecap_perms[PCI_EXT_CAP_ID_VNDR].writefn = vfio_raw_config_write;
 	ecap_perms[PCI_EXT_CAP_ID_DVSEC].writefn = vfio_raw_config_write;
+#ifdef CONFIG_PCI_PASID
+	ecap_perms[PCI_EXT_CAP_ID_PASID].writefn = vfio_pasid_config_write;
+#endif
 
 	if (ret)
 		vfio_pci_uninit_perm_bits();
@@ -1949,9 +2018,13 @@ ssize_t vfio_pci_config_rw_single(struct vfio_pci_core_device *vdev,
 
 	offset = *ppos - cap_start;
 
+	pr_debug("%s: iswrite=%d, cap_id=%#x, offset=%#x, count=%zu\n", __func__, iswrite, cap_id, offset, count);
 	if (iswrite) {
-		if (!perm->writefn)
-			return ret;
+		if (!perm->writefn) {
+			pr_warn("%s: config write dropped (no writefn): pos=%#llx cap=%#x offset=%#x count=%zu\n",
+				__func__, (u64)*ppos, cap_id, offset, count);
+			return -EOPNOTSUPP;
+		}
 
 		if (copy_from_user(&val, buf, count))
 			return -EFAULT;
@@ -1963,6 +2036,10 @@ ssize_t vfio_pci_config_rw_single(struct vfio_pci_core_device *vdev,
 					   perm, offset, &val);
 			if (ret < 0)
 				return ret;
+		} else {
+			printk("%s: config read dropped (no readfn): pos=%#llx cap=%#x offset=%#x count=%zu\n",
+				__func__, (u64)*ppos, cap_id, offset, count);
+			return -EOPNOTSUPP;
 		}
 
 		if (copy_to_user(buf, &val, count))
