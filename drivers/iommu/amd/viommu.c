@@ -662,6 +662,10 @@ void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
 		 __func__, pci_dev_id(iommu->dev), aviommu->gid, hdev_id,
 		 gdev_id);
 
+	/* PSP maintains the device ID mapping for a Secure vIOMMU */
+	if (amd_viommu_is_secure_guest(aviommu->gid))
+		return;
+
 	mutex_lock(&aviommu->vfctrl_lock);
 	set_device_mapping_unlocked(iommu, aviommu->gid, hdev_id, gdev_id, 0);
 	mutex_unlock(&aviommu->vfctrl_lock);
@@ -704,6 +708,11 @@ void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
 		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
 
 	lockdep_assert_held(&aviommu->vfctrl_lock);
+
+	/* PSP maintains the domain ID mapping for a Secure vIOMMU */
+	if (amd_viommu_is_secure_guest(aviommu->gid))
+		return;
+
 	domain_id_update_unlocked(iommu, aviommu->gid, hdom_id, gdom_id);
 }
 
@@ -795,7 +804,8 @@ void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *avi
 	 * Wait until CONTROL0/CONTROL1 table DMA has retired before
 	 * the backing pages are unmapped and freed.
 	 */
-	viommu_drain_mapping(iommu, aviommu);
+	if (!amd_viommu_is_secure_guest(aviommu->gid))
+		viommu_drain_mapping(iommu, aviommu);
 	free_private_vm_region(iommu, &aviommu->devid_table,
 			       VIOMMU_DEVID_MAPPING_BASE,
 			       VIOMMU_DEVID_MAPPING_ENTRY_SIZE,
@@ -824,7 +834,12 @@ int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu
 	if (ret)
 		goto err_out;
 
-	viommu_prefill_mapping(iommu, viommu);
+	/*
+	 * For Secure vIOMMU, mapping is maintained by PSP. Host cannot
+	 * clear those memory.
+	 */
+	if (!amd_viommu_is_secure_guest(viommu->gid))
+		viommu_prefill_mapping(iommu, viommu);
 
 	return 0;
 err_out:

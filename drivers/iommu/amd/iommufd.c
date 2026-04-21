@@ -209,6 +209,14 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	aviommu->gid = ret;
 	pr_debug("%s: gid=%#x", __func__, aviommu->gid);
 
+	if (amd_viommu_is_secure_guest(aviommu->gid)) {
+		if (!amd_iommu_sviommu_supported()) {
+			pr_notice("Secure vIOMMU is not supported\n");
+			ret = -ENODEV;
+			goto err_mmap;
+		}
+	}
+
 	page_base = amd_viommu_get_vfmmio_addr(iommu, aviommu->gid);
 	if (!page_base) {
 		ret = -EINVAL;
@@ -224,9 +232,11 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	data.out_vfmmio_mmap_offset = aviommu->vfmmio_mmap_offset;
 
 	/* Reset vIOMMU MMIOs before the trans_devid is visible in the pool. */
-	ret = amd_iommu_reset_vmmio(iommu, aviommu->gid);
-	if (ret)
-		goto err_trans_devid;
+	if (!amd_viommu_is_secure_guest(aviommu->gid)) {
+		ret = amd_iommu_reset_vmmio(iommu, aviommu->gid);
+		if (ret)
+			goto err_trans_devid;
+	}
 
 	mutex_lock(&aviommu->trans_devid_lock);
 	ret = amd_iommu_trans_devid_alloc(iommu->pci_seg, aviommu);
@@ -415,10 +425,15 @@ static u32 amd_iommufd_get_hw_queue_flags(struct iommufd_viommu *viommu,
 
 static int amd_iommufd_hw_queue_init(struct iommufd_hw_queue *hw_queue, u32 index)
 {
+	struct amd_iommu_viommu *aviommu =
+		container_of(hw_queue->viommu, struct amd_iommu_viommu, core);
 	int ret = 0;
 
 	if (index)
 		return -EINVAL;
+
+	if (amd_viommu_is_secure_guest(aviommu->gid))
+		return 0;
 
 	switch (hw_queue->type) {
 	case IOMMU_HW_QUEUE_TYPE_AMD_CMD:

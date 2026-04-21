@@ -2621,6 +2621,8 @@ static void set_dte_entry(struct amd_iommu *iommu,
 	if (dev_data->sviommu_trans) {
 		new.data[0] |= DTE_FLAG_PPR;
 		new.data[1] |= DTE_FLAG_IOTLB;
+		/* In secure vIOMMU mode, DTE[domainID] is reserved */
+		new.data[1] &= ~DTE_DOMID_MASK;
 	}
 
 	amd_iommu_update_dte(iommu, dev_data, &new);
@@ -3785,6 +3787,10 @@ static int amd_iommu_tsm_enable(struct iommu_domain *dom, struct device *dev)
 void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
 						  u16 gid, u32 devid)
 {
+	/* PSP manages VFCTRL for a Secure vIOMMU */
+	if (amd_viommu_is_secure_guest(gid))
+		return;
+
 	writeq((devid & 0xFFFFULL) << 16,
 	       VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) +
 	       VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
