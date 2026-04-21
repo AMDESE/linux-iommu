@@ -139,6 +139,39 @@ static int iommu_cmdbuf_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(iommu_cmdbuf);
 
+static int iommu_evtlog_show(struct seq_file *m, void *unused)
+{
+	struct iommu_cmd *cmd;
+	struct amd_iommu *iommu = m->private;
+	unsigned long flag;
+	u32 head, tail;
+	int i, entries;
+
+	entries = amd_iommu_evtlog_size / EVTLOG_ENTRY_SIZE;
+	/* Limit number of logs entries */
+	if (entries > 1024)
+		entries = 1024;
+
+	raw_spin_lock_irqsave(&iommu->lock, flag);
+
+	head = readl(iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
+	tail = readl(iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
+
+	seq_printf(m, "EVT Log Head Offset:%#x Tail Offset:%#x\n",
+		   (head >> 4) & 0x7fff, (tail >> 4) & 0x7fff);
+
+	for (i = 0; i < entries; i++) {
+		cmd = (struct iommu_cmd *)(iommu->evt_buf + i * sizeof(*cmd));
+		seq_printf(m, "%5d: %08x %08x %08x %08x\n", i, cmd->data[0],
+			   cmd->data[1], cmd->data[2], cmd->data[3]);
+	}
+
+	raw_spin_unlock_irqrestore(&iommu->lock, flag);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(iommu_evtlog);
+
 /*
  * Write any value to restart a halted command buffer. cmdbuf stays
  * read-only and still dumps the buffer.
@@ -813,6 +846,8 @@ void amd_iommu_debugfs_setup(void)
 				    &iommu_capability_fops);
 		debugfs_create_file("cmdbuf", 0444, iommu->debugfs, iommu,
 				    &iommu_cmdbuf_fops);
+		debugfs_create_file("evtlog_buf", 0444, iommu->debugfs, iommu,
+				    &iommu_evtlog_fops);
 		debugfs_create_file("cmdbuf_reset", 0644, iommu->debugfs, iommu,
 				    &cmdbuf_reset_fops);
 		debugfs_create_file("guest_event", 0644, iommu->debugfs, iommu,
