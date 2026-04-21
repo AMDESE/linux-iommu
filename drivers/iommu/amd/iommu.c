@@ -1223,6 +1223,7 @@ retry:
 		dev_err(dev, "Event logged [ILLEGAL_COMMAND_ERROR address=0x%llx]\n", address);
 		dump_command(address);
 		inject_guest_event_illegal_cmd(iommu, address);
+		amd_iommu_reset_cmd_buffer(iommu);
 		break;
 	case EVENT_TYPE_CMD_HARD_ERR:
 		dev_err(dev, "Event logged [COMMAND_HARDWARE_ERROR address=0x%llx flags=0x%04x]\n",
