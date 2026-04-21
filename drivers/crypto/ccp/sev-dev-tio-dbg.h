@@ -183,6 +183,8 @@ static inline char *guest_req_to_str(unsigned cmd)
 	case TIO_MSG_MMIO_CONFIG_RSP: return "MMIO_CONFIG_RSP";
 	case TIO_MSG_SDTE_WRITE_REQ: return "SDTE_WRITE_REQ";
 	case TIO_MSG_SDTE_WRITE_RSP: return "SDTE_WRITE_RSP";
+	case TIO_MSG_VIOMMU_MAPPING_REQ: return "VIOMMU_MAPPING_REQ";
+	case TIO_MSG_VIOMMU_MAPPING_RSP: return "VIOMMU_MAPPING_RSP";
 	default: return "UNKNOWN";
 	}
 }
