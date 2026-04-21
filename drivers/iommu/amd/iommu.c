@@ -41,6 +41,7 @@
 #include <asm/iommu.h>
 #include <asm/gart.h>
 #include <asm/dma.h>
+#include <asm/sev.h>
 #include <uapi/linux/iommufd.h>
 #include <linux/generic_pt/iommu.h>
 
@@ -1101,6 +1102,46 @@ out:
 		pci_dev_put(pdev);
 }
 
+/* Insert illegal command to guest buffer.
+ * NOTE:
+ *   Illegal command event data contains SPA only. For SNP guests, we can
+ *   walk RMP table to get the GPA and ASID. Based on that we can inject
+ *   event to guest buffer. For non-SNP guests, we cannot identify the
+ *   guest based on SPA, hence we cannot inject event to guest.
+ */
+static void inject_guest_event_illegal_cmd(struct amd_iommu *iommu,
+					   unsigned long phys_addr)
+{
+	struct iommu_cmd cmd = { 0 };
+	u64 gpa;
+	int asid;
+	u16 gid;
+
+	if (unlikely(!amd_iommu_np_cache))
+		return;
+
+	asid = snp_get_asid_for_spa(phys_addr);
+	if (asid <= 0)
+		return;
+
+	/* For sviommu, gid[bit - 15] = 1 */
+	gid = 0x8000 | (u16)asid;
+
+	gpa = rmp_get_gpa(phys_addr);
+	if ((int64_t)gpa < 0)
+		return;
+
+	pr_debug("%s: ASID=0x%x SPA=0x%lx  GPA=0x%llx\n",
+		 __func__, asid, phys_addr, gpa);
+
+	CMD_SET_TYPE(&cmd, EVENT_TYPE_ILL_CMD);
+	cmd.data[2] = gpa & 0xffffffff;
+	cmd.data[3] = (gpa >> 32) & 0xffffffff;
+
+	/* Insert illegal command to guest */
+	amd_iommu_insert_guest_event(iommu, gid, (void *)&cmd);
+}
+
 static void iommu_print_event_raw(struct amd_iommu *iommu, void *__evt)
 {
 	volatile u32 *event = __evt;
@@ -1181,6 +1222,7 @@ retry:
 	case EVENT_TYPE_ILL_CMD:
 		dev_err(dev, "Event logged [ILLEGAL_COMMAND_ERROR address=0x%llx]\n", address);
 		dump_command(address);
+		inject_guest_event_illegal_cmd(iommu, address);
 		break;
 	case EVENT_TYPE_CMD_HARD_ERR:
 		dev_err(dev, "Event logged [COMMAND_HARDWARE_ERROR address=0x%llx flags=0x%04x]\n",
