@@ -268,6 +268,13 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		goto err_init;
 
+	if (amd_viommu_is_secure_guest(aviommu->gid) &&
+	    aviommu->viommu_devid) {
+		ret = amd_viommu_sviommu_guest_init(iommu, aviommu);
+		if (ret)
+			goto err_init;
+	}
+
 	viommu->ops = &amd_viommu_ops;
 
 	return 0;
@@ -304,6 +311,7 @@ err_gid:
 static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 {
 	unsigned long flags;
+	int ret;
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
 	struct protection_domain *pdom = aviommu->parent;
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
@@ -334,6 +342,16 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	iommufd_viommu_destroy_mmap(&aviommu->core, aviommu->vfmmio_mmap_offset);
 
 	mutex_lock(&aviommu->trans_devid_lock);
+	if (amd_viommu_is_secure_guest(aviommu->gid) &&
+	    aviommu->viommu_devid) {
+		ret = amd_viommu_sviommu_guest_shutdown(iommu, aviommu);
+		if (ret) {
+			pr_err("%s: secure vIOMMU guest shutdown failed "
+			       "(gid=%#x, ret=%d); proceeding with teardown\n",
+			       __func__, aviommu->gid, ret);
+		}
+	}
+
 	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
 	amd_iommu_clear_translate_dte(iommu, aviommu->trans_dev_data,
 				      aviommu->trans_devid);

@@ -4205,7 +4205,7 @@ done:
 	return rmp_make_shared(pfn, PG_LEVEL_4K);
 }
 
-static int iommu_make_shared(void *va, size_t size)
+int iommu_make_shared(void *va, size_t size)
 {
 	void *page;
 	int ret;

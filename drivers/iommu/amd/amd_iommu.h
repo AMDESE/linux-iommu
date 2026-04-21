@@ -277,6 +277,15 @@ amd_iommu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 int amd_iommu_gid_alloc(struct amd_iommu *iommu);
 void amd_iommu_gid_free(struct amd_iommu *iommu, int gid);
 bool amd_viommu_is_secure_guest(u16 gid);
+int amd_viommu_sviommu_guest_init(struct amd_iommu *iommu,
+				  struct amd_iommu_viommu *viommu);
+int amd_viommu_sviommu_guest_shutdown(struct amd_iommu *iommu,
+				      struct amd_iommu_viommu *viommu);
+#ifdef CONFIG_KVM_AMD_SEV
+int iommu_make_shared(void *va, size_t size);
+#else
+static inline int iommu_make_shared(void *va, size_t size) { return 0; }
+#endif
 #ifdef CONFIG_IRQ_REMAP
 int amd_iommu_reset_ext_irte(struct amd_iommu *iommu, struct ext_irte *eirte);
 #else
