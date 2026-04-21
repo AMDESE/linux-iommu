@@ -47,6 +47,8 @@
 
 LIST_HEAD(viommu_devid_map);
 
+const struct amd_iommu_ccp_ops *ccp_ops;
+
 bool amd_viommu_is_secure_guest(u16 gid)
 {
 	return (gid & 0x8000);
@@ -650,3 +652,60 @@ int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
 
 	return 0;
 }
+
+/* Call from CCP driver */
+void amd_iommu_register_ccp_ops(const struct amd_iommu_ccp_ops *ops)
+{
+	ccp_ops = ops;
+}
+EXPORT_SYMBOL(amd_iommu_register_ccp_ops);
+
+static int sviommu_init(struct amd_iommu *iommu)
+{
+	struct amd_sviommu sv;
+	int ret, i;
+
+	if (iommu->sviommu_enabled)
+		return 0;
+
+	sv.segid = iommu->pci_seg->id;
+	sv.devid = iommu->devid;
+	sv.backing_page_size = VIOMMU_PRIV_SUBREGION_SIZE;
+	for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++)
+		sv.backing_page[i] = iommu->viommu_priv_region[i];
+
+	ret = ccp_ops->sev_tio_viommu_init(&sv);
+	if (!ret)
+		iommu->sviommu_enabled = true;
+
+	return ret;
+}
+
+int amd_iommu_sviommu_init(void)
+{
+	struct amd_iommu *iommu;
+	int ret = 0;
+
+	if (!ccp_ops)
+		return -ENODEV;
+
+	if (!amd_iommu_sviommu_supported()) {
+		pr_info("%s: Secure vIOMMU not supported.\n", __func__);
+		return -EINVAL;
+	}
+
+	for_each_iommu(iommu) {
+		if (iommu->sviommu_enabled)
+			continue;
+
+		ret = sviommu_init(iommu);
+		if (ret) {
+			pr_info("%s: Failed to init svIOMMU for devid : 0x%x\n",
+				__func__, iommu->devid);
+			return ret;
+		}
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(amd_iommu_sviommu_init);
