@@ -709,3 +709,95 @@ int amd_iommu_sviommu_init(void)
 	return ret;
 }
 EXPORT_SYMBOL(amd_iommu_sviommu_init);
+
+int amd_viommu_sviommu_guest_init(struct amd_iommu *iommu,
+				  struct amd_iommu_viommu *viommu)
+{
+	struct amd_sviommu_guest g;
+	int ret;
+
+	if (!ccp_ops)
+		return -ENODEV;
+
+	if (!iommu->sviommu_enabled) {
+		ret = sviommu_init(iommu);
+		if (ret) {
+			pr_err("%s: Failed to init svIOMMU for devid : 0x%x\n",
+			       __func__, iommu->devid);
+			return ret;
+		}
+	}
+
+	DUMP_printk("%s : iommu=0x%x viommu_devid=0x%x trans_devid=0x%x "
+		    "trans_domid=0x%x\n", __func__,
+		    iommu->devid, viommu->viommu_devid,
+		    viommu->trans_devid, viommu->trans_domid);
+	DUMP_printk("%s : devid_table=0x%llx domid_table=0x%llx\n", __func__,
+		    virt_to_phys(viommu->devid_table),
+		    virt_to_phys(viommu->domid_table));
+
+	g.segid = iommu->pci_seg->id;
+	g.devid = iommu->devid;
+	g.kvmfd = viommu->kvmfd;
+	g.kvm = viommu->kvm;
+	g.guest_viommu_devid = viommu->viommu_devid;
+	g.host_viommu_devid = viommu->trans_devid;
+	g.host_domid = viommu->trans_domid;
+	g.devid_map = viommu->devid_table;
+	g.devid_map_size = VIOMMU_DEVID_MAPPING_ENTRY_SIZE;
+	g.domid_map = viommu->domid_table;
+	g.domid_map_size = VIOMMU_DOMID_MAPPING_ENTRY_SIZE;
+	g.vfmmio_addr = iommu->vf_base_phys + viommu->gid * VIOMMU_VF_MMIO_ENTRY_SIZE;
+
+	return ccp_ops->sev_tio_viommu_guest_init(&g);
+}
+
+int amd_viommu_sviommu_guest_shutdown(struct amd_iommu *iommu,
+				      struct amd_iommu_viommu *viommu)
+{
+	struct amd_sviommu_guest g;
+	int ret;
+
+	if (!ccp_ops)
+		return -ENODEV;
+
+	g.segid = iommu->pci_seg->id;
+	g.devid = iommu->devid;
+	g.kvmfd = viommu->kvmfd;
+	g.kvm = viommu->kvm;
+	g.guest_viommu_devid = viommu->viommu_devid;
+	g.host_viommu_devid = viommu->trans_devid;
+	g.host_domid = viommu->trans_domid;
+	g.devid_map = viommu->devid_table;
+	g.devid_map_size = VIOMMU_DEVID_MAPPING_ENTRY_SIZE;
+	g.domid_map = viommu->domid_table;
+	g.domid_map_size = VIOMMU_DOMID_MAPPING_ENTRY_SIZE;
+	g.vfmmio_addr = iommu->vf_base_phys + viommu->gid * VIOMMU_VF_MMIO_ENTRY_SIZE;
+
+	DUMP_printk("%s : iommu=0x%x viommu_devid=0x%x trans_devid=0x%x "
+		    "trans_domid=0x%x\n", __func__,
+		    iommu->devid, viommu->viommu_devid,
+		    viommu->trans_devid, viommu->trans_domid);
+
+	ret = ccp_ops->sev_tio_viommu_guest_shutdown(&g);
+	if (ret) {
+		pr_err("%s: sviommu guest shutdown failed (ret=%d), "
+		       "reclaiming firmware pages anyway\n", __func__, ret);
+	}
+
+	/*
+	 * Reclaim firmware-owned pages unconditionally.  The pages were
+	 * marked firmware during guest init; leaving them in that state
+	 * if the PSP command fails would leave the RMP permanently
+	 * inconsistent.
+	 */
+	if (g.devid_map)
+		iommu_make_shared((void *)g.devid_map, g.devid_map_size);
+
+	/* Reclaim domain ID table memory */
+	if (g.domid_map)
+		iommu_make_shared((void *)g.domid_map, g.domid_map_size);
+
+	/* No need to call rmp update for MMIO region as PSP clears it */
+	return ret;
+}
