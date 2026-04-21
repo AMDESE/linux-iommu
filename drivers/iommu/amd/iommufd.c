@@ -192,6 +192,14 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	aviommu->trans_domid = pdom->id;
 	aviommu->viommu_devid = data.viommu_devid;
 	aviommu->kvmfd = data.kvmfd;
+
+	if (amd_viommu_is_secure_guest(aviommu->gid) &&
+	    aviommu->viommu_devid) {
+		ret = amd_viommu_sviommu_guest_init(iommu, aviommu);
+		if (ret)
+			goto err_init;
+	}
+
 	viommu->ops = &amd_viommu_ops;
 
 	spin_lock_irqsave(&pdom->lock, flags);
@@ -214,6 +222,7 @@ err_mmap:
 static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 {
 	unsigned long flags;
+	int ret;
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
 	struct protection_domain *pdom = aviommu->parent;
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
@@ -224,8 +233,19 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	list_del(&aviommu->pdom_list);
 	spin_unlock_irqrestore(&pdom->lock, flags);
 	xa_destroy(&aviommu->gdomid_array);
-	gid_free(aviommu->gid);
+
+	if (amd_viommu_is_secure_guest(aviommu->gid) &&
+	    aviommu->viommu_devid) {
+		ret = amd_viommu_sviommu_guest_shutdown(iommu, aviommu);
+		if (ret) {
+			pr_err("%s: secure vIOMMU guest shutdown failed "
+			       "(gid=%#x, ret=%d); proceeding with teardown\n",
+			       __func__, aviommu->gid, ret);
+		}
+	}
+
 	amd_viommu_uninit_one(iommu, aviommu);
+	gid_free(aviommu->gid);
 	amd_iommu_free_trans_devid_by_kvmfd(iommu->pci_seg, aviommu->kvmfd);
 }
 
