@@ -775,6 +775,11 @@ static int tio_tdi_sdte_write(struct pci_dev *pdev, struct snp_guest_dev *snp_de
 
 	BUILD_BUG_ON(sizeof(struct sdte) * 8 != 512);
 
+	/* Skip sDTE update, if Secure vIOMMU is enabled */
+	if (amd_iommu_sviommu_guest()) {
+		return amd_iommu_update_sdte(pdev, !invalidate);
+	}
+
 	if (!invalidate)
 		req = (struct tio_msg_sdte_write_req) {
 			.guest_device_id = bdfn,
