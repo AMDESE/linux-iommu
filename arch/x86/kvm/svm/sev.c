@@ -4360,7 +4360,7 @@ static int snp_complete_sev_tio_bind(struct kvm_vcpu *vcpu)
 
 	ghcb_set_sw_exit_info_2(svm->sev_es.ghcb,
 				SNP_GUEST_ERR(0, vcpu->run->vmgexit.tio_op.fw_err));
-	ghcb_set_rcx(svm->sev_es.ghcb, vcpu->run->vmgexit.tio_op.fw_tdi_id);
+	vcpu->arch.regs[VCPU_REGS_RCX] = vcpu->run->vmgexit.tio_op.fw_tdi_id;
 
 	return 1; /* Resume guest */
 }
