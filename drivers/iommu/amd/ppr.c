@@ -13,6 +13,7 @@
 #include <asm/iommu.h>
 
 #include "amd_iommu.h"
+#include "amd_viommu.h"
 #include "amd_iommu_types.h"
 
 #include "../iommu-pages.h"
@@ -21,29 +22,52 @@ int __init amd_iommu_alloc_ppr_log(struct amd_iommu *iommu)
 {
 	iommu->ppr_log = iommu_alloc_4k_pages(iommu, GFP_KERNEL | __GFP_ZERO,
 					      PPR_LOG_SIZE);
+
+	/* Hardcoded to 8K (PPR_LOG_SIZE_512) ring buffer */
+	iommu->ppr_log_len = 0x9;
+
 	return iommu->ppr_log ? 0 : -ENOMEM;
 }
 
-void amd_iommu_enable_ppr_log(struct amd_iommu *iommu)
+void iommu_ppr_buffer_update(struct amd_iommu *iommu, bool enable)
 {
+	if (amd_iommu_sviommu_guest()) {
+		amd_sviommu_setup_ppr_log(iommu, enable);
+	} else {
+		if (enable) {
+			iommu_feature_enable(iommu, CONTROL_PPRINT_EN);
+			iommu_feature_enable(iommu, CONTROL_PPRLOG_EN);
+		} else {
+			iommu_feature_disable(iommu, CONTROL_PPRLOG_EN);
+			iommu_feature_disable(iommu, CONTROL_PPRINT_EN);
+		}
+	}
+}
+
+int amd_iommu_enable_ppr_log(struct amd_iommu *iommu)
+{
+	int ret = 0;
 	u64 entry;
 
 	if (iommu->ppr_log == NULL)
-		return;
-
-	iommu_feature_enable(iommu, CONTROL_PPR_EN);
-
-	entry = iommu_virt_to_phys(iommu->ppr_log) | PPR_LOG_SIZE_512;
-
-	memcpy_toio(iommu->mmio_base + MMIO_PPR_LOG_OFFSET,
-		    &entry, sizeof(entry));
+		return ret;
 
 	/* set head and tail to zero manually */
 	writel(0x00, iommu->mmio_base + MMIO_PPR_HEAD_OFFSET);
 	writel(0x00, iommu->mmio_base + MMIO_PPR_TAIL_OFFSET);
 
-	iommu_feature_enable(iommu, CONTROL_PPRINT_EN);
-	iommu_feature_enable(iommu, CONTROL_PPRLOG_EN);
+	if (amd_iommu_sviommu_guest()) {
+		ret = amd_sviommu_setup_ppr_log(iommu, true);
+	} else {
+		entry = iommu_virt_to_phys(iommu->ppr_log) | PPR_LOG_SIZE_512;
+
+		memcpy_toio(iommu->mmio_base + MMIO_PPR_LOG_OFFSET,
+			    &entry, sizeof(entry));
+
+		iommu_feature_enable(iommu, CONTROL_PPRINT_EN);
+		iommu_feature_enable(iommu, CONTROL_PPRLOG_EN);
+	}
+	return ret;
 }
 
 void __init amd_iommu_free_ppr_log(struct amd_iommu *iommu)
