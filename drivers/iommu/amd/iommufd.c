@@ -142,6 +142,14 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	aviommu->gid = (u16)ret;
 	pr_debug("%s: gid=%#x", __func__, aviommu->gid);
 
+	if (amd_viommu_is_secure_guest(aviommu->gid)) {
+		if (!amd_iommu_sviommu_supported()) {
+			pr_notice("Secure vIOMMU is not supported\n");
+			ret = -ENODEV;
+			goto err_mmap;
+		}
+	}
+
 	page_base = amd_viommu_get_vfmmio_addr(iommu, aviommu->gid);
 
 	ret = iommufd_viommu_alloc_mmap(&aviommu->core,
@@ -163,10 +171,12 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 		goto err_kvmfd;
 
 	/* Reset vIOMMU MMIOs to initialize the vIOMMU */
-	iommu_reset_vmmio(iommu, aviommu->gid);
+	if (!amd_viommu_is_secure_guest(aviommu->gid))
+		iommu_reset_vmmio(iommu, aviommu->gid);
 
 	amd_iommu_set_translate_dte(iommu, aviommu->gid, pdom, trans_devid);
-	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, trans_devid);
+	if (!amd_viommu_is_secure_guest(aviommu->gid))
+		amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, trans_devid);
 
 	ret = amd_viommu_init_one(iommu, aviommu);
 	if (ret)
@@ -190,7 +200,8 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 
 	return 0;
 err_init:
-	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
+	if (!amd_viommu_is_secure_guest(aviommu->gid))
+		amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
 	amd_iommu_clear_translate_dte(iommu, aviommu->gid, trans_devid);
 	amd_iommu_free_trans_devid_by_kvmfd(iommu->pci_seg, data.kvmfd);
 err_kvmfd:
@@ -246,7 +257,9 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	pr_debug("%s: gid=%#x, hdev_id=%#x, gdev_id=%#x\n", __func__,
 			 dev_data->gid, pci_dev_id(pdev), dev_data->gDevId);
 
-	amd_viommu_set_device_mapping(iommu, pci_dev_id(pdev), dev_data->gid, dev_data->gDevId);
+	if (!amd_viommu_is_secure_guest(aviommu->gid))
+		amd_viommu_set_device_mapping(iommu, pci_dev_id(pdev), dev_data->gid,
+					      dev_data->gDevId);
 
 	return 0;
 }
@@ -272,6 +285,9 @@ static int _amd_viommu_hw_queue_init(struct iommufd_hw_queue *hw_queue, u32 inde
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 	int gid = aviommu->gid;
+
+	if (amd_viommu_is_secure_guest(aviommu->gid))
+		return 0;
 
 	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
 	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
