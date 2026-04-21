@@ -447,9 +447,12 @@ void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *avi
 			       VIOMMU_DOMID_MAPPING_ENTRY_SIZE,
 			       aviommu->gid);
 
-	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
+	if (!amd_viommu_is_secure_guest(aviommu->gid)) {
+		amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
+		viommu_clear_mapping(iommu, aviommu);
+	}
+
 	amd_iommu_clear_translate_dte(iommu, aviommu->gid, aviommu->trans_devid);
-	viommu_clear_mapping(iommu, aviommu);
 }
 
 int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu)
@@ -470,7 +473,12 @@ int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu
 	if (ret)
 		goto err_out;
 
-	viommu_clear_mapping(iommu, viommu);
+	/*
+	 * For Secure vIOMMU, mapping is maintained by PSP. Host cannot
+	 * clear those memory.
+	 */
+	if (!amd_viommu_is_secure_guest(viommu->gid))
+		viommu_clear_mapping(iommu, viommu);
 
 	return 0;
 err_out:
@@ -493,6 +501,9 @@ int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
 {
 	u64 val;
 	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	if (amd_viommu_is_secure_guest(gid))
+		return 0;
 
 	val = FIELD_PREP(DOMID_ENTRY_GDOMID_MASK, gdom_id) |
 	      FIELD_PREP(DOMID_ENTRY_HDOMID_MASK, hdom_id) |

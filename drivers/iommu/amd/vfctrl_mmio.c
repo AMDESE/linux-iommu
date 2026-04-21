@@ -37,6 +37,9 @@ int amd_viommu_guest_mmio_read(struct iommufd_viommu *viommu, u16 offset, u64 *v
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 	int gid = aviommu->gid;
 
+	if (amd_viommu_is_secure_guest(gid))
+		return -EINVAL;
+
 	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
 	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
 
@@ -86,6 +89,9 @@ int amd_viommu_guest_mmio_write(struct iommufd_viommu *viommu, u16 offset, u64 v
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 	int gid = aviommu->gid;
+
+	if (amd_viommu_is_secure_guest(gid))
+		return -EINVAL;
 
 	pr_debug("%s: iommu_devid=%#x, gid=%u, offset=%#x, value=%#llx\n",
 		 __func__, iommu->devid, gid, offset, value);
