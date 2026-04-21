@@ -9,7 +9,10 @@
 #include <linux/bitfield.h>
 #include <linux/pci-doe.h>
 #include <linux/smp.h>
+#include <linux/amd-iommu.h>
+
 #include <asm/sev-common.h>
+#include <asm/sev-kvm.h>
 #include <asm/sev.h>
 #include <asm/page.h>
 #include "sev-dev.h"
@@ -1241,6 +1244,8 @@ free_spdm_exit:
 	return ret;
 }
 
+extern const struct amd_iommu_ccp_ops viommu_ccp_ops;
+
 int sev_tio_init_locked(void *tio_status_page)
 {
 	struct sev_tio_status *tio_status = tio_status_page;
@@ -1276,6 +1281,15 @@ int sev_tio_init_locked(void *tio_status_page)
 	ret = __sev_do_cmd_locked(SEV_CMD_TIO_STATUS, &data_status, &psp_ret);
 	if (ret)
 		return ret;
+
+	/* Register callback ops with AMD IOMMU driver */
+	amd_iommu_register_ccp_ops(&viommu_ccp_ops);
+
+	/*
+	 * Ignore return value. Otherwise it breaks older system which doesn't
+	 * have secure vIOMMU support.
+	 */
+	amd_iommu_sviommu_init();
 
 	return 0;
 }
@@ -1866,6 +1880,266 @@ int sev_tio_tdi_status_fin(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi
 	return 0;
 }
 
+/* Secure vIOMMU support */
+
+
+struct sev_data_tio_viommu {
+	u32 length;		/* In */
+	u32 reserved1;
+	u16 pci_segid;		/* In */
+	u16 iommu_devid;	/* In */
+	u32 reserved2;
+	u64 backing_page_pa[VIOMMU_BACKING_PAGE_COUNT];	/* In */
+} __packed;
+
+/* Called with sev_cmd_mutex lock */
+static int sev_tio_viommu_init_locked(struct amd_sviommu *sv)
+{
+	u64 pa;
+	int i, j, ret, psp_ret, npages;
+	struct sev_data_tio_viommu v = {
+		.length = sizeof(v),
+	};
+
+	if (WARN_ON(!sv))
+		return 0;
+
+	v.pci_segid = sv->segid;
+	v.iommu_devid = sv->devid;
+
+	/* Make sure backing page is 2MB aligned */
+	for (i = 0; i < VIOMMU_BACKING_PAGE_COUNT; i++) {
+		if (!sv->backing_page[i])
+			return -EINVAL;
+
+		pa = __psp_pa(sv->backing_page[i]);
+		if ((pa & (SZ_2M - 1)) != 0) {
+			pr_info("%s: backing_page=%#llx is not 2MB aligned\n",
+				__func__, pa);
+			return -EINVAL;
+		}
+	}
+
+	/* 4 x 2MB size */
+	npages = 1ULL << get_order(sv->backing_page_size);
+	for (i = 0; i < VIOMMU_BACKING_PAGE_COUNT; i++) {
+		pa = __psp_pa(sv->backing_page[i]);
+		ret = rmp_mark_pages_firmware(pa, npages, false);
+		/* Reclaim already marked pages on error */
+		if (ret)
+			goto err_out;
+
+		v.backing_page_pa[i] = pa;
+
+		pr_debug("%s: segid=%#x, devid=%#x backing_page_pa=%#llx\n",
+			 __func__, sv->segid, sv->devid, v.backing_page_pa[i]);
+	}
+
+	ret = __sev_do_cmd_locked(SEV_CMD_TIO_VIOMMU_INIT, &v, &psp_ret);
+	if (ret || WARN_ON(!ret && psp_ret != SEV_RET_SUCCESS)) {
+		pr_warn("%s: Failed to init secure vIOMMU. ret=%d psp_ret=%#x\n",
+			__func__, ret, psp_ret);
+		i = VIOMMU_BACKING_PAGE_COUNT;
+		ret = -EIO;
+		goto err_out;
+	}
+
+	pr_info("%s: secure vIOMMU initialized for IOMMU=%04x:%02x:%02x.%x\n",
+		__func__, sv->segid, PCI_BUS_NUM(sv->devid),
+		PCI_SLOT(sv->devid), PCI_FUNC(sv->devid));
+
+	return ret;
+
+err_out:
+	for (j = 0; j < i; j++)
+		snp_reclaim_pages(__psp_pa(sv->backing_page[j]), npages, true);
+
+	return ret;
+}
+
+static struct kvm_sev_info *get_sev_info(u32 kvmfd)
+{
+	struct kvm_sev_info *sev;
+	struct kvm *kvm;
+	struct fd f;
+
+	f = fdget(kvmfd);
+	if (fd_empty(f))
+		return NULL;
+
+	kvm = fd_file(f)->private_data;
+	sev = &to_kvm_svm(kvm)->sev_info;
+	fdput(f);
+
+	return sev;
+}
+
+/*
+ * Derive kvm_sev_info from a cached struct kvm pointer without touching
+ * current->files.  Use this on teardown paths that may run in kernel thread
+ * context (current->files == NULL).
+ */
+static struct kvm_sev_info *get_sev_info_from_kvm(void *kvm_ptr)
+{
+	struct kvm *kvm = kvm_ptr;
+
+	if (!kvm)
+		return NULL;
+
+	return &to_kvm_svm(kvm)->sev_info;
+}
+
+struct sev_data_tio_viommu_guest_init {
+	u32 length;		/* In */
+	u32 reserved1;
+	u64 gctx_paddr;		/* In */
+	u16 pci_segid;		/* In */
+	u16 iommu_devid;	/* In: Host IOMMU devid */
+	u16 guest_iommu_devid;	/* In: IOMMU Guest BDF */
+	u16 host_trans_devid;	/* In: Translation devid */
+	u16 host_trans_domid;	/* In: Host domain ID for translation DTE */
+	u8  reserved2[6];
+	u64 devid_map_pa;	/* In */
+	u64 domid_map_pa;	/* In */
+	u64 vfmmio_pa;		/* In */
+	u64 reserved3;
+} __packed;
+
+static int sev_tio_viommu_guest_init(struct amd_sviommu_guest *sg)
+{
+	u64 pa;
+	int ret, psp_ret, npages;
+	struct kvm_sev_info *sev;
+	struct sev_data_tio_viommu_guest_init g = {
+		.length = sizeof(g),
+		.devid_map_pa = 0,
+		.domid_map_pa = 0,
+	};
+
+	if (WARN_ON(!sg))
+		return -EINVAL;
+
+	sev = get_sev_info(sg->kvmfd);
+	if (!sev)
+		return -EBADF;
+
+	g.gctx_paddr = __psp_pa((u64) sev->snp_context);
+	g.pci_segid = sg->segid;
+	g.iommu_devid = sg->devid;
+	g.guest_iommu_devid = sg->guest_viommu_devid;
+	g.host_trans_devid = sg->host_viommu_devid;
+	g.host_trans_domid = sg->host_domid;
+
+	pr_debug("%s: kvmfd=%#x, segid=%#x, devid=%#x, guest_iommu_devid=%#x, "
+		 "host_trans_devid=%#x, host_domid=%#x, ctx_paddr=%#llx, asid=%#x\n",
+		 __func__, sg->kvmfd, g.pci_segid, g.iommu_devid, g.guest_iommu_devid,
+		 g.host_trans_devid, g.host_trans_domid, g.gctx_paddr, sev->asid);
+
+	pa = __psp_pa(sg->devid_map);
+	npages = 1ULL << get_order(sg->devid_map_size);
+	ret = rmp_mark_pages_firmware(pa, npages, false);
+	if (ret)
+		return ret;
+	g.devid_map_pa = pa;
+	pr_debug("%s: devid_map_pa=%#llx, size=%#x(%u)\n",
+		 __func__, pa, sg->devid_map_size, npages);
+
+	pa = __psp_pa(sg->domid_map);
+	npages = 1ULL << get_order(sg->domid_map_size);
+	ret = rmp_mark_pages_firmware(pa, npages, false);
+	if (ret)
+		goto err_out_devid;
+	g.domid_map_pa = pa;
+	pr_debug("%s: domid_map_pa=%#llx, size=%#x(%u)\n",
+		 __func__, pa, sg->domid_map_size, npages);
+
+	/* VFMMIO is always 4K */
+	pa = (sg->vfmmio_addr);
+	ret = rmp_make_private_mmio(pa >> PAGE_SHIFT, 0, 0);
+	if (ret) {
+		goto err_out_domid;
+	}
+	g.vfmmio_pa = pa;
+	pr_debug("%s: vfmmio_pa=%#llx\n", __func__, pa);
+
+	ret = sev_do_cmd(SEV_CMD_TIO_VIOMMU_GUEST_INIT, &g, &psp_ret);
+	if (ret || WARN_ON(!ret && psp_ret != SEV_RET_SUCCESS)) {
+		pr_warn("%s: Failed to init secure vIOMMU guest. "
+			"ret=%d psp_ret=%#x\n", __func__, ret, psp_ret);
+		ret = -EIO;
+		goto err_out_domid;
+	}
+
+	return ret;
+
+err_out_domid:
+	if (g.domid_map_pa) {
+		npages = 1ul << get_order(sg->domid_map_size);
+		snp_reclaim_pages(g.domid_map_pa, npages, false);
+	}
+
+err_out_devid:
+	if (g.devid_map_pa) {
+		npages = 1ul << get_order(sg->devid_map_size);
+		snp_reclaim_pages(g.devid_map_pa, npages, false);
+	}
+
+	return ret;
+}
+
+struct sev_data_tio_viommu_guest_shutdown {
+	u32 length;		/* In */
+	u32 reserved1;
+	u64 gctx_paddr;		/* In */
+	u16 pci_segid;		/* In */
+	u16 iommu_devid;	/* In */
+	u8  reserved2[12];
+} __packed;
+
+static int sev_tio_viommu_guest_shutdown(struct amd_sviommu_guest *sg)
+{
+	int ret, psp_ret;
+	struct kvm_sev_info *sev;
+	struct sev_data_tio_viommu_guest_shutdown g = {
+		.length = sizeof(g),
+	};
+
+	if (WARN_ON(!sg))
+		return -EINVAL;
+
+	/*
+	 * Use the cached kvm pointer rather than fdget(kvmfd): shutdown runs
+	 * via deferred fput task_work in the kvm-nx-lpage-re vhost kernel
+	 * thread where current->files is NULL, so fdget() would crash.
+	 */
+	sev = get_sev_info_from_kvm(sg->kvm);
+	if (!sev)
+		return -EBADF;
+
+	g.gctx_paddr = __psp_pa((u64) sev->snp_context);
+	g.pci_segid = sg->segid;
+	g.iommu_devid = sg->devid;
+
+	pr_debug("%s: kvmfd=%#x, segid=%#x, devid=%#x, ctx_paddr=%#llx, "
+		 "asid=%#x\n", __func__, sg->kvmfd, g.pci_segid,
+		 g.iommu_devid, g.gctx_paddr, sev->asid);
+
+	ret = sev_do_cmd(SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN, &g, &psp_ret);
+	if (ret || WARN_ON(!ret && psp_ret != SEV_RET_SUCCESS)) {
+		pr_warn("%s: Failed to shutdown secure vIOMMU guest. "
+			"ret=%d psp_ret=%#x\n", __func__, ret, psp_ret);
+		return -EIO;
+	}
+
+	return ret;
+}
+
+const struct amd_iommu_ccp_ops viommu_ccp_ops = {
+	.sev_tio_viommu_init		= sev_tio_viommu_init_locked,
+	.sev_tio_viommu_guest_init	= sev_tio_viommu_guest_init,
+	.sev_tio_viommu_guest_shutdown	= sev_tio_viommu_guest_shutdown,
+};
+
 int sev_tio_cmd_buffer_len(int cmd)
 {
 	switch (cmd) {
@@ -1889,6 +2163,9 @@ int sev_tio_cmd_buffer_len(int cmd)
 	case SEV_CMD_TIO_ASID_FENCE_STATUS: return sizeof(struct sev_data_tio_asid_fence_status);
 	case SEV_CMD_TIO_TDI_INFO:		return sizeof(struct sev_data_tio_tdi_info);
 	case SEV_CMD_TIO_ROLL_KEY:		return sizeof(struct sev_data_tio_roll_key);
+	case SEV_CMD_TIO_VIOMMU_INIT:		return sizeof(struct sev_data_tio_viommu);
+	case SEV_CMD_TIO_VIOMMU_GUEST_INIT:	return sizeof(struct sev_data_tio_viommu_guest_init);
+	case SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN:	return sizeof(struct sev_data_tio_viommu_guest_shutdown);
 	default:				return 0;
 	}
 }
