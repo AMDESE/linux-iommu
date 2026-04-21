@@ -42,6 +42,7 @@ int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_mmio(struct amd_iommu *iommu);
 int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable);
+int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bool set);
 
 #else
 
@@ -106,6 +107,11 @@ static inline int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
 }
 
 static inline int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bool set)
 {
 	return -EOPNOTSUPP;
 }

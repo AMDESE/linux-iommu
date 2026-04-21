@@ -151,3 +151,22 @@ int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
 	pr_debug("%s: vtom=%#llx enable=%d\n", __func__, vtom, enable);
 	return sev_guest_ops->setup_trans_sdte(iommu->devid, &data);
 }
+
+int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bool set)
+{
+	struct amd_sviommu_mapping_data data;
+
+	if (!sev_guest_ops || !sev_guest_ops->mapping_update) {
+		return -EINVAL;
+	}
+
+	pr_debug("%s: viommu_devid=%#x, domid=%#x, devid=%#x\n",
+		 __func__, iommu->devid, domid, devid);
+
+	data.viommu_devid = iommu->devid;
+	data.devid = devid;
+	data.domid = domid;
+	data.set = set;
+
+	return sev_guest_ops->mapping_update(&data);
+}
