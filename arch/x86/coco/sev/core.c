@@ -24,6 +24,7 @@
 #include <linux/io.h>
 #include <linux/psp-sev.h>
 #include <linux/dmi.h>
+#include <linux/amd-iommu.h>
 #include <uapi/linux/sev-guest.h>
 #include <crypto/gcm.h>
 
@@ -206,6 +207,10 @@ static struct ghcb boot_ghcb_page __bss_decrypted __aligned(PAGE_SIZE);
  * cleared
  */
 struct ghcb *boot_ghcb __section(".data");
+
+/* Secure vIOMMU related calls */
+extern const struct amd_sviommu_guest_ops sviommu_guest_ops;
+static int guest_viommu_msg_alloc(void);
 
 static u64 __init get_snp_jump_table_addr(void)
 {
@@ -1719,6 +1724,9 @@ static int __init report_snp_info(void)
 	if (cc_platform_has(CC_ATTR_GUEST_SEV_SNP))
 		pr_info("SNP running at VMPL%u.\n", snp_vmpl);
 
+	if (!guest_viommu_msg_alloc())
+		amd_sviommu_register_guest_ops(&sviommu_guest_ops);
+
 	return 0;
 }
 arch_initcall(report_snp_info);
@@ -2580,3 +2588,460 @@ void __init snp_secure_tsc_init(void)
 
 	early_memunmap(mem, PAGE_SIZE);
 }
+
+/*
+ * Secure vIOMMU (svIOMMU)
+ */
+
+static struct snp_msg_desc *viommu_mdesc;
+
+static int guest_viommu_msg_alloc(void)
+{
+	viommu_mdesc = snp_msg_alloc();
+	if (IS_ERR_OR_NULL(viommu_mdesc))
+		return -ENOMEM;
+
+	return 0;
+}
+
+#define TIO_MESSAGE_VERSION	1
+
+static int _handle_early_tio_guest_request(struct snp_msg_desc *mdesc, u8 type,
+					   void *req_buf, size_t req_sz, void *resp_buf, u32 resp_sz,
+					   void *pt, u64 *npages, u64 *bdfn, u64 *param, u64 *fw_err,
+					   const char *dbgpfx)
+{
+	char pfx[128], *pfx1;
+	struct snp_guest_req req = {
+		.msg_version = TIO_MESSAGE_VERSION,
+	};
+	u64 exitinfo2 = 0;
+	int ret;
+
+	req.msg_type = type;
+	req.vmpck_id = mdesc->vmpck_id;
+	req.req_buf = kmemdup(req_buf, req_sz, GFP_KERNEL);
+	req.req_sz = req_sz;
+	req.resp_buf = kmalloc(resp_sz, GFP_KERNEL);
+	req.resp_sz = resp_sz;
+	req.exit_code = SVM_VMGEXIT_SEV_TIO_GR;
+
+	req.input.guest_rid = 0;
+	req.input.param = 0;
+
+	if (pt && npages) {
+		req.certs_data = pt;
+		req.input.data_npages = *npages;
+	}
+	if (bdfn)
+		req.input.guest_rid = *bdfn;
+	if (param)
+		req.input.param = *param;
+
+	sprintf(pfx, "#%d %s: ", smp_processor_id(), dbgpfx);
+	pfx1 = pfx + strlen(pfx);
+
+	ret = snp_send_guest_request(mdesc, &req);
+	exitinfo2 = req.exitinfo2;
+
+	pr_notice("%s : %d %lld\b", __func__, ret, exitinfo2);
+
+#if 0
+	if (ret || exitinfo2) {
+		struct snp_guest_msg_hdr *rq = &mdesc->request->hdr;
+		struct snp_guest_msg_hdr *rs = &mdesc->response->hdr;
+
+		sprintf(pfx1, "*RQ< msg_type=%x ", rq->msg_type);
+		print_hex_dump(KERN_INFO, pfx, DUMP_PREFIX_OFFSET, 16, 1, req_buf, req_sz, false);
+
+		sprintf(pfx1, "*RSh msg_type=%x ", rs->msg_type);
+		print_hex_dump(KERN_INFO, pfx, DUMP_PREFIX_OFFSET, 16, 1,
+			       &mdesc->response->hdr, sizeof(mdesc->response->hdr), false);
+		sprintf(pfx1, "*RS> msg_type=%x ", rs->msg_type);
+		print_hex_dump(KERN_INFO, pfx, DUMP_PREFIX_OFFSET, 16, 1, resp_buf,
+			       mdesc->response->hdr.msg_sz, false);
+
+		pr_err("*RS msg_type=%x => rc=%d fw=%lld\n", rs->msg_type, ret, exitinfo2);
+	}
+#endif
+
+	if (param)
+		*param = req.input.param;
+
+	*fw_err = exitinfo2;
+
+	kfree(req.resp_buf);
+	kfree(req.req_buf);
+
+	return ret;
+}
+
+#define SEV_VIOMMU_CONFIG_REQ_FLAG_CMDBUF	(1 << 0)
+#define SEV_VIOMMU_CONFIG_REQ_FLAG_EVTLOG	(1 << 1)
+#define SEV_VIOMMU_CONFIG_REQ_FLAG_PPRLOG	(1 << 2)
+#define SEV_VIOMMU_CONFIG_REQ_FLAG_PPRLOGB	(1 << 3)
+#define SEV_VIOMMU_CONFIG_REQ_FLAG_EVTLOGB	(1 << 4)
+#define SEV_VIOMMU_CONFIG_REQ_FLAG_MMIO		(1 << 5)
+#define SEV_VIOMMU_CONFIG_REQ_FLAG_SDTE		(1 << 6)
+
+#define SEV_VIOMMU_CONFIG_REQ_VTOM_EN		(1 << 0)
+#define SEV_VIOMMU_CONFIG_REQ_SDTE_EN		(1 << 0)
+
+#define SEV_VIOMMU_CONFIG_REQ_SUPPORTED_FLAGS \
+	(SEV_VIOMMU_CONFIG_REQ_FLAG_CMDBUF | \
+	 SEV_VIOMMU_CONFIG_REQ_FLAG_EVTLOG | \
+	 SEV_VIOMMU_CONFIG_REQ_FLAG_PPRLOG | \
+	 SEV_VIOMMU_CONFIG_REQ_FLAG_MMIO   | \
+	 SEV_VIOMMU_CONFIG_REQ_FLAG_SDTE)
+
+struct snp_msg_config_viommu_req {
+	__u16 gviommu_devid;
+	__u16 reserved1;
+	__u32 op_flags;
+	__u64 gmmio_cmdbuf;
+	__u64 gmmio_evtlog;
+	__u64 gmmio_pprlog;
+	__u64 gmmio_pprlog_b;
+	__u64 gmmio_evtlog_b;
+	__u64 vfmmio_gpa;
+	__u64 reserved2;
+	__u64 trans_dte_vtom;	/* Translation DTE: vTOM address */
+	__u8  trans_dte_vmpl;	/* Translation DTE: VMPL level */
+	__u8  trans_dte_en;	/* Translation DTE: Enable sDTE entry */
+	__u8  reserved3[6];
+} __packed;
+
+struct snp_msg_config_viommu_rsp {
+	__u16 gviommu_devid;
+	__u8  status;
+	__u8  rsp_op;	/* When status code is 3, this indicate which op failed */
+	__u8  reserved[12];
+} __packed;
+
+static int setup_viommu_req(struct snp_msg_desc *mdesc,
+			    u16 devid, u32 op_flags, void *data)
+{
+	struct snp_msg_config_viommu_req *vreq __free(kfree) = NULL;
+	struct snp_msg_config_viommu_rsp *vrsp __free(kfree) = NULL;
+	struct snp_guest_req req = {};
+	struct amd_sviommu_trans_sdte *trans_sdte;
+	int ret = -ENOMEM, resp_len;
+
+	if (op_flags & ~SEV_VIOMMU_CONFIG_REQ_SUPPORTED_FLAGS) {
+		pr_err("%s: Unsupported operation %#x\n", __func__, op_flags);
+		return -EINVAL;
+	}
+
+	op_flags &= SEV_VIOMMU_CONFIG_REQ_SUPPORTED_FLAGS;
+	if (!op_flags)
+		return 0;
+
+	/*
+	 * The intermediate response buffer is used while decrypting the
+	 * response payload. Make sure that it has enough space to cover the
+	 * authtag.
+	 */
+	resp_len = sizeof(*vrsp) + mdesc->ctx->authsize;
+	vrsp = kzalloc(resp_len, GFP_KERNEL_ACCOUNT);
+	if (!vrsp)
+		return -ENOMEM;
+
+	/* Setup CONFIG_VIOMMU_REQ Message Payload */
+	vreq = kzalloc(sizeof(*vreq), GFP_KERNEL_ACCOUNT);
+	if (!vreq)
+		goto err_free_rsp;
+
+	vreq->gviommu_devid = devid;
+	vreq->op_flags = op_flags;
+
+	if (op_flags & SEV_VIOMMU_CONFIG_REQ_FLAG_CMDBUF) {
+		vreq->gmmio_cmdbuf = *(u64 *)data;
+		pr_debug("%s : Command buffer=0x%llx\n",
+			 __func__, vreq->gmmio_cmdbuf);
+	}
+
+	if (op_flags & SEV_VIOMMU_CONFIG_REQ_FLAG_EVTLOG) {
+		vreq->gmmio_evtlog = *(u64 *)data;
+		pr_debug("%s : Event buffer=0x%llx\n",
+			 __func__, vreq->gmmio_evtlog);
+	}
+
+	if (op_flags & SEV_VIOMMU_CONFIG_REQ_FLAG_PPRLOG) {
+		vreq->gmmio_pprlog = *(u64 *)data;
+		pr_debug("%s : ppr buffer=0x%llx\n",
+			 __func__, vreq->gmmio_pprlog);
+	}
+
+	if (op_flags & SEV_VIOMMU_CONFIG_REQ_FLAG_MMIO) {
+		vreq->vfmmio_gpa = *(u64 *)data;
+		pr_debug("%s : VF MMIO GPA=0x%llx\n",
+			 __func__, vreq->vfmmio_gpa);
+	}
+
+	if (op_flags & SEV_VIOMMU_CONFIG_REQ_FLAG_SDTE) {
+		trans_sdte = (void *)data;
+		if (trans_sdte->vtom)
+			vreq->trans_dte_vtom = trans_sdte->vtom |
+				SEV_VIOMMU_CONFIG_REQ_VTOM_EN;
+		if (trans_sdte->enable) {
+			vreq->trans_dte_en   = SEV_VIOMMU_CONFIG_REQ_SDTE_EN;
+			vreq->trans_dte_vmpl = snp_vmpl;
+		}
+
+		pr_debug("%s : Trans sDTE vtom= 0x%llx, enable=%d\n",
+		       __func__, vreq->trans_dte_vtom, vreq->trans_dte_en);
+	}
+
+	req.msg_version = MSG_HDR_VER;
+	req.msg_type = SNP_MSG_SETUP_VIOMMU_REQ;
+	req.vmpck_id = mdesc->vmpck_id;
+	req.req_buf = vreq;
+	req.req_sz = sizeof(*vreq);
+	req.resp_buf = vrsp;
+	req.resp_sz = resp_len;
+	req.exit_code = SVM_VMGEXIT_GUEST_REQUEST;
+
+	return snp_send_guest_request(mdesc, &req);
+
+err_free_rsp:
+	kfree(vrsp);
+
+	return ret;
+}
+
+/*
+ * devid : Guest vIOMMU device id
+ * data  : GuestX MMIO value
+ */
+static int guest_setup_viommu(u16 devid, void *data, u32 flags)
+{
+	int ret;
+
+	if (!viommu_mdesc)
+		return -ENOMEM;
+
+	ret = snp_msg_init(viommu_mdesc, snp_vmpl);
+	if (ret)
+		return -ENOMEM;
+
+	return setup_viommu_req(viommu_mdesc, devid, flags, data);
+}
+
+static int guest_setup_viommu_cmdbuf(u16 devid, void *data)
+{
+	return guest_setup_viommu(devid, data, SEV_VIOMMU_CONFIG_REQ_FLAG_CMDBUF);
+}
+
+static int guest_setup_viommu_evtlog(u16 devid, void *data)
+{
+	return guest_setup_viommu(devid, data, SEV_VIOMMU_CONFIG_REQ_FLAG_EVTLOG);
+}
+
+static int guest_setup_viommu_pprlog(u16 devid, void *data)
+{
+	return guest_setup_viommu(devid, data, SEV_VIOMMU_CONFIG_REQ_FLAG_PPRLOG);
+}
+
+static int guest_setup_viommu_mmio(u16 devid, void *data)
+{
+	return guest_setup_viommu(devid, data, SEV_VIOMMU_CONFIG_REQ_FLAG_MMIO);
+}
+
+static int guest_setup_viommu_sdte(u16 devid, void *data)
+{
+	return guest_setup_viommu(devid, data, SEV_VIOMMU_CONFIG_REQ_FLAG_SDTE);
+}
+
+/* Operation: Bit 0 : Set/clear */
+#define TIO_VIOMMU_MAPPING_OP_SET	BIT(0)
+
+/*
+ * Operation Flags:
+ *   Bit 0 : Device ID mapping
+ *   Bit 1 : Domain ID mapping
+ */
+#define TIO_VIOMMU_MAPPING_FLAG_DEVID	BIT(0)
+#define TIO_VIOMMU_MAPPING_FLAG_DOMID	BIT(1)
+
+/*
+ * Secure vIOMMU TIO message
+ */
+struct tio_msg_config_viommu_mapping_req {
+	__u64 tdi_id;
+	__u16 viommu_devid;
+	__u8  op;
+	__u8  op_flags;
+	__u16 gdomid;
+	__u8 reserved[2];
+} __packed;
+
+struct tio_msg_config_viommu_mapping_rsp {
+	__u64 tdi_id;
+	__u16 status;
+	__u8 reserved[6];
+} __packed;
+
+static int guest_sviommu_mapping_update(void *d)
+{
+	struct tio_msg_config_viommu_mapping_rsp *rsp = { 0 };
+	struct tio_msg_config_viommu_mapping_req req = { 0 };
+	struct amd_sviommu_mapping_data *data = (struct amd_sviommu_mapping_data *)d;
+	struct snp_msg_desc *mdesc;
+	u64 bdfn = data->devid;
+	u64 fw_err = 0;
+	size_t resp_len;
+	int rc;
+
+	mdesc = snp_msg_alloc();
+	if (IS_ERR_OR_NULL(mdesc)) {
+		pr_err("%s: Failed to allocate SNP message\n", __func__);
+		return -ENOMEM;
+	}
+
+	rc = snp_msg_init(mdesc, snp_vmpl);
+	if (rc)
+		goto free_mdesc;
+
+	resp_len = sizeof(struct tio_msg_config_viommu_mapping_req) + mdesc->ctx->authsize;
+	rsp = kzalloc(resp_len, GFP_KERNEL);
+	if (!rsp) {
+		rc = -ENOMEM;
+		goto free_mdesc;
+	}
+
+	/* TODO: For now pass device ID in TDI_ID field */
+	req.tdi_id = data->devid;
+	req.viommu_devid = data->viommu_devid;
+	req.gdomid = data->domid;
+	req.op_flags = TIO_VIOMMU_MAPPING_FLAG_DEVID | TIO_VIOMMU_MAPPING_FLAG_DOMID;
+	if (data->set)
+		req.op = TIO_VIOMMU_MAPPING_OP_SET;
+
+	pr_debug("%s: VIOMMU %s request gdevid=%x, gdomid=%#x",__func__,
+		 data->set ? "mapping" : "unmapping", data->devid, data->domid);
+
+	rc = _handle_early_tio_guest_request(mdesc, TIO_MSG_VIOMMU_MAPPING_REQ,
+				      &req, sizeof(req), rsp, resp_len,
+				      NULL, NULL, &bdfn, NULL, &fw_err,
+				      "DevID Mapping Req");
+	if (rc) {
+		pr_err("%s: TIO mapping request failed. fw_err=0x%llx\n",
+		       __func__, fw_err);
+		goto free_exit;
+	}
+
+free_exit:
+	/* The response buffer contains the sensitive data, explicitly clear it. */
+	memzero_explicit(rsp, resp_len);
+	kfree(rsp);
+
+free_mdesc:
+	snp_msg_free(mdesc);
+
+	return rc;
+}
+
+/*
+ * SDTE stuff
+ */
+struct tio_msg_sdte_write_req {
+	__u16 guest_device_id;
+	__u8 reserved[14];
+	struct sdte sdte;
+} __packed;
+
+struct tio_msg_sdte_write_rsp {
+	__u16 guest_device_id;
+	__u16 status; /* SDTE_WRITE_xxx */
+	__u8 reserved[12];
+#if 1
+	struct sdte sdte;
+	uint64_t device_id;
+	uint32_t die;
+	uint32_t nbio;
+#endif
+} __packed;
+
+static int guest_sdte_update(void *d)
+{
+	struct snp_msg_desc *mdesc;
+	struct tio_msg_sdte_write_req req = { 0 };
+	struct tio_msg_sdte_write_rsp *rsp;
+	struct amd_sviommu_sdte_data *data = d;
+	size_t resp_len;
+	u64 bdfn = data->devid;
+	u64 fw_err = 0;
+	int rc;
+	u64 flags = 0;
+
+	BUILD_BUG_ON(sizeof(struct sdte) * 8 != 512);
+
+	mdesc = snp_msg_alloc();
+	if (IS_ERR_OR_NULL(mdesc)) {
+		pr_err("%s: Failed to allocate SNP message\n", __func__);
+		return -ENOMEM;
+	}
+
+	rc = snp_msg_init(mdesc, snp_vmpl);
+	if (rc)
+		goto free_mdesc;
+
+	resp_len = sizeof(struct tio_msg_sdte_write_rsp) + mdesc->ctx->authsize;
+	rsp = kzalloc(resp_len, GFP_KERNEL);
+	if (!rsp) {
+		rc = -ENOMEM;
+		goto free_mdesc;
+	}
+
+	req.guest_device_id = data->devid,
+	memcpy(&req.sdte, data->sdte, sizeof(struct sdte));
+
+	/*
+	 * Add SVM_VMGEXIT_SEV_TIO_GR_SDTE_VALIDATE so that qemu adjusts Host IOMMU
+	 * page table to handle shared memory access.
+	 */
+	if (req.sdte.vtom)
+		flags = (req.sdte.vtom << 21) | SVM_VMGEXIT_SEV_TIO_GR_SDTE_VALIDATE;
+
+	pr_notice("%s: viommu_devid=%#x, devid=%#x flags=0x%llx\n",
+		 __func__, data->viommu_devid, data->devid, flags);
+
+	rc = _handle_early_tio_guest_request(mdesc, TIO_MSG_SDTE_WRITE_REQ,
+			       &req, sizeof(req), rsp, resp_len,
+			       NULL, NULL, &bdfn, &flags, &fw_err,
+			       "SDTE update request");
+	if (rc) {
+		pr_err("%s: sDTE write request failed. fw_err=0x%llx\n",
+		       __func__, fw_err);
+		goto free_exit;
+	}
+
+	u64 *t = (u64 *) &rsp->sdte;
+	pr_notice("%s: SDTE %016llX %016llX %016llX %016llX\n%016llX %016llX %016llX %016llX\n",
+		  __func__,
+		 t[7], t[6],
+		 t[5], t[4],
+		 t[3], t[2],
+		 t[1], t[0]
+		 );
+
+free_exit:
+	/* The response buffer contains the sensitive data, explicitly clear it. */
+	memzero_explicit(rsp, resp_len);
+	kfree(rsp);
+
+free_mdesc:
+	snp_msg_free(mdesc);
+
+	return rc;
+}
+
+const struct amd_sviommu_guest_ops sviommu_guest_ops = {
+	.setup_cmdbuf     = guest_setup_viommu_cmdbuf,
+	.setup_evtlog     = guest_setup_viommu_evtlog,
+	.setup_pprlog     = guest_setup_viommu_pprlog,
+	.setup_mmio       = guest_setup_viommu_mmio,
+	.setup_trans_sdte = guest_setup_viommu_sdte,
+	.mapping_update   = guest_sviommu_mapping_update,
+	.sdte_update      = guest_sdte_update,
+};
