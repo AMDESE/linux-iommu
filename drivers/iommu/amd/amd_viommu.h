@@ -93,6 +93,9 @@ void amd_viommu_remove_ext_int_remap_hw(struct amd_iommu *iommu,
 void amd_viommu_clear_ext_int_remap(struct kvm *kvm, struct amd_iommu *iommu,
 				    struct amd_iommu_viommu *aviommu);
 int amd_viommu_resume(struct amd_iommu *iommu);
+
+int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable);
+
 #else
 
 /*
@@ -158,6 +161,11 @@ static inline int amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
 static inline int amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 {
 	return 0;
+}
+
+static inline int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable)
+{
+	return -EOPNOTSUPP;
 }
 
 #endif /* CONFIG_AMD_IOMMU_IOMMUFD */
