@@ -930,6 +930,7 @@ struct amd_iommu {
 	/* HW vIOMMU support */
 	/* Synthetic IOMMU-self DTE; not in pci_seg->dev_data_xa or pdom->dev_list */
 	struct iommu_dev_data *viommu_dev_data;
+	bool sviommu_enabled;
 	struct protection_domain *viommu_pdom;
 	void *viommu_priv_region[VIOMMU_PRIV_SUBREGION_CNT];
 	u64 *ext_ir_table;		 /* Pointer to the Ext-IR table */

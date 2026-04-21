@@ -28,6 +28,44 @@ struct amd_iommu_svm_ops {
 	void (*put_kvm)(struct kvm *kvm);
 };
 
+/* TODO: Replace it w/ VIOMMU_PRIV_SUBREGION_CNT? also rename backing_page w/ viommu_priv_region */
+#define VIOMMU_BACKING_PAGE_COUNT	(4)
+struct amd_sviommu {
+	u16 segid;
+	u16 devid;
+	void *backing_page[VIOMMU_BACKING_PAGE_COUNT]; /* 4 2MB pages */
+	u32 backing_page_size; /* 2MB */
+};
+
+struct amd_sviommu_guest {
+	u16 segid;
+	u16 devid;
+	void *kvm;
+
+	u16 guest_viommu_devid;
+	u16 host_viommu_devid;
+	u16 host_domid;
+	void *devid_map;
+	u32 devid_map_size;
+	void *domid_map;
+	u32 domid_map_size;
+	u64 vfmmio_addr;
+};
+
+struct amd_iommu_ccp_ops {
+	int (*sev_tio_viommu_init)(struct amd_sviommu *sv);
+	int (*sev_tio_viommu_guest_init)(struct amd_sviommu_guest *g);
+	int (*sev_tio_viommu_guest_shutdown)(struct amd_sviommu_guest *g);
+};
+
+#ifdef CONFIG_AMD_IOMMU_IOMMUFD
+void amd_iommu_register_ccp_ops(const struct amd_iommu_ccp_ops *ops);
+int amd_iommu_sviommu_init(void);
+#else
+static inline void amd_iommu_register_ccp_ops(const struct amd_iommu_ccp_ops *ops) {}
+static inline int amd_iommu_sviommu_init(void) { return -ENODEV; }
+#endif
+
 #ifdef CONFIG_AMD_IOMMU
 
 struct task_struct;
