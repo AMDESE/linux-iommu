@@ -560,7 +560,9 @@ struct sev_data_tio_tdi_bind {
 	u16 guest_device_id;
 	u16 tdisp_lock_if_flags; /* TIO_TDI_BIND_FLAG_xxxx */
 	u16 run_flags; /* TIO_TDI_BIND_RUN_xxxx */
-	u8 reserved3[10];
+	u16 queue_id;
+	u16 host_domain_id;
+	u8  reserved2[6];
 } __packed;
 
 /**
@@ -1555,12 +1557,15 @@ void sev_tio_tdi_reclaim(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_d
 	tdi_data->tdi_ctx = SLA_NULL;
 }
 
-int sev_tio_tdi_bind(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
-		     u32 guest_rid, u64 gctx_paddr, u32 asid, bool force_run)
+int sev_tio_tdi_bind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
+		     struct tsm_tdi_tio *tdi_data, u32 guest_rid,
+		     u64 gctx_paddr, u32 asid, bool force_run)
 {
 	struct sev_data_tio_tdi_bind b = {
 		.length = sizeof(b),
 	};
+	int ret;
+	int domid;
 
 	if (WARN_ON_ONCE(IS_SLA_NULL(dev_data->dev_ctx) || IS_SLA_NULL(tdi_data->tdi_ctx)))
 		return -EFAULT;
@@ -1575,12 +1580,20 @@ int sev_tio_tdi_bind(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
 	b.gctx_paddr = tdi_data->gctx_paddr;
 	b.run_flags = force_run ? TIO_TDI_BIND_RUN_FORCE : 0;
 
-	return sev_tio_do_cmd(SEV_CMD_TIO_TDI_BIND, &b, sizeof(b),
-			      &dev_data->psp_ret, dev_data);
+	/* TODO: queue_id update */
+	domid = amd_iommu_get_dev_domid(pdev);
+	if (domid <= 0)
+		return -EINVAL;
+	b.host_domain_id = (u16)domid;
+
+	ret = sev_tio_do_cmd(SEV_CMD_TIO_TDI_BIND, &b, sizeof(b),
+			     &dev_data->psp_ret, dev_data);
+
+	return ret;
 }
 
-int sev_tio_tdi_unbind(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
-		       bool force)
+int sev_tio_tdi_unbind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
+		       struct tsm_tdi_tio *tdi_data, bool force)
 {
 	struct sev_data_tio_tdi_unbind ub = {
 		.length = sizeof(ub),
@@ -1597,6 +1610,8 @@ int sev_tio_tdi_unbind(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_dat
 	ub.dev_ctx_sla = dev_data->dev_ctx;
 	ub.tdi_ctx_sla = tdi_data->tdi_ctx;
 	ub.gctx_paddr = tdi_data->gctx_paddr;
+
+	amd_iommu_clear_dev_domid(pdev);
 
 	return sev_tio_do_cmd(SEV_CMD_TIO_TDI_UNBIND, &ub, sizeof(ub),
 			      &dev_data->psp_ret, dev_data);
