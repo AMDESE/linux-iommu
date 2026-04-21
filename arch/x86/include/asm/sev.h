@@ -691,6 +691,7 @@ bool snp_probe_rmptable_info(void);
 int snp_rmptable_init(void);
 int snp_lookup_rmpentry(u64 pfn, bool *assigned, int *level);
 u64 rmp_get_gpa(u64 hpa);
+int snp_get_asid_for_spa(u64 hpa);
 void snp_dump_hva_rmpentry(unsigned long address);
 int psmash(u64 pfn);
 int rmp_make_private(u64 pfn, u64 gpa, enum pg_level level, u32 asid, bool immutable);
@@ -724,6 +725,7 @@ static inline void __snp_leak_pages(u64 pfn, unsigned int npages, bool dump_rmp)
 static inline void snp_leak_pages(u64 pfn, unsigned int npages) {}
 static inline void kdump_sev_callback(void) { }
 static inline void snp_fixup_e820_tables(void) {}
+static inline int snp_get_asid_for_spa(u64 hpa) { return -EINVAL; }
 #endif
 
 #endif
