@@ -51,6 +51,7 @@
 #include "../iommu-pages.h"
 
 #define CMD_SET_TYPE(cmd, t) ((cmd)->data[1] |= ((t) << 28))
+#define CMD_GET_TYPE(cmd)    (((cmd)->data[1] >> 28) & 0xf)
 
 /* Reserved IOVA ranges */
 #define MSI_RANGE_START		(0xfee00000)
@@ -1623,6 +1624,60 @@ static void build_reset_vmmio(struct iommu_cmd *cmd, u16 gid,
 	CMD_SET_TYPE(cmd, CMD_RESET_VMMIO);
 }
 
+static bool sviommu_guest_supported_cmd(struct amd_iommu *iommu,
+					struct iommu_cmd *cmd)
+{
+	struct iommu_dev_data *dev_data;
+	u32 devid = 0;
+	u8 type = CMD_GET_TYPE(cmd);
+
+	switch (type) {
+	case CMD_COMPL_WAIT:
+		return true;
+	case CMD_INV_DEV_ENTRY:
+		devid = (cmd->data[0] & 0xffff);
+		break;
+	case CMD_INV_IOMMU_PAGES:
+		/* Allow TLB Invalidatio if domain ID is valid */
+		if (cmd->data[1] & 0xffff)
+			return true;
+		break;
+	case CMD_INV_IOTLB_PAGES:
+		devid = (cmd->data[0] & 0xffff);
+		break;
+	case CMD_COMPLETE_PPR:
+		pr_warn_once("sviommu: CMD_COMPLETE_PPR dropped - Please fix it\n");
+		return false;
+	default:
+		return false;
+	}
+
+	if (!devid)
+		return false;
+
+	dev_data = search_dev_data(iommu, devid);
+	if (!dev_data)
+		return false;
+
+	if (dev_data->sdte_enabled)
+		return true;
+
+	return false;
+}
+
+static void dump_cmd_status(struct amd_iommu *iommu,
+			    struct iommu_cmd *cmd)
+{
+	int i;
+
+	for (i = 0; i < 4; ++i)
+		pr_debug("CMD[%d]: %08x\n", i, cmd->data[i]);
+
+	pr_debug("%s: cmd buffer head=0x%x, tail=0x%x, status=0x%x\n",
+		 __func__, readl(iommu->mmio_base + 0x2000),
+		 readl(iommu->mmio_base + 0x2008),
+		 readl(iommu->mmio_base + 0x2020));
+}
 /*
  * Writes the command to the IOMMUs command buffer and informs the
  * hardware about the new command.
@@ -1633,6 +1688,16 @@ static int __iommu_queue_command_sync(struct amd_iommu *iommu,
 {
 	unsigned int count = 0;
 	u32 left, next_tail;
+
+	if (amd_iommu_sviommu_guest()) {
+		if (!sviommu_guest_supported_cmd(iommu, cmd)) {
+			pr_debug("%s: Skipping command\n", __func__);
+			dump_cmd_status(iommu, cmd);
+			return 0;
+		}
+
+		dump_cmd_status(iommu, cmd);
+	}
 
 	next_tail = (iommu->cmd_buf_tail + sizeof(*cmd)) % CMD_BUFFER_SIZE;
 again:
@@ -2313,7 +2378,18 @@ static int update_gcr3(struct iommu_dev_data *dev_data,
 	else
 		*pte = 0;
 
+	/*
+	 * For Secure vIOMMU, domain ID mapping must be configured prior to
+	 * executing flush operations. Skip flushing the default PASID as its
+	 * mapping will be set up later
+	 */
+	if (amd_iommu_sviommu_guest()) {
+		if (pasid == 0 && gcr3 != 0)
+			return 0;
+	}
+
 	dev_flush_pasid_all(dev_data, pasid);
+
 	return 0;
 }
 
