@@ -1742,11 +1742,13 @@ struct sev_tio_tdi_info_data {
 	u64 intf_report_counter;
 	u32 asid; /* ASID of the guest that this device is assigned to. Valid if CTX_STATE=1 */
 	u8 reserved2[4];
+	uint64_t tdi_id;
 } __packed;
 
 struct sev_data_tio_tdi_info {
 	u32 length;
-	u32 reserved1;
+	u8 version;
+	u8 reserved1[3];
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
 	u64 status_paddr;
@@ -1760,6 +1762,7 @@ int sev_tio_tdi_info(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
 		DATA_PG(struct sev_tio_tdi_info_data, dev_data);
 	struct sev_data_tio_tdi_info info = {
 		.length = sizeof(info),
+		.version = 1,
 		.dev_ctx_sla = dev_data->dev_ctx,
 		.tdi_ctx_sla = tdi_data->tdi_ctx,
 		.status_paddr = __psp_pa(data),
@@ -1783,6 +1786,7 @@ int sev_tio_tdi_info(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
 	ts->lock_msix = !!(data->p2_flags & SEV_TIO_TDI_INFO_P2_FLAG_LOCK_MSIX);
 	ts->bind_p2p = !!(data->p2_flags & SEV_TIO_TDI_INFO_P2_FLAG_BIND_P2P);
 	ts->all_request_redirect = !!(data->p2_flags & SEV_TIO_TDI_INFO_P2_FLAG_ALL_REQUEST_REDIRECT);
+	ts->tdi_id = data->tdi_id;
 
 #define __ALGO(x, n, y) \
 	((((x) & (0xFFULL << (n))) == TIO_SPDM_ALGOS_##y) ? \
