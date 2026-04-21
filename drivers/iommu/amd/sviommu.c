@@ -87,3 +87,40 @@ int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable)
 	pr_debug("%s: data=%#llx\n", __func__, data.data);
 	return sev_guest_ops->setup_evtlog(iommu->devid, &data.data);
 }
+
+struct guest_ppr_log_data {
+	union {
+		u64 data;
+		struct {
+			u64 pprlen	    : 4,
+			    pprblen	    : 4,
+			    pprlog_en	    : 1,
+			    pprint_en       : 1,
+			    ppr_en          : 1,
+			    dualpprlog_en   : 2,
+			    pprautorsp_en   : 1,
+			    blkstopmrk_en   : 1,
+			    pprautorspa_on  : 1,
+			    pprlogbase      : 40,
+			    reserved        : 12;
+		};
+	};
+};
+
+int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable)
+{
+	struct guest_ppr_log_data data;
+
+	memset(&data, 0, sizeof(struct guest_ppr_log_data));
+	data.pprlen = iommu->ppr_log_len;
+	data.pprlog_en = enable;
+	data.pprint_en = enable;
+	data.ppr_en = enable;
+	data.pprlogbase = (iommu_virt_to_phys(iommu->ppr_log) >> 12);
+
+	if (!sev_guest_ops ||!sev_guest_ops->setup_pprlog)
+		return -EINVAL;
+
+	pr_debug("%s: data=%#llx\n", __func__, data.data);
+	return sev_guest_ops->setup_pprlog(iommu->devid, &data.data);
+}

@@ -25,6 +25,7 @@ void amd_iommu_restart_ga_log(struct amd_iommu *iommu);
 void amd_iommu_restart_ppr_log(struct amd_iommu *iommu);
 void amd_iommu_set_rlookup_table(struct amd_iommu *iommu, u16 devid);
 void iommu_feature_enable(struct amd_iommu *iommu, u8 bit);
+void iommu_feature_disable(struct amd_iommu *iommu, u8 bit);
 bool iommu_feature_enable_and_check(struct amd_iommu *iommu, u8 bit);
 void *__init iommu_alloc_4k_pages(struct amd_iommu *iommu,
 				  gfp_t gfp, size_t size);
@@ -91,9 +92,10 @@ int amd_iommu_clear_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid);
 /* PPR */
 int __init amd_iommu_alloc_ppr_log(struct amd_iommu *iommu);
 void __init amd_iommu_free_ppr_log(struct amd_iommu *iommu);
-void amd_iommu_enable_ppr_log(struct amd_iommu *iommu);
+int amd_iommu_enable_ppr_log(struct amd_iommu *iommu);
 void amd_iommu_poll_ppr_log(struct amd_iommu *iommu);
 int amd_iommu_complete_ppr(struct device *dev, u32 pasid, int status, int tag);
+void iommu_ppr_buffer_update(struct amd_iommu *iommu, bool enable);
 
 /*
  * This function flushes all internal caches of
