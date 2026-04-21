@@ -924,6 +924,9 @@ static int __init alloc_event_buffer(void)
 						      amd_iommu_evtlog_size);
 		if (!iommu->evt_buf)
 			return -ENOMEM;
+
+		iommu->evt_buf_len = (amd_iommu_evtlog_size == EVTLOG_SIZE_DEF) ?
+				     0x9 : 0xf;
 	}
 
 	return 0;
@@ -941,7 +944,13 @@ static void iommu_setup_event_buffer(void)
 	for_each_iommu(iommu) {
 		BUG_ON(iommu->evt_buf == NULL);
 
-		if (!is_kdump_kernel()) {
+		/* set head and tail to zero manually */
+		writel(0x00, iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
+		writel(0x00, iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
+
+		if (amd_iommu_sviommu_guest()) {
+			amd_sviommu_setup_evt_log(iommu, false);
+		} else if (!is_kdump_kernel()) {
 			/*
 			 * Event buffer is re-used for kdump kernel and setting
 			 * of MMIO register is not required.
@@ -953,10 +962,6 @@ static void iommu_setup_event_buffer(void)
 			memcpy_toio(iommu->mmio_base + MMIO_EVT_BUF_OFFSET,
 				    &entry, sizeof(entry));
 		}
-
-		/* set head and tail to zero manually */
-		writel(0x00, iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
-		writel(0x00, iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
 	}
 }
 
@@ -974,6 +979,11 @@ static void iommu_enable_event_logging(struct amd_iommu *iommu)
 	writel(MMIO_STATUS_EVT_INT_MASK | MMIO_STATUS_EVT_OVERFLOW_MASK,
 	       iommu->mmio_base + MMIO_STATUS_OFFSET);
 
+	if (amd_iommu_sviommu_guest()) {
+		amd_sviommu_setup_evt_log(iommu, true);
+		return;
+	}
+
 	iommu_feature_enable(iommu, CONTROL_EVT_INT_EN);
 	iommu_feature_enable(iommu, CONTROL_EVT_LOG_EN);
 }
@@ -983,6 +993,13 @@ static void iommu_enable_event_logging(struct amd_iommu *iommu)
  */
 static void iommu_disable_event_logging(struct amd_iommu *iommu)
 {
+	if (amd_iommu_sviommu_guest()) {
+		/* Not yet allocated on the first iommu_disable() at boot */
+		if (iommu->evt_buf)
+			amd_sviommu_setup_evt_log(iommu, false);
+		return;
+	}
+
 	iommu_feature_disable(iommu, CONTROL_EVT_INT_EN);
 	iommu_feature_disable(iommu, CONTROL_EVT_LOG_EN);
 }
