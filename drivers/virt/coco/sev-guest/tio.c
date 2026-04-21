@@ -18,7 +18,7 @@
 
 #include "../../../crypto/ccp/sev-dev-tio-dbg.h"
 
-#define TIO_MESSAGE_VERSION	1
+#define TIO_MESSAGE_VERSION	2
 
 ulong tsm_vtom = (2ULL << 40);
 module_param(tsm_vtom, ulong, 0644);
@@ -281,8 +281,8 @@ static int guest_request_tio_data(struct snp_guest_dev *snp_dev, u8 type,
 }
 
 struct tio_msg_tdi_info_req {
-	u16 guest_device_id;
-	u8 reserved[14];
+	u64 tdi_id;
+	u8 reserved[8];
 } __packed;
 
 enum {
@@ -292,9 +292,9 @@ enum {
 };
 
 struct tio_msg_tdi_info_rsp {
-	u16 guest_device_id;
+	u64 tdi_id;
 	u16 status; /* TIO_MSG_TDI_INFO_RSP_STATUS_xxx */
-	u8 reserved1[12];
+	u8 reserved1[6];
 
 	u32 meas_digest_valid:1;
 	u32 meas_digest_fresh:1;
@@ -318,16 +318,16 @@ struct tio_msg_tdi_info_rsp {
 
 /* Passing pci_tsm explicitly as it may not be set in pci_dev just yet */
 static int tio_tdi_status(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
-			  struct tsm_tdi_status *ts, struct tsm_blob **certs,
-			  struct tsm_blob **meas, const char *nonce,
-			  struct tsm_blob **report)
+			  struct tsm_tdi_status *ts, uint64_t tdi_id,
+			  struct tsm_blob **certs, struct tsm_blob **meas,
+			  const char *nonce, struct tsm_blob **report)
 {
 	enum tsm_tdisp_state state = TDISP_STATE_CONFIG_UNLOCKED;
 	struct snp_msg_desc *mdesc = snp_dev->msg_desc;
 	size_t resp_len = sizeof(struct tio_msg_tdi_info_rsp) + mdesc->ctx->authsize;
 	struct tio_msg_tdi_info_rsp *rsp __free(kfree_sensitive) = kzalloc(resp_len, GFP_KERNEL);
 	struct tio_msg_tdi_info_req req = {
-		.guest_device_id = ghcb_tio_sbdfn(pdev),
+		.tdi_id = tdi_id,
 	};
 	u64 fw_err = 0;
 	int rc;
@@ -338,7 +338,7 @@ static int tio_tdi_status(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
 
 	rc = guest_request_tio_data(snp_dev, TIO_MSG_TDI_INFO_REQ, &req,
 				    sizeof(req), rsp, resp_len,
-				    req.guest_device_id, &state,
+				    ghcb_tio_sbdfn(pdev), &state,
 				    certs, meas, nonce,
 				    report, &fw_err);
 	if (rc)
@@ -371,6 +371,7 @@ static int tio_tdi_status(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
 	memcpy(ts->interface_report_digest, rsp->interface_report_digest,
 	       sizeof(ts->interface_report_digest));
 	ts->intf_report_counter = rsp->tdi_report_count;
+	ts->tdi_id = rsp->tdi_id;
 
 	switch (rsp->status) {
 	case TIO_MSG_TDI_INFO_RSP_STATUS_BOUND:
@@ -389,9 +390,8 @@ static int tio_tdi_status(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
 }
 
 struct tio_msg_mmio_validate_req {
-	u16 guest_device_id;
-	u16 reserved1;
-	u8 reserved2[12];
+	u64 tdi_id;
+	u8 reserved2[8];
 	u64 subrange_base;
 	u32 subrange_page_count;
 	u32 range_offset;
@@ -411,9 +411,9 @@ struct tio_msg_mmio_validate_req {
 } __packed;
 
 struct tio_msg_mmio_validate_rsp {
-	u16 guest_interface_id;
+	u64 tdi_id;
 	u16 status; /* MMIO_VALIDATE_xxx */
-	u8 reserved1[12];
+	u8 reserved1[6];
 	u64 subrange_base;
 	u32 subrange_page_count;
 	u32 range_offset;
@@ -426,7 +426,7 @@ struct tio_msg_mmio_validate_rsp {
 } __packed;
 
 static int mmio_validate_range(struct snp_guest_dev *snp_dev, struct pci_dev *pdev,
-			       unsigned int range_id,
+			       uint64_t tdi_id, unsigned int range_id,
 			       resource_size_t start, resource_size_t size,
 			       bool invalidate, u64 *fw_err, u16 *status)
 {
@@ -434,7 +434,7 @@ static int mmio_validate_range(struct snp_guest_dev *snp_dev, struct pci_dev *pd
 	size_t resp_len = sizeof(struct tio_msg_mmio_validate_rsp) + mdesc->ctx->authsize;
 	struct tio_msg_mmio_validate_rsp *rsp __free(kfree_sensitive) = kzalloc(resp_len, GFP_KERNEL);
 	struct tio_msg_mmio_validate_req req = {
-		.guest_device_id = ghcb_tio_sbdfn(pdev),
+		.tdi_id = tdi_id,
 		.subrange_base = start,
 		.subrange_page_count = size >> PAGE_SHIFT,
 		.range_offset = 0,
@@ -617,7 +617,8 @@ static bool get_range(struct pci_dev *pdev, struct tsm_blob *report, unsigned in
 	return true;
 }
 
-static int tio_tdi_mmio_validate(struct pci_dev *pdev, struct snp_guest_dev *snp_dev)
+static int tio_tdi_mmio_validate(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
+				 uint64_t tdi_id)
 {
 	struct pci_tsm *tsm = pdev->tsm;
 	u16 mmio_status;
@@ -643,7 +644,7 @@ static int tio_tdi_mmio_validate(struct pci_dev *pdev, struct snp_guest_dev *snp
 
 		end = start + size - 1;
 		mmio_status = 0;
-		rc = mmio_validate_range(snp_dev, pdev, range_id, start, size,
+		rc = mmio_validate_range(snp_dev, pdev, tdi_id, range_id, start, size,
 					 false, &fw_err,
 					 &mmio_status);
 		if (rc || fw_err != SEV_RET_SUCCESS || mmio_status != MMIO_VALIDATE_SUCCESS) {
@@ -680,7 +681,8 @@ static int tio_tdi_mmio_validate(struct pci_dev *pdev, struct snp_guest_dev *snp
 	return rc;
 }
 
-static void tio_tdi_mmio_invalidate(struct pci_dev *pdev, struct snp_guest_dev *snp_dev)
+static void tio_tdi_mmio_invalidate(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
+				    uint64_t tdi_id)
 {
 	struct pci_tsm *tsm = pdev->tsm;
 	u16 mmio_status;
@@ -703,7 +705,7 @@ static void tio_tdi_mmio_invalidate(struct pci_dev *pdev, struct snp_guest_dev *
 
 		end = start + size - 1;
 		mmio_status = 0;
-		rc = mmio_validate_range(snp_dev, pdev, range_id,
+		rc = mmio_validate_range(snp_dev, pdev, tdi_id, range_id,
 					 start, size, true, &fw_err,
 					 &mmio_status);
 		if (rc || fw_err != SEV_RET_SUCCESS || mmio_status != MMIO_VALIDATE_SUCCESS) {
@@ -751,18 +753,19 @@ static void tio_tdi_mmio_invalidate(struct pci_dev *pdev, struct snp_guest_dev *
 }
 
 struct tio_msg_sdte_write_req {
-	u16 guest_device_id;
-	u8 reserved[14];
+	u64 tdi_id;
+	u8 reserved[8];
 	struct sdte sdte;
 } __packed;
 
 struct tio_msg_sdte_write_rsp {
-	u16 guest_device_id;
+	u64 tdi_id;
 	u16 status; /* SDTE_WRITE_xxx */
-	u8 reserved[12];
+	u8 reserved[6];
 } __packed;
 
-static int tio_tdi_sdte_write(struct pci_dev *pdev, struct snp_guest_dev *snp_dev, bool invalidate)
+static int tio_tdi_sdte_write(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
+			      uint64_t tdi_id, bool invalidate)
 {
 	struct snp_msg_desc *mdesc = snp_dev->msg_desc;
 	size_t resp_len = sizeof(struct tio_msg_sdte_write_rsp) + mdesc->ctx->authsize;
@@ -782,7 +785,7 @@ static int tio_tdi_sdte_write(struct pci_dev *pdev, struct snp_guest_dev *snp_de
 
 	if (!invalidate)
 		req = (struct tio_msg_sdte_write_req) {
-			.guest_device_id = bdfn,
+			.tdi_id = tdi_id,
 			.sdte.vmpl = 0,
 			.sdte.vtom = tsm_vtom >> 21,
 			.sdte.vtom_en = 1,
@@ -792,7 +795,7 @@ static int tio_tdi_sdte_write(struct pci_dev *pdev, struct snp_guest_dev *snp_de
 		};
 	else
 		req = (struct tio_msg_sdte_write_req) {
-			.guest_device_id = bdfn,
+			.tdi_id = tdi_id,
 		};
 
 	pci_notice(pdev, "SDTE write vTOM=%llx", flags);
@@ -819,7 +822,7 @@ static int sev_guest_status(struct pci_dev *pdev, struct tsm_tdi_status *ts)
 	struct tio_guest_tdi *gtdi = pdev_to_tdi(pdev);
 	struct pci_tsm *tsm = pdev->tsm;
 
-	return tio_tdi_status(pdev, gtdi->snp_dev, ts,
+	return tio_tdi_status(pdev, gtdi->snp_dev, ts, gtdi->tdi_id,
 			      &tsm->certs, &tsm->meas, tsm->nonce, &tsm->report);
 }
 
@@ -855,7 +858,7 @@ static struct pci_tsm *sev_guest_lock(struct tsm_dev *tsmdev, struct pci_dev *pd
 	}
 	pci_dbg(pdev, "New TDI ID=%llx\n", tdi_id);
 
-	rc = tio_tdi_status(pdev, gtdi->snp_dev, &ts, NULL, NULL, NULL, &report);
+	rc = tio_tdi_status(pdev, gtdi->snp_dev, &ts, tdi_id, NULL, NULL, NULL, &report);
 	if (rc)
 		return ERR_PTR(rc);
 	if (!report)
@@ -880,11 +883,11 @@ static void sev_guest_unlock(struct pci_tsm *tsm)
 	sev_tio_op(ghcb_tio_sbdfn(pdev), SVM_VMGEXIT_SEV_TIO_OP_STOP, &fw_err, NULL);
 
 	/* Disable encrypted DMA but the HV is unable to restart it as MMIO is still blocked for HV */
-	rc = tio_tdi_sdte_write(pdev, snp_dev, true);
+	rc = tio_tdi_sdte_write(pdev, snp_dev, gtdi->tdi_id, true);
 	if (rc || fw_err)
 		pr_err("SDTE_WRITE did not go through, ret=%d fw=0x%llx\n", rc, fw_err);
 
-	tio_tdi_mmio_invalidate(pdev, snp_dev);
+	tio_tdi_mmio_invalidate(pdev, snp_dev, gtdi->tdi_id);
 
 	sev_tio_op(ghcb_tio_sbdfn(pdev), SVM_VMGEXIT_SEV_TIO_OP_UNBIND, &fw_err, NULL);
 
@@ -913,11 +916,11 @@ static int sev_guest_accept(struct pci_dev *pdev)
 	if (ret)
 		return ret;
 
-	ret = tio_tdi_sdte_write(pdev, snp_dev, false);
+	ret = tio_tdi_sdte_write(pdev, snp_dev, gtdi->tdi_id, false);
 	if (ret)
 		return ret;
 
-	ret = tio_tdi_mmio_validate(pdev, snp_dev);
+	ret = tio_tdi_mmio_validate(pdev, snp_dev, gtdi->tdi_id);
 	if (ret)
 		return ret;
 
