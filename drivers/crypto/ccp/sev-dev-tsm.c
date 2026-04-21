@@ -556,10 +556,10 @@ static void tdi_unbind(struct pci_tdi *tdi)
 	int ret;
 
 	if (ttdi->needs_unbind) {
-		ret = sev_tio_tdi_unbind(dev_data, tdi_data, false);
+		ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, false);
 		ret = sev_tio_spdm_cmd(dsm, ret);
 		if (ret) {
-			ret = sev_tio_tdi_unbind(dev_data, tdi_data, true);
+			ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, true);
 			sev_tio_spdm_cmd(dsm, ret);
 		}
 	}
@@ -648,7 +648,7 @@ static struct pci_tdi *tdi_bind(struct pci_dev *pdev, struct kvm *kvm, u32 tdi_i
 	if (ret)
 		return ERR_PTR(ret);
 
-	ret = sev_tio_tdi_bind(dev_data, tdi_data, ttdi->tdi.tdi_id, gctx, asid,
+	ret = sev_tio_tdi_bind(pdev, dev_data, tdi_data, ttdi->tdi.tdi_id, gctx, asid,
 			       !!(tiolog & TIO_TDI_BIND));
 	ret = sev_tio_spdm_cmd(dsm, ret);
 	if (ret)
@@ -711,7 +711,7 @@ static int tdi_run(struct tio_dsm *dsm, struct tio_tdi *ttdi)
 	if (state != TDISP_STATE_CONFIG_LOCKED)
 		return -EFAULT;
 
-	ret = sev_tio_tdi_bind(dev_data, tdi_data, ttdi->tdi.tdi_id,
+	ret = sev_tio_tdi_bind(ttdi->tdi.pdev, dev_data, tdi_data, ttdi->tdi.tdi_id,
 			       gctx_paddr, sev->asid, true);
 	ret = sev_tio_spdm_cmd(dsm, ret);
 	if (ret)
@@ -759,7 +759,7 @@ static ssize_t guest_request(struct pci_tdi *tdi, enum pci_tsm_req_scope scope,
 			return -ENOSYS;
 
 		/* Do not force UNBIND just yet */
-		ret = sev_tio_tdi_unbind(dev_data, tdi_data, false);
+		ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, false);
 		ret = sev_tio_spdm_cmd(dsm, ret);
 
 		ttdi->needs_unbind = ret != 0;
