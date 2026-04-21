@@ -3417,6 +3417,10 @@ static int __init early_amd_iommu_init(void)
 			amd_iommu_pgtable = PD_MODE_NONE;
 	}
 
+	if (amd_iommu_sviommu_guest() && amd_iommu_pgtable != PD_MODE_V2) {
+		pr_err(FW_BUG "Guest translation is not enabled, DMA mode will not work\n");
+	}
+
 	/* Disable any previously enabled IOMMUs */
 	if (!is_kdump_kernel() || amd_iommu_disabled)
 		disable_iommus();
