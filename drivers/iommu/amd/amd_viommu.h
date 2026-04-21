@@ -37,6 +37,8 @@ int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
 
 struct ext_irte * amd_viommu_get_ext_irte(struct amd_iommu *iommu, u32 ext_id);
 
+int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable);
+
 #else
 
 static inline int amd_viommu_init(struct amd_iommu *iommu)
@@ -78,6 +80,12 @@ amd_viommu_get_ext_irte(struct amd_iommu *iommu,u32 ext_id)
 {
 	return NULL;
 }
+
+static inline int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable)
+{
+	return -EOPNOTSUPP;
+}
+
 #endif /* CONFIG_AMD_IOMMU_IOMMUFD */
 
 #endif /* AMD_VIOMMU_H */
