@@ -1854,6 +1854,10 @@ static void amd_iommu_flush_irt_all(struct amd_iommu *iommu)
 
 void amd_iommu_flush_all_caches(struct amd_iommu *iommu)
 {
+	/* Skip flush all for secure guest */
+	if (amd_iommu_sviommu_guest())
+		return;
+
 	if (check_feature(FEATURE_IA)) {
 		amd_iommu_flush_all(iommu);
 	} else {
