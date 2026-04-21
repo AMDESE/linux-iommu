@@ -139,3 +139,23 @@ int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable)
 
 	return rc;
 }
+
+int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
+{
+	/* 3rd 4K of MMIO space */
+	u64 data = iommu->mmio_phys + 0x2000;
+	int rc;
+
+	pr_debug("%s: MMIO addr 0x%llx\n", __func__, data);
+
+	if (!sev_guest_ops || !sev_guest_ops->setup_mmio)
+		return -EINVAL;
+
+	/* Enable MMIO */
+	data |= 1;
+	rc = sev_guest_ops->setup_mmio(iommu->devid, &data);
+	if (rc)
+		pr_err("%s: Secure MMIO setup error (%d)\n", __func__, rc);
+
+	return rc;
+}
