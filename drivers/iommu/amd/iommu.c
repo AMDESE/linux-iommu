@@ -3460,7 +3460,10 @@ void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
 	tmp0 |= (1ULL << DEV_ENTRY_PPR);
 
 	tmp1 |= DTE_FLAG_IOTLB;
-	tmp1 |= FIELD_PREP(DTE_DOMID_MASK, pdom->id);
+
+	/* In secure vIOMMU mode, DTE[domainID] is reserved */
+	if (!amd_viommu_is_secure_guest(gid))
+		tmp1 |= FIELD_PREP(DTE_DOMID_MASK, pdom->id);
 
 	dev_table[devid].data[0] = tmp0;
 	dev_table[devid].data[1] = tmp1;
