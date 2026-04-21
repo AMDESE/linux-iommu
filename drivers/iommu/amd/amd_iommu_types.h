@@ -817,6 +817,7 @@ struct amd_iommu {
 
 	/* Base of the PPR log, if present */
 	u8 *ppr_log;
+	u32 ppr_log_len;
 
 	/* Name for PPR log interrupt */
 	unsigned char ppr_irq_name[16];

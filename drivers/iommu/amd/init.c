@@ -455,7 +455,7 @@ bool iommu_feature_enable_and_check(struct amd_iommu *iommu, u8 bit)
 	return (ctrl & (1ULL << bit));
 }
 
-static void iommu_feature_disable(struct amd_iommu *iommu, u8 bit)
+void iommu_feature_disable(struct amd_iommu *iommu, u8 bit)
 {
 	iommu_feature_set(iommu, 0ULL, 1ULL, bit);
 }
@@ -496,8 +496,7 @@ static void iommu_disable(struct amd_iommu *iommu)
 	iommu_feature_disable(iommu, CONTROL_GAINT_EN);
 
 	/* Disable IOMMU PPR logging */
-	iommu_feature_disable(iommu, CONTROL_PPRLOG_EN);
-	iommu_feature_disable(iommu, CONTROL_PPRINT_EN);
+	iommu_ppr_buffer_update(iommu, false);
 
 	/* Disable IOMMU hardware itself */
 	iommu_feature_disable(iommu, CONTROL_IOMMU_EN);
