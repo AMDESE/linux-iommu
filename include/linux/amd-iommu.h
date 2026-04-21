@@ -74,12 +74,14 @@ struct pci_dev;
 extern void amd_iommu_detect(void);
 int amd_iommu_get_dev_domid(struct pci_dev *pdev);
 void amd_iommu_clear_dev_domid(struct pci_dev *pdev);
+bool amd_iommu_sviommu_guest(void);
 
 #else /* CONFIG_AMD_IOMMU */
 
 static inline void amd_iommu_detect(void) { }
 static inline u16 amd_iommu_get_dev_domid(struct pci_dev *pdev) { return -EOPNOTSUPP; }
 static inline void amd_iommu_clear_dev_domid(struct pci_dev *pdev) {}
+static inline bool amd_iommu_sviommu_guest(void) { return false; }
 
 #endif /* CONFIG_AMD_IOMMU */
 
