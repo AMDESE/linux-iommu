@@ -4091,7 +4091,8 @@ static int iommu_make_shared(void *va, size_t size)
 int amd_iommu_snp_disable(void)
 {
 	struct amd_iommu *iommu;
-	int ret, ret2 = 0;
+	int ret, i;
+	int ret2 = 0;
 
 	if (!amd_iommu_snp_en)
 		return 0;
@@ -4108,6 +4109,23 @@ int amd_iommu_snp_disable(void)
 		ret = iommu_make_shared((void *)iommu->cmd_sem, PAGE_SIZE);
 		if (ret && !ret2)
 			ret2 = ret;
+
+		if (!iommu->sviommu_enabled)
+			continue;
+
+		for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++) {
+			if (iommu->viommu_priv_region[i]) {
+				ret = iommu_make_shared(iommu->viommu_priv_region[i],
+							VIOMMU_PRIV_SUBREGION_SIZE);
+				if (ret) {
+					pr_notice("%s: Converting vIOMMU private region failed. ret=%d\n",
+						  __func__, ret);
+					return ret;
+				}
+			}
+		}
+
+		iommu->sviommu_enabled = false;
 	}
 
 	return ret2;

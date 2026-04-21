@@ -885,6 +885,7 @@ struct amd_iommu {
 	unsigned char iopfq_name[32];
 
 	/* HW vIOMMU support */
+	bool sviommu_enabled;
 	struct protection_domain *viommu_pdom;
 	void *viommu_priv_region[VIOMMU_PRIV_SUBREGION_CNT];
 	u64 *ext_ir_table;		 /* Pointer to the Ext-IR table */

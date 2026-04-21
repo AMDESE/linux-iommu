@@ -22,6 +22,37 @@ struct amd_iommu_svm_ops {
 	int (*set_ext_ir_affinity)(struct kvm *kvm, u32 vcpu_id, struct amd_iommu_pi_data *pi);
 };
 
+/* TODO: Replace it w/ VIOMMU_PRIV_SUBREGION_CNT? also rename backing_page w/ viommu_priv_region */
+#define VIOMMU_BACKING_PAGE_COUNT	(4)
+struct amd_sviommu {
+	u16 segid;
+	u16 devid;
+	void *backing_page[VIOMMU_BACKING_PAGE_COUNT]; /* 4 2MB pages */
+	u32 backing_page_size; /* 2MB */
+};
+
+struct amd_sviommu_guest {
+	u16 segid;
+	u16 devid;
+	s32 kvmfd;
+	void *kvm;
+
+	u16 guest_viommu_devid;
+	u16 host_viommu_devid;
+	u16 host_domid;
+	void *devid_map;
+	u32 devid_map_size;
+	void *domid_map;
+	u32 domid_map_size;
+	u64 vfmmio_addr;
+};
+
+struct amd_iommu_ccp_ops {
+	int (*sev_tio_viommu_init)(struct amd_sviommu *sv);
+	int (*sev_tio_viommu_guest_init)(struct amd_sviommu_guest *g);
+	int (*sev_tio_viommu_guest_shutdown)(struct amd_sviommu_guest *g);
+};
+
 #ifdef CONFIG_AMD_IOMMU
 
 struct task_struct;
@@ -30,12 +61,16 @@ struct pci_dev;
 extern void amd_iommu_detect(void);
 int amd_iommu_get_dev_domid(struct pci_dev *pdev);
 void amd_iommu_clear_dev_domid(struct pci_dev *pdev);
+void amd_iommu_register_ccp_ops(const struct amd_iommu_ccp_ops *ops);
+int amd_iommu_sviommu_init(void);
 
 #else /* CONFIG_AMD_IOMMU */
 
 static inline void amd_iommu_detect(void) { }
 static inline u16 amd_iommu_get_dev_domid(struct pci_dev *pdev) { return -EOPNOTSUPP; }
 static inline void amd_iommu_clear_dev_domid(struct pci_dev *pdev) {}
+static inline void amd_iommu_register_ccp_ops(const struct amd_iommu_ccp_ops *ops) {}
+static inline int amd_iommu_sviommu_init(void) { return -ENODEV; }
 
 #endif /* CONFIG_AMD_IOMMU */
 
