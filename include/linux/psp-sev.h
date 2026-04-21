@@ -830,7 +830,8 @@ struct sev_data_snp_init_ex {
 	u32 rapl_dis:1;
 	u32 ciphertext_hiding_en:1;
 	u32 tio_en:1;
-	u32 rsvd:27;
+	u32 viommu_en:1;
+	u32 rsvd:26;
 	u32 rsvd1;
 	u64 list_paddr;
 	u16 max_snp_asid;
@@ -937,6 +938,7 @@ struct snp_feature_info {
 
 /* Feature bits in EBX */
 #define SNP_SEV_TIO_SUPPORTED			BIT(1)
+#define SNP_VIOMMU_SUPPORTED			BIT(2)
 
 #if defined(CONFIG_CRYPTO_DEV_SP_PSP) || defined(CONFIG_CRYPTO_DEV_SP_PSP_MODULE)
 
