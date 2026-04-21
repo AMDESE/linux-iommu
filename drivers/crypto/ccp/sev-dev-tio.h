@@ -199,10 +199,11 @@ void sev_tio_tdi_reclaim(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_d
 int sev_tio_guest_request(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
 			  void *req, void *res);
 
-int sev_tio_tdi_bind(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
-		     u32 guest_rid, u64 gctx_paddr, u32 asid, bool force_run);
-int sev_tio_tdi_unbind(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
-		       bool force);
+int sev_tio_tdi_bind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
+		     struct tsm_tdi_tio *tdi_data, u32 guest_rid,
+		     u64 gctx_paddr, u32 asid, bool force_run);
+int sev_tio_tdi_unbind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
+		       struct tsm_tdi_tio *tdi_data, bool force);
 int sev_tio_tdi_report(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data);
 
 int sev_tio_tdi_info(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
