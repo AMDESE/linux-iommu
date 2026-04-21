@@ -53,6 +53,10 @@ struct amd_iommu_ccp_ops {
 	int (*sev_tio_viommu_guest_shutdown)(struct amd_sviommu_guest *g);
 };
 
+struct amd_sviommu_guest_ops {
+	int (*setup_cmdbuf)(u16 devid, void *data);
+};
+
 #ifdef CONFIG_AMD_IOMMU
 
 struct task_struct;
@@ -64,6 +68,8 @@ void amd_iommu_clear_dev_domid(struct pci_dev *pdev);
 void amd_iommu_register_ccp_ops(const struct amd_iommu_ccp_ops *ops);
 int amd_iommu_sviommu_init(void);
 bool amd_iommu_sviommu_guest(void);
+/* SNP Guest SVIOMMU Function */
+int amd_sviommu_register_guest_ops(const struct amd_sviommu_guest_ops *ops);
 
 #else /* CONFIG_AMD_IOMMU */
 
@@ -73,6 +79,10 @@ static inline void amd_iommu_clear_dev_domid(struct pci_dev *pdev) {}
 static inline void amd_iommu_register_ccp_ops(const struct amd_iommu_ccp_ops *ops) {}
 static inline int amd_iommu_sviommu_init(void) { return -ENODEV; }
 static inline bool amd_iommu_sviommu_guest(void) { return false; }
+static inline int amd_sviommu_register_guest_ops(const struct amd_sviommu_guest_ops *ops)
+{
+	return -ENODEV;
+}
 
 #endif /* CONFIG_AMD_IOMMU */
 

@@ -459,6 +459,20 @@ static void iommu_feature_disable(struct amd_iommu *iommu, u8 bit)
 	iommu_feature_set(iommu, 0ULL, 1ULL, bit);
 }
 
+static void iommu_cmdbuf_update(struct amd_iommu *iommu, bool enable)
+{
+	if (amd_iommu_sviommu_guest()) {
+		amd_sviommu_setup_cmd_buf(iommu, enable);
+	} else {
+		if (enable)
+			iommu_feature_enable(iommu, CONTROL_CMDBUF_EN);
+		else
+			iommu_feature_disable(iommu, CONTROL_CMDBUF_EN);
+	}
+	pr_debug("%s: status=%#016x\n", __func__,
+		 readl(iommu->mmio_base + MMIO_STATUS_OFFSET));
+}
+
 /* Function to enable the hardware */
 static void iommu_enable(struct amd_iommu *iommu)
 {
@@ -471,7 +485,7 @@ static void iommu_disable(struct amd_iommu *iommu)
 		return;
 
 	/* Disable command buffer */
-	iommu_feature_disable(iommu, CONTROL_CMDBUF_EN);
+	iommu_cmdbuf_update(iommu, false);
 
 	/* Disable event logging and event interrupts */
 	iommu_feature_disable(iommu, CONTROL_EVT_INT_EN);
@@ -823,27 +837,33 @@ void amd_iommu_restart_ga_log(struct amd_iommu *iommu)
  */
 static void amd_iommu_reset_cmd_buffer(struct amd_iommu *iommu)
 {
-	iommu_feature_disable(iommu, CONTROL_CMDBUF_EN);
+	iommu_cmdbuf_update(iommu, false);
 
 	writel(0x00, iommu->mmio_base + MMIO_CMD_HEAD_OFFSET);
 	writel(0x00, iommu->mmio_base + MMIO_CMD_TAIL_OFFSET);
 	iommu->cmd_buf_head = 0;
 	iommu->cmd_buf_tail = 0;
 
-	iommu_feature_enable(iommu, CONTROL_CMDBUF_EN);
+	iommu_cmdbuf_update(iommu, true);
 }
 
 /*
  * This function writes the command buffer address to the hardware and
  * enables it.
  */
-static void iommu_enable_command_buffer(struct amd_iommu *iommu)
+static int iommu_command_buffer_init(struct amd_iommu *iommu)
 {
+	int ret = 0;
 	u64 entry;
 
 	BUG_ON(iommu->cmd_buf == NULL);
 
-	if (!is_kdump_kernel()) {
+	/* Hardcoded to 8K (MMIO_CMD_SIZE_512) ring buffer */
+	iommu->cmd_buf_len = 0x9;
+
+	if (amd_iommu_sviommu_guest()) {
+		ret = amd_sviommu_setup_cmd_buf(iommu, false);
+	} else if (!is_kdump_kernel()) {
 		/*
 		 * Command buffer is re-used for kdump kernel and setting
 		 * of MMIO register is not required.
@@ -855,14 +875,7 @@ static void iommu_enable_command_buffer(struct amd_iommu *iommu)
 	}
 
 	amd_iommu_reset_cmd_buffer(iommu);
-}
-
-/*
- * This function disables the command buffer
- */
-static void iommu_disable_command_buffer(struct amd_iommu *iommu)
-{
-	iommu_feature_disable(iommu, CONTROL_CMDBUF_EN);
+	return ret;
 }
 
 static void __init free_command_buffer(struct amd_iommu *iommu)
@@ -2959,7 +2972,7 @@ static void early_enable_iommu(struct amd_iommu *iommu)
 	iommu_disable(iommu);
 	iommu_init_flags(iommu);
 	iommu_set_device_table(iommu);
-	iommu_enable_command_buffer(iommu);
+	iommu_command_buffer_init(iommu);
 	iommu_enable_event_buffer(iommu);
 	iommu_set_exclusion_range(iommu);
 	iommu_enable_gt(iommu);
@@ -3020,10 +3033,10 @@ static void early_enable_iommus(void)
 		}
 
 		for_each_iommu(iommu) {
-			iommu_disable_command_buffer(iommu);
+			iommu_cmdbuf_update(iommu, false);
 			iommu_disable_event_buffer(iommu);
 			iommu_disable_irtcachedis(iommu);
-			iommu_enable_command_buffer(iommu);
+			iommu_command_buffer_init(iommu);
 			iommu_enable_event_buffer(iommu);
 			iommu_enable_ga(iommu);
 			iommu_enable_xt(iommu);
