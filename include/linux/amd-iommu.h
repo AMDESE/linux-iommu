@@ -52,6 +52,13 @@ struct amd_sviommu_trans_sdte {
 	bool enable;
 };
 
+struct amd_sviommu_mapping_data {
+	u16 viommu_devid;
+	u16 devid;
+	u16 domid;
+	bool set;
+};
+
 struct amd_iommu_ccp_ops {
 	int (*sev_tio_viommu_init)(struct amd_sviommu *sv);
 	int (*sev_tio_viommu_guest_init)(struct amd_sviommu_guest *g);
@@ -64,6 +71,7 @@ struct amd_sviommu_guest_ops {
 	int (*setup_pprlog)(u16 devid, void *data);
 	int (*setup_mmio)(u16 devid, void *data);
 	int (*setup_trans_sdte)(u16 devid, void *data);
+	int (*mapping_update)(void *data);
 };
 
 #ifdef CONFIG_AMD_IOMMU
