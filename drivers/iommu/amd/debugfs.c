@@ -420,6 +420,33 @@ static int insert_guest_event_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_STORE_ATTRIBUTE(insert_guest_event);
 
+static ssize_t iommu_insert_event_write(struct file *filp, const char __user *ubuf,
+					size_t cnt, loff_t *ppos)
+{
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+	int ret;
+	u32 evtid;
+
+	if (cnt > OFS_IN_SZ)
+		return -EINVAL;
+
+	ret = kstrtou32_from_user(ubuf, cnt, 0, &evtid);
+	if (ret)
+		return ret;
+
+	amd_iommu_inject_event(iommu, evtid);
+	return cnt;
+}
+
+static int iommu_insert_event_show(struct seq_file *m, void *unused)
+{
+	seq_printf(m, "Supported events : \n"
+		   "  5 - ILLEGAL_COMMAND_ERROR\n");
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(iommu_insert_event);
+
 void amd_iommu_debugfs_setup(void)
 {
 	struct amd_iommu *iommu;
@@ -448,6 +475,11 @@ void amd_iommu_debugfs_setup(void)
 			debugfs_create_file("insert_guest_event", 0644, iommu->debugfs, iommu,
 					    &insert_guest_event_fops);
 		}
+
+		/* This will generate illegal commands so that event log can be generated */
+		debugfs_create_file("insert_event", 0644, iommu->debugfs, iommu,
+				    &iommu_insert_event_fops);
+
 	}
 
 	debugfs_create_file("devid", 0644, amd_iommu_debugfs, NULL,

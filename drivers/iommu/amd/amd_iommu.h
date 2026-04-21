@@ -297,5 +297,6 @@ int amd_viommu_sviommu_guest_shutdown(struct amd_iommu *iommu,
 				      struct amd_iommu_viommu *viommu);
 int iommu_make_shared(void *va, size_t size);
 void amd_iommu_insert_guest_event(struct amd_iommu *iommu, u16 gid, u32 *event);
+void amd_iommu_inject_event(struct amd_iommu *iommu, u32 evtid);
 
 #endif /* AMD_IOMMU_H */
