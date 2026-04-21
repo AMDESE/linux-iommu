@@ -1599,6 +1599,38 @@ static void build_complete_ppr(struct iommu_cmd *cmd, u16 devid, u32 pasid,
 	CMD_SET_TYPE(cmd, CMD_COMPLETE_PPR);
 }
 
+static void build_insert_guest_event(struct iommu_cmd *cmd, u16 gid)
+{
+	memset(cmd, 0, sizeof(*cmd));
+
+	cmd->data[1] = gid;
+	CMD_SET_TYPE(cmd, CMD_INSERT_GUEST_EVENT);
+
+	pr_debug("%s: Guest event. Guest ID=0x%x\n", __func__, gid);
+	pr_debug("%s: CMD[0]=0x%x CMD[1]=0x%x CMD[2]=0x%x CMD[3]=0x%x\n",
+		 __func__, cmd->data[0], cmd->data[1], cmd->data[2], cmd->data[3]);
+}
+
+void amd_iommu_insert_guest_event(struct amd_iommu *iommu, u16 gid, u32 *event)
+{
+	struct iommu_cmd cmd;
+	unsigned long flags;
+
+	build_insert_guest_event(&cmd, gid);
+
+	raw_spin_lock_irqsave(&iommu->lock, flags);
+
+	/* Insert guest event command */
+	__iommu_queue_command_sync(iommu, &cmd, false);
+
+	/* Actual event to forward to guest */
+	__iommu_queue_command_sync(iommu, (struct iommu_cmd *)event, true);
+
+	raw_spin_unlock_irqrestore(&iommu->lock, flags);
+
+	amd_iommu_completion_wait(iommu);
+}
+
 static void build_inv_all(struct iommu_cmd *cmd)
 {
 	memset(cmd, 0, sizeof(*cmd));
