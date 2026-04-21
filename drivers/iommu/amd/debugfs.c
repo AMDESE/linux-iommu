@@ -389,6 +389,37 @@ static int iommu_evtlog_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(iommu_evtlog);
 
+/*
+ * Insert command to guest event log buffer.
+ * Takes Guest ID as input and inserts predefined event.
+ */
+static ssize_t insert_guest_event_write(struct file *filp, const char __user *ubuf,
+					size_t cnt, loff_t *ppos)
+{
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+	u32 event[4] = {0xDEADBEE0, 0xDEADBEE1, 0xDEADBEE2, 0xDEADBEE3};
+	int ret;
+	u16 gid;
+
+	if (cnt > OFS_IN_SZ)
+		return -EINVAL;
+
+	ret = kstrtou16_from_user(ubuf, cnt, 0, &gid);
+	if (ret)
+		return ret;
+
+	amd_iommu_insert_guest_event(iommu, gid, event);
+	return cnt;
+}
+
+static int insert_guest_event_show(struct seq_file *m, void *unused)
+{
+	seq_printf(m, "Please provide guest ID to inject sample event\n");
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(insert_guest_event);
+
 void amd_iommu_debugfs_setup(void)
 {
 	struct amd_iommu *iommu;
@@ -411,6 +442,12 @@ void amd_iommu_debugfs_setup(void)
 				    &iommu_cmdbuf_fops);
 		debugfs_create_file("evtlog_buf", 0444, iommu->debugfs, iommu,
 				    &iommu_evtlog_fops);
+
+		/* On Host, create debugfs to inject sample event to guest buffer */
+		if (!amd_iommu_np_cache) {
+			debugfs_create_file("insert_guest_event", 0644, iommu->debugfs, iommu,
+					    &insert_guest_event_fops);
+		}
 	}
 
 	debugfs_create_file("devid", 0644, amd_iommu_debugfs, NULL,
