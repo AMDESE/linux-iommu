@@ -316,7 +316,6 @@ struct tio_msg_tdi_info_rsp {
 	u64 reserved4;
 } __packed;
 
-/* Passing pci_tsm explicitly as it may not be set in pci_dev just yet */
 static int tio_tdi_status(struct pci_dev *pdev, struct snp_guest_dev *snp_dev,
 			  struct tsm_tdi_status *ts, uint64_t tdi_id,
 			  struct tsm_blob **certs, struct tsm_blob **meas,
@@ -818,16 +817,15 @@ static int tio_tdi_sdte_write(struct pci_dev *pdev, struct snp_guest_dev *snp_de
 static int sev_guest_status(struct pci_dev *pdev, struct tsm_tdi_status *ts)
 {
 	struct tio_guest_tdi *gtdi = pdev_to_tdi(pdev);
-	struct pci_tsm *tsm = pdev->tsm;
 
 	return tio_tdi_status(pdev, gtdi->snp_dev, ts, gtdi->tdi_id,
-			      &tsm->certs, &tsm->meas, tsm->nonce, &tsm->report);
+			      NULL, NULL, NULL, NULL);
 }
 
 static struct pci_tsm *sev_guest_lock(struct tsm_dev *tsmdev, struct pci_dev *pdev)
 {
 	struct tio_guest_tdi *gtdi __free(kfree) = kzalloc(sizeof(*gtdi), GFP_KERNEL);
-	struct tsm_blob *report = NULL;
+	struct tsm_blob *report = NULL, *certs = NULL;
 	struct tsm_tdi_status ts = {};
 	u64 fw_err = 0, tdi_id = 0;
 	int rc;
@@ -856,14 +854,18 @@ static struct pci_tsm *sev_guest_lock(struct tsm_dev *tsmdev, struct pci_dev *pd
 	}
 	pci_dbg(pdev, "New TDI ID=%llx\n", tdi_id);
 
-	rc = tio_tdi_status(pdev, gtdi->snp_dev, &ts, tdi_id, NULL, NULL, NULL, &report);
+	rc = tio_tdi_status(pdev, gtdi->snp_dev, &ts, tdi_id, &certs, NULL, NULL, &report);
 	if (rc)
 		return ERR_PTR(rc);
-	if (!report)
+	if (!report || !certs) {
+		tsm_blob_free(report);
+		tsm_blob_free(certs);
 		return ERR_PTR(-ENODEV);
+	}
 
 	gtdi->tdi_id = tdi_id;
 	gtdi->ds.base_tsm.report = report;
+	gtdi->ds.base_tsm.certs = certs;
 
 	return &no_free_ptr(gtdi)->ds.base_tsm;
 }
@@ -925,11 +927,36 @@ static int sev_guest_accept(struct pci_dev *pdev)
 	return 0;
 }
 
+static int sev_guest_measurements(struct pci_dev *pdev)
+{
+	struct tio_guest_tdi *gtdi = pdev_to_tdi(pdev);
+	struct pci_tsm *tsm = pdev->tsm;
+	struct snp_guest_dev *snp_dev = gtdi->snp_dev;
+	struct snp_msg_desc *mdesc = snp_dev->msg_desc;
+	size_t resp_len = sizeof(struct tio_msg_tdi_info_rsp) + mdesc->ctx->authsize;
+	struct tio_msg_tdi_info_rsp *rsp __free(kfree_sensitive) = kzalloc(resp_len, GFP_KERNEL);
+	struct tio_msg_tdi_info_req req = {
+		.tdi_id = gtdi->tdi_id,
+	};
+	u64 fw_err = 0;
+
+	pci_notice(pdev, "TDI measuremens");
+	if (!rsp)
+		return -ENOMEM;
+
+	return guest_request_tio_data(snp_dev, TIO_MSG_TDI_INFO_REQ, &req,
+				      sizeof(req), rsp, resp_len,
+				      ghcb_tio_sbdfn(pdev), NULL,
+				      NULL, &tsm->meas, tsm->nonce,
+				      NULL, &fw_err);
+}
+
 struct pci_tsm_ops sev_guest_tsm_ops = {
 	.lock = sev_guest_lock,
 	.unlock = sev_guest_unlock,
 	.accept = sev_guest_accept,
 	.status = sev_guest_status,
+	.measurements = sev_guest_measurements,
 };
 
 void sev_guest_tsm_set_ops(bool set, struct snp_guest_dev *snp_dev)
