@@ -40,6 +40,7 @@ struct ext_irte * amd_viommu_get_ext_irte(struct amd_iommu *iommu, u32 ext_id);
 int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable);
 int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable);
+int amd_sviommu_setup_mmio(struct amd_iommu *iommu);
 
 #else
 
@@ -94,6 +95,11 @@ static inline int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable
 }
 
 static inline int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
 {
 	return -EOPNOTSUPP;
 }
