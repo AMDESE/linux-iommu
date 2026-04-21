@@ -83,6 +83,11 @@ MODULE_PARM_DESC(tio, "Enables TIO in SNP_INIT_EX");
 static const bool sev_tio_enabled = false;
 #endif
 
+/* Enable/disable secure vIOMMU support */
+static bool sviommu_enabled = true;
+module_param_named(sviommu, sviommu_enabled, bool, 0444);
+MODULE_PARM_DESC(sviommu, "Enables Secure vIOMMU in SNP_INIT_EX");
+
 MODULE_FIRMWARE("amd/amd_sev_fam17h_model0xh.sbin"); /* 1st gen EPYC */
 MODULE_FIRMWARE("amd/amd_sev_fam17h_model3xh.sbin"); /* 2nd gen EPYC */
 MODULE_FIRMWARE("amd/amd_sev_fam19h_model0xh.sbin"); /* 3rd gen EPYC */
@@ -1439,6 +1444,17 @@ static int snp_filter_reserved_mem_regions(struct resource *rs, void *arg)
 	return 0;
 }
 
+static bool sev_sviommu_present(struct sev_device *sev)
+{
+	bool present;
+
+	present = (sev->snp_feat_info_0.ebx & SNP_VIOMMU_SUPPORTED) != 0;
+	dev_info(sev->dev, "Secure vIOMMU support is %s\n",
+		 present ? "present" : "not present");
+
+	return present;
+}
+
 static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 {
 	struct psp_device *psp = psp_master;
@@ -1527,6 +1543,14 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 		 */
 		if (data.tio_en && !psp_init_on_probe)
 			dev_warn(sev->dev, "SEV-TIO as incompatible with psp_init_on_probe=0\n");
+
+		/* TIO must be enabled to enable secure vIOMMU */
+		data.viommu_en = (data.tio_en && sviommu_enabled &&
+				  sev_sviommu_present(sev) &&
+				  amd_iommu_sviommu_supported());
+		dev_notice(sev->dev, "SEV-SNP: secure vIOMMU support: "
+			   "iommu=%d viommu_en=%d\n",
+			   amd_iommu_sviommu_supported(), data.viommu_en);
 
 		cmd = SEV_CMD_SNP_INIT_EX;
 	} else {
