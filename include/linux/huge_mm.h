@@ -614,9 +614,9 @@ can_split_folio(struct folio *folio, int caller_pins, int *pextra_pins)
 	return false;
 }
 
-void __split_folio_to_order(struct folio *folio, int old_order, int new_order)
+static inline void __split_folio_to_order(struct folio *folio, int old_order, int new_order)
 {
-	return 0;
+	return;
 }
 
 static inline int
