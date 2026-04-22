@@ -349,6 +349,128 @@ static int vfio_pasid_config_write(struct vfio_pci_core_device *vdev, int pos,
 }
 #endif
 
+#ifdef CONFIG_PCI_PRI
+/*
+ * PRI ecap writes: do not allow the guest to rewrite the extended capability
+ * header.  Control enable/reset bits and allocation follow pci_enable_pri()
+ * rules; status RF/UPRGI are RW1C; max requests is read-only.  VFs target the
+ * physical function registers that own PRI state.
+ */
+static int vfio_pri_config_write(struct vfio_pci_core_device *vdev, int pos,
+				 int count, struct perm_bits *perm,
+				 int offset, __le32 val)
+{
+	struct pci_dev *pdev = vdev->pdev;
+	struct pci_dev *tgt = pdev->is_virtfn ? pci_physfn(pdev) : pdev;
+	u16 pri_off = tgt->pri_cap;
+	u16 old_ctrl, old_status, guest_ctrl;
+	u32 max_req, old_alloc, guest_alloc;
+	const u8 *val_bytes = (const u8 *)&val;
+	unsigned int i;
+	u16 final_ctrl, final_status;
+	u32 final_alloc;
+	int ret;
+
+	if (!pri_off)
+		return -EINVAL;
+
+	/* Guest write only touches header: ignore */
+	if (offset + count <= PCI_PRI_CTRL)
+		return count;
+
+	if (offset >= PCI_EXT_CAP_PRI_SIZEOF)
+		return count;
+
+	ret = pci_user_read_config_word(tgt, pri_off + PCI_PRI_CTRL,
+					&old_ctrl);
+	if (ret)
+		return ret;
+
+	ret = pci_user_read_config_word(tgt, pri_off + PCI_PRI_STATUS,
+					&old_status);
+	if (ret)
+		return ret;
+
+	ret = pci_user_read_config_dword(tgt, pri_off + PCI_PRI_MAX_REQ,
+					 &max_req);
+	if (ret)
+		return ret;
+
+	ret = pci_user_read_config_dword(tgt, pri_off + PCI_PRI_ALLOC_REQ,
+					 &old_alloc);
+	if (ret)
+		return ret;
+
+	guest_ctrl = old_ctrl;
+	guest_alloc = old_alloc;
+	final_status = old_status;
+
+	for (i = 0; i < count; i++) {
+		unsigned int abs_rel = offset + (unsigned int)i;
+
+		if (abs_rel >= PCI_PRI_CTRL &&
+		    abs_rel < PCI_PRI_CTRL + 2) {
+			unsigned int byte_in = abs_rel - PCI_PRI_CTRL;
+
+			guest_ctrl &= ~(0xffU << (8 * byte_in));
+			guest_ctrl |= (u16)val_bytes[i] << (8 * byte_in);
+		} else if (abs_rel == PCI_PRI_STATUS) {
+			/*
+			 * RF and UPRGI are RW1C in the low byte; only a write
+			 * of 1 clears.  Must not reinterpret unchanged status
+			 * when the guest did not touch this byte.
+			 */
+			if (val_bytes[i] & 0x01)
+				final_status &= ~(u16)PCI_PRI_STATUS_RF;
+			if (val_bytes[i] & 0x02)
+				final_status &= ~(u16)PCI_PRI_STATUS_UPRGI;
+		} else if (abs_rel >= PCI_PRI_MAX_REQ &&
+			   abs_rel < PCI_PRI_MAX_REQ + 4) {
+			/* read-only */
+		} else if (abs_rel >= PCI_PRI_ALLOC_REQ &&
+			   abs_rel < PCI_PRI_ALLOC_REQ + 4) {
+			unsigned int byte_in = abs_rel - PCI_PRI_ALLOC_REQ;
+
+			guest_alloc &= ~(0xffU << (8 * byte_in));
+			guest_alloc |= (u32)val_bytes[i] << (8 * byte_in);
+		}
+	}
+
+	final_ctrl = (guest_ctrl & (PCI_PRI_CTRL_ENABLE | PCI_PRI_CTRL_RESET)) |
+		     (old_ctrl & ~(PCI_PRI_CTRL_ENABLE | PCI_PRI_CTRL_RESET));
+
+	final_alloc = min(guest_alloc, max_req);
+
+	if ((final_ctrl & PCI_PRI_CTRL_ENABLE) &&
+	    !(old_status & PCI_PRI_STATUS_STOPPED))
+		return -EBUSY;
+
+	if (final_alloc != old_alloc) {
+		ret = pci_user_write_config_dword(tgt,
+						  pri_off + PCI_PRI_ALLOC_REQ,
+						  final_alloc);
+		if (ret)
+			return ret;
+	}
+
+	if (final_ctrl != old_ctrl) {
+		ret = pci_user_write_config_word(tgt, pri_off + PCI_PRI_CTRL,
+						   final_ctrl);
+		if (ret)
+			return ret;
+	}
+
+	if (final_status != old_status) {
+		ret = pci_user_write_config_word(tgt, pri_off + PCI_PRI_STATUS,
+						 final_status);
+		if (ret)
+			return ret;
+	}
+
+	return count;
+}
+#endif
+
 static int vfio_raw_config_read(struct vfio_pci_core_device *vdev, int pos,
 				int count, struct perm_bits *perm,
 				int offset, __le32 *val)
@@ -1190,6 +1312,9 @@ int __init vfio_pci_init_perm_bits(void)
 	ecap_perms[PCI_EXT_CAP_ID_DVSEC].writefn = vfio_raw_config_write;
 #ifdef CONFIG_PCI_PASID
 	ecap_perms[PCI_EXT_CAP_ID_PASID].writefn = vfio_pasid_config_write;
+#endif
+#ifdef CONFIG_PCI_PRI
+	ecap_perms[PCI_EXT_CAP_ID_PRI].writefn = vfio_pri_config_write;
 #endif
 
 	if (ret)
