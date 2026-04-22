@@ -569,7 +569,6 @@ static bool get_range(struct pci_dev *pdev, struct tsm_blob *report, unsigned in
 	unsigned int rangeid = FIELD_GET(TSM_TDI_REPORT_MMIO_RANGE_ID, mr.range_attributes);
 	struct resource *r = pci_resource_n(pdev, rangeid);
 	u64 first, offset;
-	unsigned int i;
 
 	if (FIELD_GET(TSM_TDI_REPORT_MMIO_IS_NON_TEE, mr.range_attributes)) {
 		pci_info(pdev, "Skipping non-TEE range [%d] #%d %d pages, %llx..%llx\n",
@@ -587,20 +586,8 @@ static bool get_range(struct pci_dev *pdev, struct tsm_blob *report, unsigned in
 		return false;
 	}
 
-	/*
-	 * First the first subregion of BAR, i.e. with the smallest .first_page.
-	 * This assumes that the same MMIO_REPORTING_OFFSET is applied to all regions.
-	 * */
-	for (i = 0, first = mr.first_page; i < TDI_REPORT_MR_NUM(report); ++i) {
-		struct tdi_report_mmio_range mrtmp = TDI_REPORT_MR(report, i);
-
-		if (rangeid != FIELD_GET(TSM_TDI_REPORT_MMIO_RANGE_ID, mrtmp.range_attributes))
-			continue;
-
-		first = min(mrtmp.first_page, first);
-	}
-
-	offset = mr.first_page - first;
+	/* Calculate the offset. Only works if MMIO_REPORTING_OFFSET did not shuffle the size bits */
+	offset = mr.first_page & ((r->end - r->start) >> 12);
 	if (((offset + mr.num) << PAGE_SHIFT) > (r->end - r->start + 1)) {
 		pci_warn(pdev, "Skipping broken range [%d] BAR%d off=%llx %d pages, %llx..%llx %llx %llx\n",
 			 index, rangeid, offset, mr.num, r->start, r->end, mr.first_page, first);
