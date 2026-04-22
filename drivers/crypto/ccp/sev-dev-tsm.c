@@ -579,8 +579,6 @@ static void tdi_unbind(struct pci_tdi *tdi)
 	u16 device_id = pci_dev_id(rootport);
 	bool fenced = false;
 
-	sev_tio_tdi_reclaim(dev_data, tdi_data);
-
 	if (!sev_tio_asid_fence_status(dev_data, device_id, segment_id,
 				       tdi_data->asid, &fenced)) {
 		if (fenced) {
@@ -596,6 +594,8 @@ static void tdi_unbind(struct pci_tdi *tdi)
 			}
 		}
 	}
+
+	sev_tio_tdi_reclaim(dev_data, tdi_data);
 
 	tsm_blob_free(pdev->tsm->report);
 	pdev->tsm->report = NULL;
