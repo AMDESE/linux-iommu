@@ -46,6 +46,7 @@ size_t amd_iommufd_get_viommu_size(struct device *dev, enum iommu_viommu_type vi
 
 static void *get_kvm_handler(u32 kvmfd)
 {
+	void *handler;
 	struct fd f;
 
 	f = fdget(kvmfd);
@@ -55,7 +56,10 @@ static void *get_kvm_handler(u32 kvmfd)
 		return NULL;
 	}
 
-	return fd_file(f)->private_data;
+	handler = fd_file(f)->private_data;
+	fdput(f);
+
+	return handler;
 }
 
 int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
