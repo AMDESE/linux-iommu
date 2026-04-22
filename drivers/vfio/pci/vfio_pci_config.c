@@ -365,6 +365,166 @@ out_unlock:
 }
 #endif
 
+#ifdef CONFIG_PCI_PRI
+/*
+ * PRI ecap writes: ignore the header. Enable from a stopped/disabled
+ * state. RESET with ENABLE still set is refused; disable then RESET in
+ * one write is allowed. Status RF/UPRGI are RW1C (write 1s to clear).
+ * Max requests is read-only. VFs share the PF PRI; absorb those writes.
+ *
+ * pci_cfg_access_lock() serializes this RMW against pci_user_* only.
+ * Do not update pdev->pri_enabled / pri_reqs_alloc; those belong to
+ * the PCI core.
+ */
+static int vfio_pri_config_write(struct vfio_pci_core_device *vdev, int pos,
+				 int count, struct perm_bits *perm,
+				 int offset, __le32 val)
+{
+	struct pci_dev *pdev = vdev->pdev;
+	u16 pri_off = pdev->pri_cap;
+	u16 old_ctrl, old_status, guest_ctrl, status_clear = 0;
+	u32 max_req, old_alloc, guest_alloc;
+	const u8 *val_bytes = (const u8 *)&val;
+	unsigned int i;
+	u16 final_ctrl;
+	u32 final_alloc;
+	bool want_enable, want_reset, old_enable;
+	int ret;
+
+	/* Guest write only touches header: ignore */
+	if (offset + count <= PCI_PRI_CTRL)
+		return count;
+
+	if (offset >= PCI_EXT_CAP_PRI_SIZEOF)
+		return count;
+
+	if (pdev->is_virtfn || !pri_off)
+		return count;
+
+	pci_cfg_access_lock(pdev);
+
+	ret = pci_read_config_word(pdev, pri_off + PCI_PRI_CTRL, &old_ctrl);
+	if (ret) {
+		ret = pcibios_err_to_errno(ret);
+		goto out_unlock;
+	}
+
+	ret = pci_read_config_word(pdev, pri_off + PCI_PRI_STATUS, &old_status);
+	if (ret) {
+		ret = pcibios_err_to_errno(ret);
+		goto out_unlock;
+	}
+
+	ret = pci_read_config_dword(pdev, pri_off + PCI_PRI_MAX_REQ, &max_req);
+	if (ret) {
+		ret = pcibios_err_to_errno(ret);
+		goto out_unlock;
+	}
+
+	ret = pci_read_config_dword(pdev, pri_off + PCI_PRI_ALLOC_REQ,
+				    &old_alloc);
+	if (ret) {
+		ret = pcibios_err_to_errno(ret);
+		goto out_unlock;
+	}
+
+	guest_ctrl = old_ctrl;
+	guest_alloc = old_alloc;
+
+	for (i = 0; i < count; i++) {
+		unsigned int abs_rel = offset + (unsigned int)i;
+
+		if (abs_rel >= PCI_PRI_CTRL &&
+		    abs_rel < PCI_PRI_CTRL + 2) {
+			unsigned int byte_in = abs_rel - PCI_PRI_CTRL;
+
+			guest_ctrl &= ~(0xffU << (8 * byte_in));
+			guest_ctrl |= (u16)val_bytes[i] << (8 * byte_in);
+		} else if (abs_rel == PCI_PRI_STATUS) {
+			status_clear |= val_bytes[i] &
+					(PCI_PRI_STATUS_RF | PCI_PRI_STATUS_UPRGI);
+		} else if (abs_rel >= PCI_PRI_MAX_REQ &&
+			   abs_rel < PCI_PRI_MAX_REQ + 4) {
+			/* read-only */
+		} else if (abs_rel >= PCI_PRI_ALLOC_REQ &&
+			   abs_rel < PCI_PRI_ALLOC_REQ + 4) {
+			unsigned int byte_in = abs_rel - PCI_PRI_ALLOC_REQ;
+
+			guest_alloc &= ~(0xffU << (8 * byte_in));
+			guest_alloc |= (u32)val_bytes[i] << (8 * byte_in);
+		}
+	}
+
+	final_ctrl = (guest_ctrl & (PCI_PRI_CTRL_ENABLE | PCI_PRI_CTRL_RESET)) |
+		     (old_ctrl & ~(PCI_PRI_CTRL_ENABLE | PCI_PRI_CTRL_RESET));
+	final_alloc = min(guest_alloc, max_req);
+	want_enable = final_ctrl & PCI_PRI_CTRL_ENABLE;
+	want_reset = final_ctrl & PCI_PRI_CTRL_RESET;
+	old_enable = old_ctrl & PCI_PRI_CTRL_ENABLE;
+
+	if (want_reset && want_enable) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	if (want_enable && !old_enable &&
+	    !(old_status & PCI_PRI_STATUS_STOPPED)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	if (final_alloc != old_alloc) {
+		ret = pci_write_config_dword(pdev, pri_off + PCI_PRI_ALLOC_REQ,
+					     final_alloc);
+		if (ret) {
+			ret = pcibios_err_to_errno(ret);
+			goto out_unlock;
+		}
+	}
+
+	if (!want_enable && old_enable) {
+		ret = pci_write_config_word(pdev, pri_off + PCI_PRI_CTRL,
+					    final_ctrl & ~PCI_PRI_CTRL_RESET);
+		if (ret) {
+			ret = pcibios_err_to_errno(ret);
+			goto out_unlock;
+		}
+	}
+
+	if (want_reset) {
+		/* Pulse RESET like pci_reset_pri(); device is disabled. */
+		ret = pci_write_config_word(pdev, pri_off + PCI_PRI_CTRL,
+					    PCI_PRI_CTRL_RESET);
+		if (ret) {
+			ret = pcibios_err_to_errno(ret);
+			goto out_unlock;
+		}
+	}
+
+	if (want_enable && !old_enable) {
+		ret = pci_write_config_word(pdev, pri_off + PCI_PRI_CTRL,
+					    PCI_PRI_CTRL_ENABLE);
+		if (ret) {
+			ret = pcibios_err_to_errno(ret);
+			goto out_unlock;
+		}
+	}
+
+	if (status_clear) {
+		ret = pci_write_config_word(pdev, pri_off + PCI_PRI_STATUS,
+					    status_clear);
+		if (ret) {
+			ret = pcibios_err_to_errno(ret);
+			goto out_unlock;
+		}
+	}
+
+	ret = count;
+out_unlock:
+	pci_cfg_access_unlock(pdev);
+	return ret;
+}
+#endif
 
 static int vfio_raw_config_read(struct vfio_pci_core_device *vdev, int pos,
 				int count, struct perm_bits *perm,
@@ -1207,6 +1367,9 @@ int __init vfio_pci_init_perm_bits(void)
 	ecap_perms[PCI_EXT_CAP_ID_DVSEC].writefn = vfio_raw_config_write;
 #ifdef CONFIG_PCI_PASID
 	ecap_perms[PCI_EXT_CAP_ID_PASID].writefn = vfio_pasid_config_write;
+#endif
+#ifdef CONFIG_PCI_PRI
+	ecap_perms[PCI_EXT_CAP_ID_PRI].writefn = vfio_pri_config_write;
 #endif
 
 	if (ret)
