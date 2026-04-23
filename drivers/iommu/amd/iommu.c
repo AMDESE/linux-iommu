@@ -4973,6 +4973,19 @@ static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
 }
 
 /*
+ * Interrupt acceleration for a secure guest is not supported. Keep IsRun
+ * clear so the IOMMU raises a GA-log interrupt and the host injects it.
+ * The guest ID is in the low 16 bits of the extended IRTE id, and bit 15
+ * marks a secure guest.
+ */
+static void sviommu_clear_is_run(struct amd_ir_data *ir_data,
+				 struct irte_ga *entry)
+{
+	if (ir_data->is_ext && (ir_data->ext_id & 0x8000))
+		entry->lo.fields_vapic.is_run = 0;
+}
+
+/*
  * Fast update of IsRun, GALogIntr, and (conditionally) Destination for an
  * extended IRTE.  Read the live entry, apply the running-field changes, and
  * publish with cmpxchg so the shadow copy cannot drift from entry_ptr.
@@ -4994,6 +5007,7 @@ static int __update_ext_irte_ga(struct amd_ir_data *ir_data, int cpu,
 		old = eirte->entry_ptr->irte;
 		entry.irte = old;
 		__amd_iommu_update_ga(&entry, cpu, ga_log_intr);
+		sviommu_clear_is_run(ir_data, &entry);
 		new = entry.irte;
 	} while (!try_cmpxchg128(&eirte->entry_ptr->irte, &old, new));
 
@@ -5072,6 +5086,7 @@ int amd_iommu_activate_guest_mode(void *data, int cpu, bool ga_log_intr)
 	entry->lo.fields_vapic.ga_tag      = ir_data->ga_tag;
 
 	__amd_iommu_update_ga(entry, cpu, ga_log_intr);
+	sviommu_clear_is_run(ir_data, entry);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
 			      ir_data->irq_2_irte.index, entry, ir_data);
