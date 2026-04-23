@@ -90,8 +90,14 @@ int amd_viommu_guest_mmio_write(struct iommufd_viommu *viommu, u16 offset, u64 v
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 	int gid = aviommu->gid;
 
-	if (amd_viommu_is_secure_guest(gid))
-		return -EINVAL;
+	if (amd_viommu_is_secure_guest(gid)) {
+		if (offset != MMIO_INTCAPXT_EVT_OFFSET &&
+		    offset != MMIO_INTCAPXT_PPR_OFFSET) {
+			pr_warn_once("%s: Secure vIOMMU does not support MMIO trapping\n",
+				     __func__);
+			return -EINVAL;
+		}
+	}
 
 	pr_debug("%s: iommu_devid=%#x, gid=%u, offset=%#x, value=%#llx\n",
 		 __func__, iommu->devid, gid, offset, value);
