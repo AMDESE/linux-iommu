@@ -4119,6 +4119,17 @@ static int __modify_ext_irte_ga(struct amd_iommu *iommu, u32 ext_id,
 	}
 
 	/*
+	 * Interrupt acceleration for secure Guest is not supported. Hence
+	 * for secure guest set is_run bit to zero. IOMMU generates GAlog
+	 * interrupt and host will deliver interrupt to guest via interrupt
+	 * injection mechasim.
+	 *
+	 * Use ext_id to find secure Guest (ext_id[15] = 1).
+	 */
+	if ((ext_id & 0x8000))
+		irte->lo.fields_vapic.is_run = 0;
+
+	/*
 	 * We use cmpxchg16 to atomically update the 128-bit IRTE,
 	 * and it cannot be updated by the hardware or other processors
 	 * behind us, so the return value of cmpxchg16 should be the
