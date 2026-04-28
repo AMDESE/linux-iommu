@@ -578,6 +578,7 @@ struct amd_iommu_viommu {
 	 */
 	struct xarray gdomid_array;
 
+	u32 viommu_devid;
 	u64 *devid_table;
 	u64 *domid_table;
 	u16 trans_devid;
