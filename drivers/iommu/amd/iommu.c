@@ -319,12 +319,12 @@ static void update_sdte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data
 	pr_info("%s: GPT mode (%s mode)\n",
 		__func__, iommu_default_passthrough() ? "passthrough" : "DMA");
 
-	pr_debug("%s: iommu_devid=%#x, devid=%#x ATS=%lld\n",
-		 __func__, iommu->devid, dev_data->devid,
-		 FIELD_GET(DTE_FLAG_IOTLB, new->data[1]));
-	pr_debug("%s: gdomain id 0x%x gcr3 rp0 0x%x 0x%x 0x%x\n",
-		 __func__, sdte.domain_id, sdte.gcr3_tbl_rp0,
-		 sdte.gcr3_tbl_rp1, sdte.gcr3_tbl_rp2);
+	DUMP_printk("%s: iommu_devid=%#x, devid=%#x ATS=%lld\n",
+		    __func__, iommu->devid, dev_data->devid,
+		    FIELD_GET(DTE_FLAG_IOTLB, new->data[1]));
+	DUMP_printk("%s: gdomain id 0x%x gcr3 rp0 0x%x 0x%x 0x%x\n",
+		    __func__, sdte.domain_id, sdte.gcr3_tbl_rp0,
+		    sdte.gcr3_tbl_rp1, sdte.gcr3_tbl_rp2);
 
 sdte_update:
 	amd_sviommu_sdte_update(iommu->devid, dev_data, &sdte);
@@ -974,7 +974,7 @@ static void dump_dte_entry(struct amd_iommu *iommu, u16 devid)
 	get_dte256(iommu, dev_data, &dte);
 
 	for (i = 0; i < 4; ++i)
-		pr_err("DTE[%d]: %016llx\n", i, dte.data[i]);
+		DUMP_printk("DTE[%d]: %016llx\n", i, dte.data[i]);
 }
 
 static void dump_command(unsigned long phys_addr)
@@ -1537,6 +1537,7 @@ static void dump_command_buffer(struct amd_iommu *iommu)
 static int wait_on_sem(struct amd_iommu *iommu, u64 data)
 {
 	int i = 0;
+	u32 head, tail;
 
 	/*
 	 * cmd_sem holds a monotonically non-decreasing completion sequence
@@ -1559,6 +1560,11 @@ static int wait_on_sem(struct amd_iommu *iommu, u64 data)
 
 		return -EIO;
 	}
+
+	head = readl(iommu->mmio_base + MMIO_CMD_HEAD_OFFSET);
+	tail = readl(iommu->mmio_base + MMIO_CMD_TAIL_OFFSET);
+	pr_debug("%s: CMD Buffer head=%llu tail=%llu\n", __func__,
+		 MMIO_CMD_BUFFER_HEAD(head), MMIO_CMD_BUFFER_TAIL(tail));
 
 	return 0;
 }
@@ -2681,6 +2687,8 @@ static void set_dte_entry(struct amd_iommu *iommu,
 
 	amd_iommu_update_dte(iommu, dev_data, &new);
 
+	DUMP_printk("%s : DTE for devid : 0x%x\n", __func__, dev_data->devid);
+	dump_dte_entry(iommu, dev_data->devid);
 	/*
 	 * A kdump kernel might be replacing a domain ID that was copied from
 	 * the previous kernel--if so, it needs to flush the translation cache
@@ -3384,6 +3392,7 @@ amd_iommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	default:
 		break;
 	}
+
 	return ERR_PTR(-EOPNOTSUPP);
 }
 
@@ -3490,6 +3499,8 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 	if (dom->dirty_ops && !amd_iommu_hd_support(iommu))
 		return -EINVAL;
 
+	DUMP_printk("___K___ %s %u: tsm_enabled=%d devid=0x%x\n",
+		    __func__, __LINE__, dev_data->tsm_enabled, dev_data->devid);
 #if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
 	if (unlikely(amd_iommu_np_cache))
 		goto skip_trans;
