@@ -194,7 +194,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	if (ret)
 		return ret;
 
-	if (data.features & ~AMD_VIOMMU_FEATURE_SVIOMMU)
+	if (data.features & ~AMD_VIOMMU_FEATURE_SVIOMMU || data.__reserved)
 		return -EOPNOTSUPP;
 
 	mutex_init(&aviommu->trans_devid_lock);
@@ -237,6 +237,7 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	trans_devid_allocated = true;
 	aviommu->trans_devid = ret;
 	aviommu->trans_domid = pdom->id;
+	aviommu->viommu_devid = data.viommu_devid;
 
 	ret = amd_iommu_set_translate_dte(viommu);
 	if (ret)

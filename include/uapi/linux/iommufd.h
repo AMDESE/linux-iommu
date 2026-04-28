@@ -1087,12 +1087,16 @@ struct iommu_viommu_tegra241_cmdqv {
  *            for Secure vIOMMU (SNP-protected guest)
  * @kvmfd: KVM VM fd of the SNP guest. Used only with
  *         AMD_VIOMMU_FEATURE_SVIOMMU
+ * @viommu_devid: Guest vIOMMU device id
+ * @__reserved: Must be 0
  */
 #define AMD_VIOMMU_FEATURE_SVIOMMU	(1 << 0)
 struct iommu_viommu_amd {
 	__aligned_u64 out_vfmmio_mmap_offset;
 	__u32 features;
 	__u32 kvmfd;
+	__u32 viommu_devid;
+	__u32 __reserved;
 };
 
 /**
