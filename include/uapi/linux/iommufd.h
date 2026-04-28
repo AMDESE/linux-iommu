@@ -1088,6 +1088,7 @@ struct iommu_viommu_tegra241_cmdqv {
 #define AMD_VIOMMU_FEATURE_SVIOMMU	BIT(0)
 struct iommu_viommu_amd {
 	__u32 features;		/* AMD_VIOMMU_FEATURE_* requested by VMM */
+	__u32 viommu_devid;	/* Guest vIOMMU device id */
 	__aligned_u64 out_vfmmio_mmap_offset;
 	__u32 kvmfd;
 	__u32 reserved; /* must be last */
