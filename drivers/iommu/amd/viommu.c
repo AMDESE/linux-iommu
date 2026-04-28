@@ -267,8 +267,8 @@ static int __init viommu_vf_vfcntl_init(struct amd_iommu *iommu)
 	}
 	iommu->vf_cntl_phys = vf_cntl_phys;
 
-	pr_debug("%s: IOMMU device:%s, vf_base:%#llx, vfctrl_base:%#llx\n",
-		 __func__, pci_name(iommu->dev), vf_phys, vf_cntl_phys);
+	DUMP_printk("%s: IOMMU device:%s, vf_base:%#llx, vfctrl_base:%#llx\n",
+		    __func__, pci_name(iommu->dev), vf_phys, vf_cntl_phys);
 	return 0;
 err_out:
 	amd_viommu_vf_vfcntl_unmap(iommu);
@@ -371,8 +371,9 @@ static void *alloc_private_subregion(struct amd_iommu *iommu, u64 base, size_t s
 	if (ret)
 		return NULL;
 
-	pr_debug("%s: base=%#llx, size=%#lx, subregion=%#llx(%#llx)\n",
-		 __func__, base, size, (unsigned long long)region, iommu_virt_to_phys(region));
+	DUMP_printk("%s: base=%#llx, size=%#lx, subregion=%#llx(%#llx)\n",
+		    __func__, base, size, (unsigned long long)region,
+		    iommu_virt_to_phys(region));
 
 	return region;
 }
@@ -466,6 +467,8 @@ u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
 		    (gid > VIOMMU_MAX_GID && !amd_viommu_is_secure_guest(gid))))
 		return 0;
 
+	DUMP_printk("%s: gid=0x%x mmio_phys=0x%llx\n", __func__, gid,
+		    (iommu->vf_base_phys + gid * VIOMMU_VF_MMIO_ENTRY_SIZE));
 	return iommu->vf_base_phys + gid * VIOMMU_VF_MMIO_ENTRY_SIZE;
 }
 
@@ -569,8 +572,9 @@ static int __maybe_unused alloc_private_vm_region(struct amd_iommu *iommu, u64 *
 
 	*entry = (u64 *)va;
 
-	pr_debug("%s: entry=%#llx(%#llx), addr=%#llx, size=%#lx\n", __func__,
-		 (unsigned long long)*entry, iommu_virt_to_phys(*entry), addr, size);
+	DUMP_printk("%s: entry=%#llx(%#llx), addr=%#llx, size=%#lx\n",
+		    __func__, (unsigned long long)*entry,
+		    iommu_virt_to_phys(*entry), addr, size);
 
 	return 0;
 }
