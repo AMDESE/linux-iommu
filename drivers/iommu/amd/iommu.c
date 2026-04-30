@@ -3227,7 +3227,7 @@ struct iommu_domain *amd_iommu_domain_alloc_paging_v1(struct device *dev, u32 fl
 	cfg.common.hw_max_vasz_lg2 =
 		min(64, (amd_iommu_hpt_level - 1) * 9 + 21);
 	cfg.common.hw_max_oasz_lg2 = 52;
-	cfg.starting_level = 2;
+	cfg.starting_level = 4;
 	domain->domain.ops = &amdv1_ops;
 
 	ret = pt_iommu_amdv1_init(&domain->amdv1, &cfg, GFP_KERNEL);
