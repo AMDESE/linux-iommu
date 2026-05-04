@@ -2908,6 +2908,8 @@ static DEFINE_MUTEX(sev_firmware_shutdown_mutex);
 
 static void sev_firmware_shutdown(struct sev_device *sev)
 {
+	struct sev_device *master_sev = psp_master ? psp_master->sev_data : NULL;
+
 	dev_err(sev->dev, "___K___ %s %u\n", __func__, __LINE__);
 	mutex_lock(&sev_firmware_shutdown_mutex);
 
@@ -2915,6 +2917,19 @@ static void sev_firmware_shutdown(struct sev_device *sev)
 	 * Calling without sev_cmd_mutex held as TSM will likely try disconnecting
 	 * IDE and this ends up calling sev_do_cmd() which locks sev_cmd_mutex.
 	 */
+
+	/*
+	 * tio_status is only ever allocated on the master, so drive TSM uninit
+	 * against the master on the FIRST sev_firmware_shutdown() caller, while
+	 * SNP firmware is still alive. sev_tsm_uninit() is idempotent (gated by
+	 * sev->tsmdev), so the master's own shutdown still walks through here
+	 * safely as a no-op.
+	 */
+	if (master_sev && master_sev->tsmdev) {
+		pr_info("%s:%d TSM unit called\n", __func__, __LINE__);
+		sev_tsm_uninit(master_sev);
+	}
+
 	if (sev->tio_status)
 		sev_tsm_uninit(sev);
 
