@@ -4413,8 +4413,12 @@ static int rmp_mmio_update(struct kvm_vcpu *vcpu, gfn_t gfn, size_t len, bool pr
 		ret = kvm_vfio_dmabuf_get_pfn(vcpu->kvm, slot,
 					      gfn + (off >> PAGE_SHIFT),
 					      &pfn, &max_order);
-		if (ret)
-			break;
+		if (ret) {
+			pr_err("___K___ %s %u: %llx is likely to be MSIX, skipping\n",
+				__func__, __LINE__, (gfn << PAGE_SHIFT) + off);
+			ret = 0;
+			continue;
+		}
 
 		if (private)
 			ret = rmp_make_private_mmio(pfn, (gfn << PAGE_SHIFT) + off,
@@ -4443,8 +4447,12 @@ static int rmp_mmio_reclaim(struct kvm_vcpu *vcpu, gfn_t gfn, size_t len)
 		ret = kvm_vfio_dmabuf_get_pfn(vcpu->kvm, slot,
 					      gfn + (off >> PAGE_SHIFT),
 					      &pfn, &max_order);
-		if (ret)
-			break;
+		if (ret) {
+			pr_err("___K___ %s %u: %llx is likely to be MSIX, skipping\n",
+				__func__, __LINE__, (gfn << PAGE_SHIFT) + off);
+			ret = 0;
+			continue;
+		}
 
 		data.paddr = __sme_set(pfn << PAGE_SHIFT);
 		ret = sev_do_cmd(SEV_CMD_SNP_PAGE_RECLAIM, &data, &fw_err);
