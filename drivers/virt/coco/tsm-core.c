@@ -13,7 +13,6 @@
 #include <linux/pci-ide.h>
 
 static struct class *tsm_class;
-static DECLARE_RWSEM(tsm_rwsem);
 static DEFINE_IDA(tsm_ida);
 
 static int tsm_class_init(void);
