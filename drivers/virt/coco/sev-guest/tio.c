@@ -594,6 +594,28 @@ static bool get_range(struct pci_dev *pdev, struct tsm_blob *report, unsigned in
 		return false;
 	}
 
+	if (pdev->msix_cap) {
+		u32 table, pba;
+		struct range msixr, pbar, rr;
+
+		pci_read_config_dword(pdev, pdev->msix_cap + PCI_MSIX_TABLE, &table);
+		pci_read_config_dword(pdev, pdev->msix_cap + PCI_MSIX_PBA, &pba);
+
+		msixr.start = table & PCI_MSIX_TABLE_OFFSET;
+		msixr.end = msixr.start + ((table & PCI_MSIX_FLAGS_QSIZE) + 1) * 16;
+		pbar.start = pba & PCI_MSIX_TABLE_OFFSET;
+		pbar.end = pbar.start + ALIGN((pba & PCI_MSIX_FLAGS_QSIZE) + 1, 64) / 8;
+		rr.start = offset << PAGE_SHIFT;
+		rr.end = mr.num << PAGE_SHIFT;
+
+		if (((table & PCI_MSIX_TABLE_BIR) == rangeid && range_overlaps(&rr, &msixr)) ||
+			((table & PCI_MSIX_PBA_BIR) == rangeid && range_overlaps(&rr, &pbar))) {
+			pci_err(pdev, "Skipping unreported MSIX range [%d] #%d %d pages, %llx..%llx\n",
+				index, rangeid, mr.num, r->start, r->end);
+			return false;
+		}
+	}
+
 	*range_id = rangeid;
 	*start = r->start + (offset << PAGE_SHIFT);
 	*size = mr.num << PAGE_SHIFT;
