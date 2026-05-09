@@ -3091,6 +3091,9 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 		return -EINVAL;
 
 #if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+	if (unlikely(amd_iommu_np_cache))
+		goto skip_trans;
+
 	/* Translate-device-id reservation must be done before setting up
 	 * the DTE for the device to make sure that the id has not been allocated
 	 * yet. (See trans_devid_alloc() in trans_devid.c.)
@@ -3107,6 +3110,8 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 		       __func__, dev_data->devid, ret);
 		return ret;
 	}
+
+skip_trans:
 #endif
 
 	if (dev_data->domain)
