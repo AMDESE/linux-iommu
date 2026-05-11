@@ -4011,7 +4011,7 @@ static int amd_iommu_tsm_enable(struct iommu_domain *dom, struct device *dev)
 		return -EINVAL;
 
 	if (dev_data->tsm_enabled)
-		return 0;
+		goto skip_dte_update;
 
 	dev_data->tsm_enabled = true;
 	/* Always set DTE, either to match sDTE or ignore, but never clear */
@@ -4020,6 +4020,7 @@ static int amd_iommu_tsm_enable(struct iommu_domain *dom, struct device *dev)
 	dev_err(dev, "___K___ %s %u: tsm_enabled=%d devdata=%lx\n",
 		__func__, __LINE__, dev_data->tsm_enabled, (ulong) dev_data);
 
+skip_dte_update:
 	return iommu_for_each(dom, amd_iommu_domain_ops_for_each_rmp_smash_fn, NULL);
 }
 
