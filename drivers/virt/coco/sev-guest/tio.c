@@ -441,8 +441,9 @@ static int mmio_validate_range(struct snp_guest_dev *snp_dev, struct pci_dev *pd
 		.force_validated = 0,
 		.range_id = range_id,
 	};
-	u64 bdfn = ghcb_tio_sbdfn(pdev);
-	u64 mmio_val = SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_VALIDATE(start, size, range_id, !invalidate);
+	u64 num_bdfn = SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_NUM_BDFN(
+			size >> PAGE_SHIFT, ghcb_tio_sbdfn(pdev));
+	u64 mmio_val = SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_VALIDATE(start, range_id, !invalidate);
 	int rc;
 
 	if (!rsp)
@@ -450,7 +451,7 @@ static int mmio_validate_range(struct snp_guest_dev *snp_dev, struct pci_dev *pd
 
 	rc = handle_tio_guest_request(snp_dev, TIO_MSG_MMIO_VALIDATE_REQ,
 			       &req, sizeof(req), rsp, resp_len,
-			       NULL, NULL, &bdfn, &mmio_val, fw_err);
+			       NULL, NULL, &num_bdfn, &mmio_val, fw_err);
 	if (rc)
 		return rc;
 
