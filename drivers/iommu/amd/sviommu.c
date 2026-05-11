@@ -171,7 +171,8 @@ int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bo
 	return sev_guest_ops->mapping_update(&data);
 }
 
-int amd_sviommu_sdte_update(u16 iommu_devid, u16 devid, struct sdte *s)
+int amd_sviommu_sdte_update(u16 iommu_devid,
+			    struct iommu_dev_data *dev_data, struct sdte *s)
 {
 	struct amd_sviommu_sdte_data data;
 
@@ -181,7 +182,8 @@ int amd_sviommu_sdte_update(u16 iommu_devid, u16 devid, struct sdte *s)
 		return -EINVAL;
 
 	data.viommu_devid = iommu_devid;
-	data.devid = devid;
+	data.devid = dev_data->devid;
+	data.pdev = to_pci_dev(dev_data->dev);
 	data.sdte = s;
 
 	return sev_guest_ops->sdte_update(&data);
