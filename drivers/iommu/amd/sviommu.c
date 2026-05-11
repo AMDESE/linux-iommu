@@ -152,7 +152,8 @@ int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
 	return sev_guest_ops->setup_trans_sdte(iommu->devid, &data);
 }
 
-int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bool set)
+int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid,
+			       struct iommu_dev_data *dev_data, bool set)
 {
 	struct amd_sviommu_mapping_data data;
 
@@ -161,10 +162,11 @@ int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid, u16 devid, bo
 	}
 
 	pr_debug("%s: viommu_devid=%#x, domid=%#x, devid=%#x\n",
-		 __func__, iommu->devid, domid, devid);
+		 __func__, iommu->devid, domid, dev_data->devid);
 
 	data.viommu_devid = iommu->devid;
-	data.devid = devid;
+	data.devid = dev_data->devid;
+	data.pdev = to_pci_dev(dev_data->dev);
 	data.domid = domid;
 	data.set = set;
 

@@ -54,6 +54,7 @@ struct amd_sviommu_trans_sdte {
 
 struct amd_sviommu_mapping_data {
 	u16 viommu_devid;
+	struct pci_dev *pdev;
 	u16 devid;
 	u16 domid;
 	bool set;
