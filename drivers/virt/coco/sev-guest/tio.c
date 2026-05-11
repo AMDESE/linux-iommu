@@ -854,6 +854,12 @@ static struct pci_tsm *sev_guest_lock(struct tsm_dev *tsmdev, struct pci_dev *pd
 	}
 
 	gtdi->tdi_id = tdi_id;
+	/*
+	 * TODO:
+	 *   Store it in pci_tsm_devsec so that coco/sev/core.c can use it
+	 *   Need to find better way to handle this.
+	 */
+	gtdi->ds.tdi_id = tdi_id;
 	gtdi->ds.base_tsm.report = report;
 	gtdi->ds.base_tsm.certs = certs;
 
