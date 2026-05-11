@@ -84,6 +84,28 @@ struct pci_tsm_devsec *to_pci_tsm_devsec(struct pci_tsm *tsm)
 }
 EXPORT_SYMBOL_GPL(to_pci_tsm_devsec);
 
+/**
+ * get_tdi_id() - retrieve the runtime FW-generated TDI id for @pdev
+ * @pdev: PCI device that has been transitioned into a TSM-managed TDI
+ *
+ * The value is set by the PSP bind time and stored in the public struct
+ * pci_tsm_devsec.
+ */
+u64 get_tdi_id(struct pci_dev *pdev)
+{
+	struct pci_tsm_devsec *ds;
+
+	if (!pdev || !pdev->tsm)
+		return -EINVAL;
+
+	ds = to_pci_tsm_devsec(pdev->tsm);
+	if (!ds)
+		return -EINVAL;
+
+	return ds->tdi_id;
+}
+EXPORT_SYMBOL_GPL(get_tdi_id);
+
 static void tsm_remove(struct pci_tsm *tsm)
 {
 	struct pci_dev *pdev;

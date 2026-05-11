@@ -178,6 +178,7 @@ struct pci_tsm_mmio {
 struct pci_tsm_devsec {
 	struct pci_tsm base_tsm;
 	struct pci_tsm_mmio *mmio;
+	u64 tdi_id;
 };
 
 /* physical function0 and capable of 'connect' */
@@ -275,6 +276,7 @@ ssize_t pci_tsm_guest_req(struct pci_dev *pdev, enum pci_tsm_req_scope scope,
 struct pci_tsm_devsec *to_pci_tsm_devsec(struct pci_tsm *tsm);
 int pci_tsm_mmio_setup(struct pci_dev *pdev, struct pci_tsm_mmio *mmio);
 void pci_tsm_mmio_teardown(struct pci_tsm_mmio *mmio);
+u64 get_tdi_id(struct pci_dev *pdev);
 #else
 static inline int pci_tsm_register(struct tsm_dev *tsm_dev)
 {
@@ -297,6 +299,11 @@ static inline ssize_t pci_tsm_guest_req(struct pci_dev *pdev,
 					u64 *tsm_code)
 {
 	return -ENXIO;
+}
+
+static inline u64 get_tdi_id(struct pci_dev *pdev)
+{
+	return -ENODEV;
 }
 #endif
 
