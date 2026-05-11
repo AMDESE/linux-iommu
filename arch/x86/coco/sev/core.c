@@ -2910,8 +2910,9 @@ static int guest_sviommu_mapping_update(void *d)
 		goto free_mdesc;
 	}
 
-	/* TODO: For now pass device ID in TDI_ID field */
-	req.tdi_id = data->devid;
+	req.tdi_id = get_tdi_id(data->pdev);
+	pr_debug("%s: TDI_ID=0x%llx\n", __func__, req.tdi_id);
+
 	req.viommu_devid = data->viommu_devid;
 	req.gdomid = data->domid;
 	req.op_flags = TIO_VIOMMU_MAPPING_FLAG_DEVID | TIO_VIOMMU_MAPPING_FLAG_DOMID;
