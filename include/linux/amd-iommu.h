@@ -219,6 +219,7 @@ struct sdte {
 struct amd_sviommu_sdte_data {
 	u16 viommu_devid;
 	u16 devid;
+	struct pci_dev *pdev;
 	struct sdte *sdte;
 };
 
