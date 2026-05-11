@@ -25,6 +25,7 @@
 #include <linux/psp-sev.h>
 #include <linux/dmi.h>
 #include <linux/amd-iommu.h>
+#include <linux/pci-tsm.h>
 #include <uapi/linux/sev-guest.h>
 #include <crypto/gcm.h>
 
@@ -2604,7 +2605,7 @@ static int guest_viommu_msg_alloc(void)
 	return 0;
 }
 
-#define TIO_MESSAGE_VERSION	1
+#define TIO_MESSAGE_VERSION	2
 
 static int _handle_early_tio_guest_request(struct snp_msg_desc *mdesc, u8 type,
 					   void *req_buf, size_t req_sz, void *resp_buf, u32 resp_sz,
@@ -2945,15 +2946,15 @@ free_mdesc:
  * SDTE stuff
  */
 struct tio_msg_sdte_write_req {
-	__u16 guest_device_id;
-	__u8 reserved[14];
+	u64 tdi_id;
+	u8 reserved[8];
 	struct sdte sdte;
 } __packed;
 
 struct tio_msg_sdte_write_rsp {
-	__u16 guest_device_id;
+	u64 tdi_id;
 	__u16 status; /* SDTE_WRITE_xxx */
-	__u8 reserved[12];
+	__u8 reserved[6];
 #if 1
 	struct sdte sdte;
 	uint64_t device_id;
@@ -2993,7 +2994,9 @@ static int guest_sdte_update(void *d)
 		goto free_mdesc;
 	}
 
-	req.guest_device_id = data->devid,
+	req.tdi_id = get_tdi_id(data->pdev);
+	pr_debug("%s: TDI_ID=0x%llx\n", __func__, req.tdi_id);
+
 	memcpy(&req.sdte, data->sdte, sizeof(struct sdte));
 
 	/*
