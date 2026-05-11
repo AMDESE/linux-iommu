@@ -328,7 +328,6 @@ int amd_iommu_update_sdte(struct pci_dev *pdev, bool set)
 	struct dev_table_entry new = { 0 };
 	int ret;
 	u16 domid = 0;
-	u16 devid = pci_dev_id(pdev);
 
 	dev_data = dev_iommu_priv_get(&pdev->dev);
 	if (!dev_data)
@@ -353,7 +352,7 @@ int amd_iommu_update_sdte(struct pci_dev *pdev, bool set)
 		domid = dev_data->domain->id;
 
 	/* Update Mapping table */
-	ret = amd_sviommu_mapping_update(iommu, domid, devid, set);
+	ret = amd_sviommu_mapping_update(iommu, domid, dev_data, set);
 
 	if (set)
 		dev_data->sdte_enabled = 1;
