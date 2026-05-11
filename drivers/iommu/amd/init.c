@@ -4293,14 +4293,19 @@ int amd_iommu_snp_disable(void)
 			continue;
 
 		for (i = 0; i < VIOMMU_PRIV_SUBREGION_CNT; i++) {
-			if (iommu->viommu_priv_region[i]) {
-				ret = iommu_make_shared(iommu->viommu_priv_region[i],
-							VIOMMU_PRIV_SUBREGION_SIZE);
-				if (ret) {
-					pr_notice("%s: Converting vIOMMU private region failed. ret=%d\n",
-						  __func__, ret);
-					return ret;
-				}
+			unsigned long paddr, pfn;
+
+			if (unlikely(!iommu->viommu_priv_region[i]))
+				continue;
+
+			paddr = iommu_virt_to_phys(iommu->viommu_priv_region[i]);
+			/* Cbit maybe set in the paddr */
+			pfn = __sme_clr(paddr) >> PAGE_SHIFT;
+			ret = rmp_make_shared(pfn, PG_LEVEL_2M);
+			if (ret) {
+				pr_notice("%s: Converting vIOMMU private region failed. ret=%d\n",
+					  __func__, ret);
+				return ret;
 			}
 		}
 
