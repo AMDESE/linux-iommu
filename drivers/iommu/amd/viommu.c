@@ -147,7 +147,7 @@ static void *alloc_private_subregion(struct amd_iommu *iommu, u64 base, size_t s
 		goto err_out;
 
 	ret = pt_iommu_amdv1_map_pages(&iommu->viommu_pdom->domain, base,
-				     iommu_virt_to_phys(region), PAGE_SIZE, (size / PAGE_SIZE),
+				     iommu_virt_to_phys(region), size, 1,
 				     IOMMU_PROT_IR | IOMMU_PROT_IW, GFP_KERNEL, &mapped);
 
 	if (ret)
