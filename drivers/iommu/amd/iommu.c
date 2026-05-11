@@ -318,7 +318,7 @@ static void update_sdte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data
 		 sdte.gcr3_tbl_rp1, sdte.gcr3_tbl_rp2);
 
 sdte_update:
-	amd_sviommu_sdte_update(iommu->devid, dev_data->devid, &sdte);
+	amd_sviommu_sdte_update(iommu->devid, dev_data, &sdte);
 }
 
 int amd_iommu_update_sdte(struct pci_dev *pdev, bool set)
