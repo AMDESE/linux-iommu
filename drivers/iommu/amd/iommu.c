@@ -273,6 +273,9 @@ static void update_sdte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data
 {
 	struct protection_domain *pdom = dev_data->domain;
 	struct sdte sdte = { 0 };
+	struct pci_dev *pdev = to_pci_dev(dev_data->dev);
+
+	pdev->dev.archdata.cc_dma_addr_encrypted = false;
 
 	/* Clear sDTE entry */
 	if (pdom == NULL) {
@@ -309,6 +312,12 @@ static void update_sdte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data
 	sdte.gcr3_tbl_rp2 = FIELD_GET(DTE_GCR3_51_31, new->data[1]);
 	sdte.gpm	  = FIELD_GET(DTE_GPT_LEVEL_MASK, new->data[2]);
 
+
+	if (sdte.giov == 0)
+		pdev->dev.archdata.cc_dma_addr_encrypted = true;
+
+	pr_info("%s: GPT mode (%s mode)\n",
+		__func__, iommu_default_passthrough() ? "passthrough" : "DMA");
 
 	pr_debug("%s: iommu_devid=%#x, devid=%#x ATS=%lld\n",
 		 __func__, iommu->devid, dev_data->devid,
