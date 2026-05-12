@@ -12,7 +12,7 @@ static inline dma_addr_t __phys_to_dma(struct device *dev, phys_addr_t paddr)
 static inline dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr, unsigned long attrs)
 {
 	if (device_cc_accepted(dev)) {
-		if (attrs && DMA_ATTR_CC_DECRYPTED)
+		if (attrs & DMA_ATTR_CC_DECRYPTED)
 			return __phys_to_dma(dev, paddr) + dev->archdata.cc_shared_dma_offset;
 		// FIXME: archdata.cc_private_dma_offset?
 		return __phys_to_dma(dev, paddr);
