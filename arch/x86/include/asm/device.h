@@ -4,6 +4,7 @@
 
 struct dev_archdata {
 	dma_addr_t cc_shared_dma_offset;
+	bool cc_dma_addr_encrypted;
 };
 
 struct pdev_archdata {
