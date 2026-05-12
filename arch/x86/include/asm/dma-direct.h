@@ -12,6 +12,10 @@ static inline dma_addr_t __phys_to_dma(struct device *dev, phys_addr_t paddr)
 static inline dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr, unsigned long attrs)
 {
 	if (device_cc_accepted(dev)) {
+		/* User requested to set C bit */
+		if (dev->archdata.cc_dma_addr_encrypted)
+			return dma_addr_encrypted(__phys_to_dma(dev, paddr));
+
 		if (attrs & DMA_ATTR_CC_DECRYPTED)
 			return __phys_to_dma(dev, paddr) + dev->archdata.cc_shared_dma_offset;
 		// FIXME: archdata.cc_private_dma_offset?
@@ -23,16 +27,27 @@ static inline dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr, unsi
 
 static inline phys_addr_t dma_to_phys(struct device *dev, dma_addr_t daddr)
 {
-	if (device_cc_accepted(dev) && daddr >= dev->archdata.cc_shared_dma_offset)
-		return daddr - dev->archdata.cc_shared_dma_offset;
+	if (device_cc_accepted(dev)) {
+		/* C bit is set in dma_addr_t */
+		if (dev->archdata.cc_dma_addr_encrypted)
+			return dma_addr_canonical(daddr);
+
+		if (daddr >= dev->archdata.cc_shared_dma_offset)
+			return daddr - dev->archdata.cc_shared_dma_offset;
+	}
 	return dma_addr_canonical(daddr);
 }
 
 static inline dma_addr_t phys_to_dma_unencrypted(struct device *dev,
 						 phys_addr_t paddr)
 {
-	if (device_cc_accepted(dev))
+	if (device_cc_accepted(dev)) {
+		/* C bit is set in dma_addr_t */
+		if (dev->archdata.cc_dma_addr_encrypted)
+			return dma_addr_canonical(__phys_to_dma(dev, paddr));
+
 		return __phys_to_dma(dev, paddr) + dev->archdata.cc_shared_dma_offset;
+	}
 	return dma_addr_canonical(__phys_to_dma(dev, paddr));
 }
 
