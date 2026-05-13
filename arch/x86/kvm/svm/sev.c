@@ -4474,8 +4474,9 @@ static int snp_complete_sev_tio_guest_request(struct kvm_vcpu *vcpu)
 	if (msg_type == TIO_MSG_TDI_INFO_REQ) {
 		vcpu->arch.regs[VCPU_REGS_RDX] = vcpu->run->vmgexit.tio_req.tdi_status;
 	} else if (msg_type == TIO_MSG_MMIO_VALIDATE_REQ) {
+		unsigned npages = SVM_VMGEXIT_SEV_TIO_GR_MMIO_NUM(vcpu->arch.regs[VCPU_REGS_RCX]);
+		size_t len = npages <<  PAGE_SHIFT;
 		gfn_t gfn = SVM_VMGEXIT_SEV_TIO_GR_MMIO_GFN(vcpu->arch.regs[VCPU_REGS_RDX]);
-		size_t len = SVM_VMGEXIT_SEV_TIO_GR_MMIO_LEN(vcpu->arch.regs[VCPU_REGS_RDX]);
 		bool private = SVM_VMGEXIT_SEV_TIO_GR_MMIO_PRIVATE(vcpu->arch.regs[VCPU_REGS_RDX]);
 
 		ret = rmp_mmio_reclaim(vcpu, gfn, len);
@@ -4516,7 +4517,7 @@ static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t
 
 	vcpu->run->exit_reason = KVM_EXIT_VMGEXIT;
 	vcpu->run->vmgexit.type = KVM_USER_VMGEXIT_TIO_REQ;
-	vcpu->run->vmgexit.tio_req.guest_rid = vcpu->arch.regs[VCPU_REGS_RCX];
+	vcpu->run->vmgexit.tio_req.guest_rid = SVM_VMGEXIT_SEV_TIO_GR_MMIO_ADDR(vcpu->arch.regs[VCPU_REGS_RCX]);
 	vcpu->run->vmgexit.tio_req.flags = 0;
 	if (msg_type == TIO_MSG_TDI_INFO_REQ) {
 		u64 param = vcpu->arch.regs[VCPU_REGS_RDX];
@@ -4530,8 +4531,9 @@ static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t
 		if (param & SVM_VMGEXIT_SEV_TIO_GR_INFO_REPORT)
 			vcpu->run->vmgexit.tio_req.flags |= KVM_USER_VMGEXIT_TIO_REQ_FLAG_PARAM_REPORT;
 	} else if (msg_type == TIO_MSG_MMIO_VALIDATE_REQ) {
+		unsigned npages = SVM_VMGEXIT_SEV_TIO_GR_MMIO_NUM(vcpu->arch.regs[VCPU_REGS_RCX]);
+		size_t len = npages <<  PAGE_SHIFT;
 		gfn_t gfn = SVM_VMGEXIT_SEV_TIO_GR_MMIO_GFN(vcpu->arch.regs[VCPU_REGS_RDX]);
-		size_t len = SVM_VMGEXIT_SEV_TIO_GR_MMIO_LEN(vcpu->arch.regs[VCPU_REGS_RDX]);
 		bool private = SVM_VMGEXIT_SEV_TIO_GR_MMIO_PRIVATE(vcpu->arch.regs[VCPU_REGS_RDX]);
 
 		/* Always rmp_mmio_update to set Immutable */
@@ -4563,10 +4565,12 @@ static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t
 			return ret;
 		}
 
-		vcpu->run->vmgexit.tio_req.gpa = vcpu->arch.regs[VCPU_REGS_RDX];
+		vcpu->run->vmgexit.tio_req.gpa = gfn << PAGE_SHIFT;
 	} else if (msg_type == TIO_MSG_MMIO_CONFIG_REQ) {
+		gfn_t gfn = SVM_VMGEXIT_SEV_TIO_GR_MMIO_GFN(vcpu->arch.regs[VCPU_REGS_RDX]);
+
 		vcpu->run->vmgexit.tio_req.flags |= KVM_USER_VMGEXIT_TIO_REQ_FLAG_MMIO_CONFIG;
-		vcpu->run->vmgexit.tio_req.gpa = vcpu->arch.regs[VCPU_REGS_RDX];
+		vcpu->run->vmgexit.tio_req.gpa = gfn << PAGE_SHIFT;
 	} else if (msg_type == TIO_MSG_SDTE_WRITE_REQ) {
 		u64 flags = vcpu->arch.regs[VCPU_REGS_RDX];
 
