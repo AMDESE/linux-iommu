@@ -134,24 +134,26 @@
 /*
  * TIO_GUEST_REQUEST's MMIO_VALIDATE_REQ encoding for MMIO in RDX:
  *
- * ........ ....GGGG GGGGGGGG GGGGGGGG GGGGGGGG GGGGGGGG GGGGOOOO OOOOTrrr
+ * ........ ....GGGG GGGGGGGG GGGGGGGG GGGGGGGG GGGGGGGG GGGG.... ....Trrr
  * Where:
  *	G - guest physical address
- *	O - order of 4K pages
  *	T - TEE (valid for TIO_MSG_MMIO_CONFIG_REQ)
  *	r - range id == BAR
  */
 #define SVM_VMGEXIT_SEV_TIO_GR_MMIO_GFN(r)      (((r) & 0x000FFFFFFFFFF000ULL) >> PAGE_SHIFT)
-#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_LEN(r)      (1ULL << (12 + (((r) >> 4) & 0xFF)))
 #define SVM_VMGEXIT_SEV_TIO_GR_MMIO_RANGEID(r)  ((r) & 0x7)
-#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_RESERVED(r) ((r) & 0xFFF0000000000000ULL)
+#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_RESERVED(r) ((r) & 0xFFF0000000000FF0ULL)
 #define SVM_VMGEXIT_SEV_TIO_GR_MMIO_PRIVATE(r)  (!!((r) & BIT(3)))
 
-#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_VALIDATE(start, size, range_id, private) \
+#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_NUM(r)      (uint32_t)((r) >> 32)
+#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_ADDR(r)     (uint32_t)((r) & 0xFFFFFFFF)
+
+#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_VALIDATE(start, range_id, private) \
 	((SVM_VMGEXIT_SEV_TIO_GR_MMIO_GFN(start) << PAGE_SHIFT) | \
-	(get_order(size) << 4) | \
 	((private) ? BIT(3) : 0) | \
 	((range_id) & 7) )
+
+#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_NUM_BDFN(n, bdfn) ((uint64_t)(n) << 32 | (bdfn))
 
 #define SVM_VMGEXIT_SEV_TIO_OP			0x80000021
 #define SVM_VMGEXIT_SEV_TIO_OP_PARAM(guest_id, action)	((u64)(action)<<32|(guest_id))
