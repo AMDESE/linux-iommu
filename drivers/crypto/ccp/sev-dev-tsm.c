@@ -168,10 +168,16 @@ static void streams_disable(struct pci_ide **ide)
 static void stream_setup(struct pci_ide *ide)
 {
 	struct pci_dev *rp = pcie_find_root_port(ide->pdev);
+	struct pci_dev *pdev;
+
+	if (ide->pdev->is_virtfn)
+		pdev = pci_physfn(ide->pdev);
+	else
+		pdev = ide->pdev;
 
 	ide->partner[PCI_IDE_EP].rid_start = 0;
 	ide->partner[PCI_IDE_EP].rid_end = 0xffff;
-	ide->partner[PCI_IDE_RP].rid_start = 0;
+	ide->partner[PCI_IDE_RP].rid_start = pci_dev_id(pdev);
 	ide->partner[PCI_IDE_RP].rid_end = 0xffff;
 
 	ide->pdev->ide_cfg = 0;
