@@ -1951,7 +1951,7 @@ struct sev_data_tio_viommu {
 static int sev_tio_viommu_init_locked(struct amd_sviommu *sv)
 {
 	u64 pa;
-	int i, j, ret, psp_ret, npages;
+	int i, j, ret, psp_ret;
 	struct sev_data_tio_viommu v = {
 		.length = sizeof(v),
 	};
@@ -1981,10 +1981,9 @@ static int sev_tio_viommu_init_locked(struct amd_sviommu *sv)
 	}
 
 	/* 4 x 2MB size */
-	npages = 1ULL << get_order(sv->backing_page_size);
 	for (i = 0; i < VIOMMU_BACKING_PAGE_COUNT; i++) {
 		pa = __psp_pa(sv->backing_page[i]);
-		ret = rmp_mark_pages_firmware(pa, npages, false);
+		ret = rmp_make_private(pa >> PAGE_SHIFT, 0, PG_LEVEL_2M, 0, true);
 		/* Reclaim already marked pages on error */
 		if (ret)
 			goto err_out;
@@ -2012,7 +2011,7 @@ static int sev_tio_viommu_init_locked(struct amd_sviommu *sv)
 
 err_out:
 	for (j = 0; j < i; j++)
-		snp_reclaim_pages(__psp_pa(sv->backing_page[j]), npages, true);
+		ret = rmp_make_shared(__psp_pa(sv->backing_page[j]), PG_LEVEL_2M);
 
 	return ret;
 }
