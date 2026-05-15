@@ -150,6 +150,7 @@ struct snp_req_data {
 	unsigned long data_gpa;
 	unsigned int data_npages;
 	unsigned int guest_rid;
+	unsigned long npages;
 	unsigned long param;
 };
 

@@ -1812,7 +1812,7 @@ static int snp_issue_guest_request(struct snp_guest_req *req)
 	} else if (req->exit_code == SVM_VMGEXIT_SEV_TIO_GR) {
 		ghcb_set_rax(ghcb, input->data_gpa);
 		ghcb_set_rbx(ghcb, input->data_npages);
-		ghcb_set_rcx(ghcb, input->guest_rid);
+		ghcb_set_rcx(ghcb, ((uint64_t)input->npages << 32) | input->guest_rid);
 		ghcb_set_rdx(ghcb, input->param);
 	}
 
