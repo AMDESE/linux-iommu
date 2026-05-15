@@ -100,8 +100,10 @@ static int handle_tio_guest_request(struct snp_guest_dev *snp_dev, u8 type,
 		req.certs_data = pt;
 		req.input.data_npages = *npages;
 	}
-	if (bdfn)
-		req.input.guest_rid = *bdfn;
+	if (bdfn) {
+		req.input.guest_rid = *bdfn & 0xFFFFFFFF;
+		req.input.npages = *bdfn >> 32;
+	}
 	req.input.param = *param;
 
 	//sprintf(pfx, "#%d %s: ", smp_processor_id(), dbgpfx);
