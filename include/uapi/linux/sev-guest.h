@@ -96,6 +96,10 @@ struct snp_ext_report_req {
 
 #define SNP_GUEST_VMM_ERR_INVALID_LEN	1
 #define SNP_GUEST_VMM_ERR_BUSY		2
+#define SNP_GUEST_VMM_ERR_INVAL		3
+#define SNP_GUEST_VMM_ERR_FAULT		4
+#define SNP_GUEST_VMM_ERR_RMP_RECLAIM	5
+#define SNP_GUEST_VMM_ERR_RMP_MMIO_UPD	6
 
 /* Optional Certificates/measurements/report data from TIO_GUEST_REQUEST */
 struct tio_blob_table_entry {

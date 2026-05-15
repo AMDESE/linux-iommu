@@ -4475,8 +4475,9 @@ static int snp_complete_sev_tio_guest_request(struct kvm_vcpu *vcpu)
 	ret = kvm_read_guest(kvm, req_gpa + offsetof(struct snp_guest_msg_hdr, msg_type),
 			     &msg_type, 1);
 	if (ret) {
-		ret = -EDOM;
-		return ret;
+		ghcb_set_sw_exit_info_2(svm->sev_es.ghcb,
+					SNP_GUEST_ERR(SNP_GUEST_VMM_ERR_INVAL, 0));
+		return 1;
 	}
 
 	if (msg_type == TIO_MSG_TDI_INFO_REQ) {
@@ -4488,14 +4489,20 @@ static int snp_complete_sev_tio_guest_request(struct kvm_vcpu *vcpu)
 		bool private = SVM_VMGEXIT_SEV_TIO_GR_MMIO_PRIVATE(vcpu->arch.regs[VCPU_REGS_RDX]);
 
 		ret = rmp_mmio_reclaim(vcpu, gfn, len);
-		if (ret)
-			return ret;
+		if (ret) {
+			ghcb_set_sw_exit_info_2(svm->sev_es.ghcb,
+						SNP_GUEST_ERR(SNP_GUEST_VMM_ERR_RMP_RECLAIM, 0));
+			return 1;
+		}
 
 		if (!private) {
 			ret = rmp_mmio_update(vcpu, gfn, len, false);
 			if (ret) {
-				pr_err_ratelimited("Failed to find pfn for gfn=%llx, ret=%d\n", gfn, ret);
-				return ret;
+				pr_err_ratelimited("Failed to update MMIO RMP for gfn=%llx, ret=%d\n",
+						   gfn, ret);
+				ghcb_set_sw_exit_info_2(svm->sev_es.ghcb,
+					SNP_GUEST_ERR(SNP_GUEST_VMM_ERR_RMP_MMIO_UPD, 0));
+				return 1;
 			}
 		}
 	}
@@ -4508,6 +4515,7 @@ static int snp_complete_sev_tio_guest_request(struct kvm_vcpu *vcpu)
 
 static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t resp_gpa)
 {
+	struct vcpu_svm *svm = to_svm(vcpu);
 	struct kvm *kvm = vcpu->kvm;
 	struct kvm_sev_info *sev;
 	u8 msg_type;
@@ -4520,8 +4528,11 @@ static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t
 
 	ret = kvm_read_guest(kvm, req_gpa + offsetof(struct snp_guest_msg_hdr, msg_type),
 			     &msg_type, 1);
-	if (ret)
-		return ret;
+	if (ret) {
+		ghcb_set_sw_exit_info_2(svm->sev_es.ghcb,
+					SNP_GUEST_ERR(SNP_GUEST_VMM_ERR_INVAL, 0));
+		return 1;
+	}
 
 	vcpu->run->exit_reason = KVM_EXIT_VMGEXIT;
 	vcpu->run->vmgexit.type = KVM_USER_VMGEXIT_TIO_REQ;
@@ -4540,15 +4551,16 @@ static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t
 			vcpu->run->vmgexit.tio_req.flags |= KVM_USER_VMGEXIT_TIO_REQ_FLAG_PARAM_REPORT;
 	} else if (msg_type == TIO_MSG_MMIO_VALIDATE_REQ) {
 		unsigned npages = SVM_VMGEXIT_SEV_TIO_GR_MMIO_NUM(vcpu->arch.regs[VCPU_REGS_RCX]);
-		size_t len = npages <<  PAGE_SHIFT;
+		size_t len = npages << PAGE_SHIFT;
 		gfn_t gfn = SVM_VMGEXIT_SEV_TIO_GR_MMIO_GFN(vcpu->arch.regs[VCPU_REGS_RDX]);
 		bool private = SVM_VMGEXIT_SEV_TIO_GR_MMIO_PRIVATE(vcpu->arch.regs[VCPU_REGS_RDX]);
 
-		/* Always rmp_mmio_update to set Immutable */
 		ret = rmp_mmio_update(vcpu, gfn, len, true);
 		if (ret) {
-			pr_err_ratelimited("Failed to find pfn for gfn=%llx, ret=%d\n", gfn, ret);
-			return ret;
+			pr_err_ratelimited("Failed to update MMIO RMP for gfn=%llx, ret=%d\n", gfn, ret);
+			ghcb_set_sw_exit_info_2(svm->sev_es.ghcb,
+						SNP_GUEST_ERR(SNP_GUEST_VMM_ERR_RMP_MMIO_UPD, 0));
+			return 1;
 		}
 
 		if (private)
@@ -4568,9 +4580,11 @@ static int snp_sev_tio_guest_request(struct kvm_vcpu *vcpu, gpa_t req_gpa, gpa_t
 
 		ret = kvm_vm_ioctl_set_mem_attributes(kvm, &a);
 		if (ret) {
-			pr_err_ratelimited("Failed to mark gfn=%llx as private, ret=%d\n",
-					   gfn, ret);
-			return ret;
+			pr_err_ratelimited("Failed to mark gfn=%llx len=%lx as private, ret=%d\n",
+					   gfn, len, ret);
+			ghcb_set_sw_exit_info_2(svm->sev_es.ghcb,
+						SNP_GUEST_ERR(SNP_GUEST_VMM_ERR_FAULT, 0));
+			return 1;
 		}
 
 		vcpu->run->vmgexit.tio_req.gpa = gfn << PAGE_SHIFT;
