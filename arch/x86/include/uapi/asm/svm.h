@@ -153,7 +153,7 @@
 	((private) ? BIT(3) : 0) | \
 	((range_id) & 7) )
 
-#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_NUM_BDFN(n, bdfn) ((uint64_t)(n) << 32 | (bdfn))
+#define SVM_VMGEXIT_SEV_TIO_GR_MMIO_MK_NUM_BDFN(n, bdfn) (((uint64_t)(n) << 32) | (bdfn))
 
 #define SVM_VMGEXIT_SEV_TIO_OP			0x80000021
 #define SVM_VMGEXIT_SEV_TIO_OP_PARAM(guest_id, action)	((u64)(action)<<32|(guest_id))
