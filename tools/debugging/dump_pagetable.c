@@ -46,9 +46,7 @@ struct {
 	u64 swiotlb_end; // pfn
 } g = {
 	.fd = -1,
-	.start = 0,
 	.end = 1ULL << (64 - PAGE_SHIFT),
-	.rmpend = 0,
 };
 
 static int print_addr(u64 pa)
@@ -130,7 +128,6 @@ typedef union  {
 		u64 VMSA:1;
 		u64 validated:1;
 		u64 lock:1;
-
 		union {
 			struct {
 				u8 vpw:1;
@@ -246,7 +243,6 @@ copy_exit:
 	memcpy(e, cache[i].pg + (entryoff & ~PAGE_MASK), sizeof(*e));
 	if (seg)
 		*seg = segno;
-
 	if (ep)
 		*ep = cache[i].off + (entryoff & ~PAGE_MASK);
 	return 0;
@@ -346,7 +342,6 @@ static const char *pteoffset(char *b, u64 pfn, int i, size_t entry)
 {
 	if (!g.pteoffset)
 		return "";
-
 	sprintf(b, " pte@%llx", (pfn << PAGE_SHIFT) + i * entry);
 	return b;
 }
@@ -804,6 +799,25 @@ static int dump_dte(void)
 	return 0;
 }
 
+static ssize_t read_u64(const char *fn, u64 *value)
+{
+	FILE *fp = fopen(fn, "r");
+	u64 temp;
+
+	if (fp == NULL) {
+		perror("fopen");
+		return -1;
+	}
+	if (fscanf(fp, "%llx", &temp) != 1) {
+		fclose(fp);
+		errno = EINVAL;
+		return -1;
+	}
+	fclose(fp);
+	*value = temp;
+	return 0;
+}
+
 static int pr_exit(int opt, const char *optarg, u64 val)
 {
 	fprintf(stderr, "Invalid option %c: %s -> %llx\n", opt, optarg, val);
@@ -812,8 +826,8 @@ static int pr_exit(int opt, const char *optarg, u64 val)
 
 int main(int argc, char *argv[])
 {
-	u64 qemupt = 0, nptpt = 0, start = 0, size = 0;
-	unsigned dom = 0, bus, dev, fn = 0xFF, lvl = 5 /* max indirect levels */;
+	u64 qemupt = 0, nptpt = 0, start = 0, size = 0, lvl = 5;
+	unsigned dom = 0, bus, dev, fn = 0xFF;
 	int ret, opt;
 
 	g.color = isatty(1);
@@ -826,8 +840,13 @@ int main(int argc, char *argv[])
 				return pr_exit(opt, optarg, g.fd);
 			break;
 		case 'l':
-			lvl = strtoul(optarg, NULL, 10);
-			printf("Force %d levels\n", lvl);
+			if (!strcmp(optarg, "auto")) {
+				ret = read_u64("/sys/kernel/debug/page_tables/kernel_pt_levels", &lvl);
+				if (ret)
+					return pr_exit(opt, optarg, ret);
+			} else
+				lvl = strtoul(optarg, NULL, 10);
+			printf("Force %lld levels\n", lvl);
 			break;
 		case 'd':
 			g.dteoff = strtol(optarg, NULL, 16);
@@ -843,7 +862,12 @@ int main(int argc, char *argv[])
 			}
 			break;
 		case 'q':
-			qemupt = strtol(optarg, NULL, 16) >> PAGE_SHIFT;
+			if (!strcmp(optarg, "kernel")) {
+				ret = read_u64("/sys/kernel/debug/page_tables/kernel_pt", &qemupt);
+				if (ret)
+					return pr_exit(opt, optarg, ret);
+			} else
+				qemupt = strtol(optarg, NULL, 16) >> PAGE_SHIFT;
 			if (!qemupt)
 				return pr_exit(opt, optarg, qemupt);
 			break;
@@ -854,10 +878,20 @@ int main(int argc, char *argv[])
 				return pr_exit(opt, optarg, nptpt);
 			break;
 		case 'R':
-			g.rmp.cfg = strtol(optarg, NULL, 16);
+			if (!strcmp(optarg, "auto")) {
+				ret = read_u64("/sys/kernel/debug/page_tables/rmpcfg", &g.rmp.cfg);
+				if (ret)
+					return pr_exit(opt, optarg, ret);
+			} else
+				g.rmp.cfg = strtol(optarg, NULL, 16);
 			break;
 		case 'r':
-			g.rmptable = strtol(optarg, NULL, 16);
+			if (!strcmp(optarg, "auto")) {
+				ret = read_u64("/sys/kernel/debug/page_tables/rmptable", &g.rmptable);
+				if (ret)
+					return pr_exit(opt, optarg, ret);
+			} else
+				g.rmptable = strtol(optarg, NULL, 16);
 			if (!g.rmptable)
 				return pr_exit(opt, optarg, g.rmptable);
 			break;
@@ -866,6 +900,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'c':
 			g.color = 1;
+			printf("For nicer less, do: | less -R\n");
 			break;
 		case 'P':
 			g.pteoffset = 1;
@@ -880,10 +915,20 @@ int main(int argc, char *argv[])
 			size = strtol(optarg, NULL, 16);
 			break;
 		case 't':
-			g.swiotlb_start = strtol(optarg, NULL, 16) >> PAGE_SHIFT;
+			if (!strcmp(optarg, "auto")) {
+				ret = read_u64("/sys/kernel/debug/swiotlb/start", &g.swiotlb_start);
+				if (ret)
+					return pr_exit(opt, optarg, ret);
+			} else
+				g.swiotlb_start = strtol(optarg, NULL, 16) >> PAGE_SHIFT;
 			break;
 		case 'T':
-			g.swiotlb_end = strtol(optarg, NULL, 16) >> PAGE_SHIFT;
+			if (!strcmp(optarg, "auto")) {
+				ret = read_u64("/sys/kernel/debug/swiotlb/end", &g.swiotlb_end);
+				if (ret)
+					return pr_exit(opt, optarg, ret);
+			} else
+				g.swiotlb_end = strtol(optarg, NULL, 16) >> PAGE_SHIFT;
 			break;
 		case 'h':
 		default: /* '?' */
@@ -901,8 +946,7 @@ int main(int argc, char *argv[])
 		g.end = (start + size) >> PAGE_SHIFT;
 	if ((start || size) && (g.verbose > 0))
 		printf("Range: %llx..%llx (%lld pages)\n",
-		       g.start << PAGE_SHIFT, (g.end << PAGE_SHIFT) - 1,
-		       g.end + 1 - g.start);
+		       g.start << PAGE_SHIFT, (g.end << PAGE_SHIFT) - 1, g.end + 1 - g.start);
 
 	if (g.fd < 0) {
 		if (g.verbose > 0)
@@ -918,10 +962,9 @@ int main(int argc, char *argv[])
 			return ret;
 	}
 
-	if (g.verbose > 1) {
+	if (g.verbose > 1)
 		printf("dte=0x%llx rmptable=0x%llx qemu=0x%llx npt=0x%llx\n",
 			g.dteoff, g.rmptable, qemupt, nptpt);
-	}
 
 	if (fn < 8 && g.dteoff)
 		ret = dump_iommu_table((bus << 8) | (dev << 3) | fn);
