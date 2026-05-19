@@ -112,13 +112,13 @@ static int stream_enable(struct pci_ide *ide)
 		return 0;
 	}
 
-	ret = pci_ide_stream_enable(rp, ide);
+	ret = pci_ide_stream_enable(ide->pdev, ide);
 	if (ret)
 		return ret;
 
-	ret = pci_ide_stream_enable(ide->pdev, ide);
+	ret = pci_ide_stream_enable(rp, ide);
 	if (ret)
-		pci_ide_stream_disable(rp, ide);
+		pci_ide_stream_disable(ide->pdev, ide);
 
 	return ret;
 }
