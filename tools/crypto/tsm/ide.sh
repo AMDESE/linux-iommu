@@ -10,7 +10,7 @@ if [ ! -f $PCIUTILS/lspci ] ; then
 fi
 
 function streams() {
-	sudo $PCIUTILS/lspci -i $PCIUTILS/pci.ids -Dvvnns $1 | \
+	sudo $PCIUTILS/lspci -i $PCIUTILS/pci.ids -Dvvvnns $1 | \
 		grep -e "\($1\|Integrity & Data Encryption\|IDECap\|IDECtl\|$2 \)" | grep --color=always -E 'secure|insecure|$'
 }
 
