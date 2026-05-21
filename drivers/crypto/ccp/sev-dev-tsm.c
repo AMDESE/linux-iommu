@@ -209,6 +209,11 @@ static u8 streams_setup(struct pci_ide **ide, u8 *ids)
 
 			settings = pci_ide_to_settings(ide[i]->pdev, ide[i]);
 			settings->default_stream = 1;
+
+			struct pci_dev *rp = pcie_find_root_port(ide[i]->pdev);
+			settings = pci_ide_to_settings(rp, ide[i]);
+			settings->default_stream = 1;
+
 			def = true;
 		}
 
