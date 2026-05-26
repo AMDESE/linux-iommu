@@ -374,3 +374,41 @@ err_dev_data:
 	viommu_free_self_dev_data(iommu, dte_set);
 	return ret;
 }
+
+static int __maybe_unused alloc_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+						 u64 base, size_t size, u16 gid)
+{
+	int ret;
+	void *va = NULL;
+	u64 addr = base + (gid * size);
+
+	ret = viommu_priv_alloc_map_flush(iommu, addr, size, GFP_KERNEL | __GFP_ZERO, &va);
+	if (ret) {
+		*entry = NULL;
+		return ret;
+	}
+
+	*entry = (u64 *)va;
+
+	pr_debug("%s: entry=%#llx(%#llx), addr=%#llx, size=%#lx\n", __func__,
+		 (unsigned long long)*entry, iommu_virt_to_phys(*entry), addr, size);
+
+	return 0;
+}
+
+static void __maybe_unused free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+						  u64 base, size_t size, u16 gid)
+{
+	u64 addr = base + (gid * size);
+
+	if (!iommu || !iommu->viommu_pdom || !*entry)
+		return;
+
+	pr_debug("%s: entry=%#llx(%#llx), base=%#llx, addr=%#llx, size=%#lx\n",
+		 __func__, (unsigned long long)*entry,
+		 iommu_virt_to_phys(*entry), base, addr, size);
+
+	viommu_priv_unmap_flush_free(iommu, addr, size, *entry);
+
+	*entry = NULL;
+}
