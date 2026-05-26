@@ -138,6 +138,8 @@
 #define EVENT_TYPE_IOTLB_INV_TO	0x7
 #define EVENT_TYPE_INV_DEV_REQ	0x8
 #define EVENT_TYPE_INV_PPR_REQ	0x9
+#define EVENT_TYPE_VIOMMU_HW_ERR	0xc
+
 #define EVENT_TYPE_RMP_FAULT	0xd
 #define EVENT_TYPE_RMP_HW_ERR	0xe
 #define EVENT_DEVID_MASK	0xffff
@@ -250,6 +252,9 @@
 #define EVTLOG_LEN_MASK_DEF	(0x9ULL << EVTLOG_SIZE_SHIFT)
 #define EVTLOG_SIZE_MAX		SZ_512K /* 32K entries */
 #define EVTLOG_LEN_MASK_MAX	(0xFULL << EVTLOG_SIZE_SHIFT)
+
+/* Constants for vIOMMU event fields */
+#define EVENT_VFLAGS_MASK		GENMASK_ULL(31, 27)
 
 /* Constants for PPR Log handling */
 #define PPRLOG_ENTRY_SIZE	0x10
