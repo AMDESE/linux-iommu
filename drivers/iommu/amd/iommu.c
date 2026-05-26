@@ -942,8 +942,18 @@ static void amd_iommu_report_ppr_err(struct amd_iommu *iommu, volatile u32 *even
 	pci_dev_put(pdev);
 }
 
-static void iommu_print_event(struct amd_iommu *iommu, void *__evt)
+static u32 evtlog_used(u32 head, u32 tail)
 {
+	return (tail + amd_iommu_evtlog_size - head) % amd_iommu_evtlog_size;
+}
+
+/*
+ * Decode one event-log slot (or a GUEST_EVENT_FAULT pair).
+ * Returns the number of slots consumed.
+ */
+static unsigned int iommu_print_event(struct amd_iommu *iommu, u32 head)
+{
+	void *__evt = iommu->evt_buf + head;
 	struct device *dev = iommu->iommu.dev;
 	int type, devid, flags;
 	volatile u32 *event = __evt;
@@ -965,7 +975,7 @@ retry:
 		/* Did we hit the erratum? */
 		if (++count == LOOP_TIMEOUT) {
 			pr_err("No event written to event log\n");
-			return;
+			return 1;
 		}
 		udelay(1);
 		goto retry;
@@ -975,7 +985,7 @@ retry:
 
 	if (type == EVENT_TYPE_IO_FAULT) {
 		amd_iommu_report_page_fault(iommu, devid, pasid, address, flags, vflags);
-		return;
+		return 1;
 	}
 
 	switch (type) {
@@ -1023,9 +1033,83 @@ retry:
 	case EVENT_TYPE_INV_PPR_REQ:
 		amd_iommu_report_ppr_err(iommu, event, devid, address, flags);
 		break;
+	case EVENT_TYPE_GUEST_EVENT_FAULT:
+	{
+		u16 gid = FIELD_GET(EVENT_GID_MASK, event[1]);
+		u32 next = (head + EVTLOG_ENTRY_SIZE) % amd_iommu_evtlog_size;
+		volatile u32 *guest;
+		u32 live_tail;
+		int guest_type, wait;
+
+		dev_err_ratelimited(dev, "Event logged [GUEST_EVENT_FAULT gid=%#x flags=0x%04x vflags=%#x]\n",
+				    gid, flags, vflags);
+
+		/*
+		 * GUEST_EVENT_FAULT is paired with the original guest
+		 * event in the next log slot (possibly wrapped). The
+		 * poll-time tail can predate that slot. Wait until
+		 * occupancy is at least two entries, then retry a
+		 * type-0 pair slot the same way erratum 732 waits
+		 * for DMA visibility. Return 2 only when that slot
+		 * is already in [head, live_tail). iommu_poll_events()
+		 * re-reads tail each iteration so head cannot skip
+		 * past tail.
+		 */
+		wait = 0;
+		for (;;) {
+			live_tail = readl(iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
+			if (evtlog_used(head, live_tail) >=
+			    2 * EVTLOG_ENTRY_SIZE)
+				break;
+			if (++wait == LOOP_TIMEOUT) {
+				dev_err_ratelimited(dev, "Event logged [GUEST_EVENT_FAULT invalid guest-event (does not exist)]\n");
+				if (!amd_iommu_snp_en)
+					memset(__evt, 0, EVTLOG_ENTRY_SIZE);
+				return 1;
+			}
+			udelay(1);
+		}
+
+		guest = (volatile u32 *)(iommu->evt_buf + next);
+		wait = 0;
+		for (;;) {
+			guest_type = (guest[1] >> EVENT_TYPE_SHIFT) & EVENT_TYPE_MASK;
+			if (guest_type)
+				break;
+			if (++wait == LOOP_TIMEOUT) {
+				dev_err_ratelimited(dev, "Event logged [GUEST_EVENT_FAULT invalid guest-event %08x %08x %08x %08x]\n",
+						    guest[0], guest[1], guest[2], guest[3]);
+				if (!amd_iommu_snp_en) {
+					memset(__evt, 0, EVTLOG_ENTRY_SIZE);
+					memset((void *)guest, 0, EVTLOG_ENTRY_SIZE);
+				}
+				/* Occupancy already includes this slot.
+				 * Skip it so a late DMA fill is not
+				 * decoded as a host event.
+				 */
+				return 2;
+			}
+			udelay(1);
+		}
+
+		dev_err_ratelimited(dev, "Event logged [GUEST_EVENT_FAULT guest-event %08x %08x %08x %08x]\n",
+				    guest[0], guest[1], guest[2], guest[3]);
+
+		/*
+		 * Erratum 732: clear both pair slots so a stale guest
+		 * event is not decoded on the next poll. The second
+		 * slot may wrap to the start of the ring. Skip on SNP;
+		 * that buffer is not writable.
+		 */
+		if (!amd_iommu_snp_en) {
+			memset(__evt, 0, EVTLOG_ENTRY_SIZE);
+			memset((void *)guest, 0, EVTLOG_ENTRY_SIZE);
+		}
+		return 2;
+	}
 	case EVENT_TYPE_VIOMMU_HW_ERR:
 	{
-		u16 gid = event[0] & 0xFFFF;
+		u16 gid = FIELD_GET(EVENT_GID_MASK, event[0]);
 		u8 src = (event[0] >> 16) & 0x3;
 
 		dev_err(dev, "Event logged [VIOMMU_HW_ERR gid=%#x address=%#llx src=%#x flags=0x%04x vflags=%#x]\n",
@@ -1044,24 +1128,27 @@ retry:
 	 * SNP enabled system.
 	 */
 	if (!amd_iommu_snp_en)
-		memset(__evt, 0, 4 * sizeof(u32));
+		memset(__evt, 0, EVTLOG_ENTRY_SIZE);
+
+	return 1;
 }
 
 static void iommu_poll_events(struct amd_iommu *iommu)
 {
 	u32 head, tail;
+	unsigned int n;
 
 	head = readl(iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
-	tail = readl(iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
-
-	while (head != tail) {
-		iommu_print_event(iommu, iommu->evt_buf + head);
+	for (;;) {
+		tail = readl(iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
+		if (head == tail)
+			break;
+		n = iommu_print_event(iommu, head);
 
 		/* Update head pointer of hardware ring-buffer */
-		head = (head + EVTLOG_ENTRY_SIZE) % amd_iommu_evtlog_size;
+		head = (head + n * EVTLOG_ENTRY_SIZE) % amd_iommu_evtlog_size;
 		writel(head, iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
 	}
-
 }
 
 #ifdef CONFIG_IRQ_REMAP

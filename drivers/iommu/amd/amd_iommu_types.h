@@ -138,6 +138,7 @@
 #define EVENT_TYPE_IOTLB_INV_TO	0x7
 #define EVENT_TYPE_INV_DEV_REQ	0x8
 #define EVENT_TYPE_INV_PPR_REQ	0x9
+#define EVENT_TYPE_GUEST_EVENT_FAULT	0xb
 #define EVENT_TYPE_VIOMMU_HW_ERR	0xc
 
 #define EVENT_TYPE_RMP_FAULT	0xd
@@ -255,6 +256,7 @@
 
 /* Constants for vIOMMU event fields */
 #define EVENT_VFLAGS_MASK		GENMASK_ULL(31, 27)
+#define EVENT_GID_MASK			GENMASK(15, 0)
 
 /* Constants for PPR Log handling */
 #define PPRLOG_ENTRY_SIZE	0x10
