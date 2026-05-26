@@ -297,3 +297,58 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 
 	return 0;
 }
+
+static int __maybe_unused alloc_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+						 u64 base, size_t size, u16 gid)
+{
+	int ret;
+	u64 addr = base + (gid * size);
+	int nid = iommu && iommu->dev ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
+
+	*entry = (void *)iommu_alloc_pages_node_sz(nid, GFP_KERNEL | __GFP_ZERO, size);
+	if (!*entry)
+		return -ENOMEM;
+
+	ret = set_memory_uc((unsigned long)*entry, size >> PAGE_SHIFT);
+	if (ret)
+		goto err_out;
+
+	pr_debug("%s: entry=%#llx(%#llx), addr=%#llx, size=%#lx\n", __func__,
+		 (unsigned long  long)*entry, iommu_virt_to_phys(*entry), addr, size);
+
+	ret = iommu_map(&iommu->viommu_pdom->domain, addr,
+			iommu_virt_to_phys(*entry), size,
+			IOMMU_PROT_IR | IOMMU_PROT_IW, GFP_KERNEL);
+	if (ret)
+		goto cleanup_mem_attr;
+
+	return amd_iommu_flush_private_vm_region(iommu, iommu->viommu_pdom, addr, size);
+cleanup_mem_attr:
+	set_memory_wb((unsigned long)*entry, size >> PAGE_SHIFT);
+err_out:
+	iommu_free_pages(*entry);
+	*entry = NULL;
+	return ret;
+}
+
+static void __maybe_unused free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
+						  u64 base, size_t size, u16 gid)
+{
+	size_t unmapped;
+	u64 addr = base + (gid * size);
+
+	pr_debug("%s: entry=%#llx(%#llx), base=%#llx, addr=%#llx, size=%#lx\n",
+		 __func__, (unsigned long  long)*entry,
+		 iommu_virt_to_phys(*entry), base, addr, size);
+
+	if (!iommu || !iommu->viommu_pdom)
+		return;
+
+	unmapped = iommu_unmap(&iommu->viommu_pdom->domain, addr, size);
+	if (unmapped != size)
+		pr_warn("%s: unmapped %#zx of %#lx at %#llx\n", __func__, unmapped, size, addr);
+
+	set_memory_wb((unsigned long)*entry, size >> PAGE_SHIFT);
+	iommu_free_pages(*entry);
+	*entry = NULL;
+}
