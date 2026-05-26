@@ -11,6 +11,7 @@
 
 #include "amd_iommu_types.h"
 
+void iommu_reset_vmmio(struct amd_iommu *iommu, u16 gid);
 extern int amd_iommu_evtlog_size;
 extern int amd_iommu_pprlog_size;
 
