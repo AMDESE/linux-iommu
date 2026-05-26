@@ -1517,6 +1517,13 @@ static void build_inv_irt(struct iommu_cmd *cmd, u16 devid)
 	CMD_SET_TYPE(cmd, CMD_INV_IRT);
 }
 
+static void build_reset_vmmio(struct iommu_cmd *cmd, u16 gid)
+{
+	memset(cmd, 0, sizeof(*cmd));
+	cmd->data[0] = gid | RESET_MMIO_ALL_FLAG | RESET_MMIO_VCMD_FLAG;
+	CMD_SET_TYPE(cmd, CMD_RESET_VMMIO);
+}
+
 /*
  * Writes the command to the IOMMUs command buffer and informs the
  * hardware about the new command.
@@ -1768,6 +1775,20 @@ void amd_iommu_flush_all_caches(struct amd_iommu *iommu)
 		amd_iommu_flush_irt_all(iommu);
 		amd_iommu_flush_tlb_all(iommu);
 	}
+}
+
+int amd_iommu_reset_vmmio(struct amd_iommu *iommu, u16 gid)
+{
+	int ret;
+	struct iommu_cmd cmd;
+
+	build_reset_vmmio(&cmd, gid);
+
+	ret = iommu_queue_command(iommu, &cmd);
+	if (ret)
+		return ret;
+
+	return iommu_completion_wait(iommu);
 }
 
 /*
