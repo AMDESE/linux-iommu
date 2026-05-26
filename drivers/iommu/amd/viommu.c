@@ -45,6 +45,18 @@
 
 LIST_HEAD(viommu_devid_map);
 
+static int viommu_enable(struct amd_iommu *iommu)
+{
+	/* The GstBufferTRPMode feature is checked by set and test */
+	if (!iommu_feature_enable_and_check(iommu, CONTROL_GSTBUFFERTRPMODE))
+		return -EINVAL;
+
+	iommu_feature_enable(iommu, CONTROL_VCMD_EN);
+	iommu_feature_enable(iommu, CONTROL_VIOMMU_EN);
+
+	return 0;
+}
+
 static int viommu_init_pci_vsc(struct amd_iommu *iommu)
 {
 	iommu->vsc_offset = pci_find_capability(iommu->dev, PCI_CAP_ID_VNDR);
@@ -377,7 +389,7 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 
 	ret = viommu_private_space_init(iommu);
 	if (ret)
-		return ret;
+		goto err_unmap_vf;
 
 	/* Set DTE for IOMMU device */
 	amd_iommu_make_clear_dte(iommu, iommu->devid, &new);
@@ -385,8 +397,16 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 	amd_iommu_update_dte(iommu, iommu->viommu_dev_data, &new);
 	dte_set = true;
 
+	ret = viommu_enable(iommu);
+	if (ret)
+		goto err_private_space;
+
 	return 0;
 
+err_private_space:
+	viommu_private_space_uninit(iommu);
+err_unmap_vf:
+	amd_viommu_uninit(iommu);
 err_dev_data:
 	viommu_free_self_dev_data(iommu, dte_set);
 	return ret;
