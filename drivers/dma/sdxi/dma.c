@@ -394,8 +394,10 @@ static int sdxi_dma_alloc_chan_resources(struct dma_chan *dma_chan)
 	 * interrupt and source and destination access for copies.
 	 */
 	sdchan->akey = sdxi_alloc_akey(sdchan->cxt);
-	if (!sdchan->akey)
+	if (!sdchan->akey) {
+		err = -ENOMEM;
 		goto free_vector;
+	}
 
 	*sdchan->akey = (typeof(*sdchan->akey)) {
 		.intr_num = cpu_to_le16(FIELD_PREP(SDXI_AKEY_ENT_VL, 1) |
