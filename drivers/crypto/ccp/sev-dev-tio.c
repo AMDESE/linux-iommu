@@ -550,9 +550,12 @@ struct sev_data_tio_tdi_reclaim {
 
 #define TIO_TDI_BIND_RUN_FORCE		BIT(0)
 
+#define TIO_TDI_BIND_CMD_VERSION                0x01
+
 struct sev_data_tio_tdi_bind {
 	u32 length;
-	u32 reserved;
+	u8 version;
+	u8 reserved[3];
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
@@ -563,6 +566,8 @@ struct sev_data_tio_tdi_bind {
 	u16 queue_id;
 	u16 host_domain_id;
 	u8  reserved2[6];
+	u64 mmio_reporting_offset;
+	u64 reserved3;
 } __packed;
 
 /**
@@ -1563,6 +1568,7 @@ int sev_tio_tdi_bind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
 {
 	struct sev_data_tio_tdi_bind b = {
 		.length = sizeof(b),
+		.version = TIO_TDI_BIND_CMD_VERSION,
 	};
 	int ret;
 	int domid;
@@ -1579,6 +1585,7 @@ int sev_tio_tdi_bind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
 	b.guest_device_id = guest_rid;
 	b.gctx_paddr = tdi_data->gctx_paddr;
 	b.run_flags = force_run ? TIO_TDI_BIND_RUN_FORCE : 0;
+	b.mmio_reporting_offset = tdi_data->mmio_reporting_offset;
 
 	/* TODO: queue_id update */
 	domid = amd_iommu_get_dev_domid(pdev);
