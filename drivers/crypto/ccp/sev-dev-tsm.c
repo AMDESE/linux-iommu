@@ -634,9 +634,10 @@ static struct pci_tdi *tdi_bind(struct pci_dev *pdev, struct kvm *kvm, u32 tdi_i
 	struct tsm_dsm_tio *dev_data = &dsm->data;
 	struct tsm_tdi_tio *tdi_data = &ttdi->data;
 	int dom = pci_domain_nr(pdev->bus);
-	u64 gctx;
+	u64 gctx, max_res_len = 0;
+	struct resource *r;
 	u32 asid;
-	int ret;
+	int ret, i;
 
 	if (!ttdi)
 		return ERR_PTR(-ENOMEM);
@@ -648,6 +649,11 @@ static struct pci_tdi *tdi_bind(struct pci_dev *pdev, struct kvm *kvm, u32 tdi_i
 
 	gctx = __psp_pa((u64) sev->snp_context);
 	asid = sev->asid;
+
+	pci_dev_for_each_resource(pdev, r, i)
+		max_res_len = max(max_res_len, pci_resource_len(pdev, i));
+
+	tdi_data->mmio_reporting_offset = (get_random_u64() & ~(max_res_len - 1) & ~(0xFULL<<60)) >> 12;
 
 	ret = sev_tio_tdi_create(dev_data, tdi_data, pci_dev_id(pdev), dom);
 	if (ret)
