@@ -76,7 +76,7 @@ static void set_dte_entry(struct amd_iommu *iommu,
 			  struct iommu_dev_data *dev_data,
 			  phys_addr_t top_paddr, unsigned int top_level);
 
-static int device_flush_dte(struct iommu_dev_data *dev_data);
+static int device_flush_dte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data);
 
 static void amd_iommu_change_top(struct pt_iommu *iommu_table,
 				 phys_addr_t top_paddr, unsigned int top_level);
@@ -213,7 +213,7 @@ void amd_iommu_update_dte(struct amd_iommu *iommu,
 {
 	update_dte256(iommu, dev_data, new);
 	clone_aliases(iommu, dev_data->dev);
-	device_flush_dte(dev_data);
+	device_flush_dte(iommu, dev_data);
 	amd_iommu_completion_wait(iommu);
 }
 
@@ -1716,9 +1716,8 @@ static int device_flush_dte_alias(struct pci_dev *pdev, u16 alias, void *data)
 /*
  * Command send function for invalidating a device table entry
  */
-static int device_flush_dte(struct iommu_dev_data *dev_data)
+static int device_flush_dte(struct amd_iommu *iommu, struct iommu_dev_data *dev_data)
 {
-	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
 	struct pci_dev *pdev = NULL;
 	struct amd_iommu_pci_seg *pci_seg;
 	u16 alias;
@@ -2691,10 +2690,8 @@ static void amd_iommu_change_top(struct pt_iommu *iommu_table,
 		/* Update the HW references with the new level and top ptr */
 		set_dte_entry(iommu, dev_data, top_paddr, top_level);
 		clone_aliases(iommu, dev_data->dev);
+		device_flush_dte(iommu, dev_data);
 	}
-
-	list_for_each_entry(dev_data, &pdom->dev_list, list)
-		device_flush_dte(dev_data);
 
 	domain_flush_complete(pdom);
 }
@@ -3127,7 +3124,7 @@ static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 		spin_unlock(&dev_data->dte_lock);
 
 		/* Flush device DTE */
-		device_flush_dte(dev_data);
+		device_flush_dte(iommu, dev_data);
 		domain_flush = true;
 	}
 
