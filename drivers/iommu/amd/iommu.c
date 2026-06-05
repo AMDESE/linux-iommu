@@ -388,7 +388,7 @@ static struct amd_iommu *rlookup_amd_iommu(struct device *dev)
 	return __rlookup_amd_iommu(seg, PCI_SBDF_TO_DEVID(devid));
 }
 
-static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
+struct iommu_dev_data *amd_iommu_alloc_dev_data(struct amd_iommu *iommu, u16 devid)
 {
 	struct iommu_dev_data *dev_data;
 	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
@@ -510,7 +510,7 @@ static struct iommu_dev_data *find_dev_data(struct amd_iommu *iommu, u16 devid)
 	dev_data = search_dev_data(iommu, devid);
 
 	if (dev_data == NULL) {
-		dev_data = alloc_dev_data(iommu, devid);
+		dev_data = amd_iommu_alloc_dev_data(iommu, devid);
 		if (!dev_data)
 			return NULL;
 
