@@ -206,7 +206,7 @@ def parse_report(data):
         pba = '+' if (range_attributes & (1 << 1)) else '-'
         nontee = '+' if (range_attributes & (1 << 2)) else '-'
         upd = '+' if (range_attributes & (1 << 3)) else '-'
-        print(f"[{i}] #{range_id} {first_page:016x} +{num << 12:x} MSIX{msix} PBA{pba} NonTEE{nontee} Upd{upd}")
+        print(f"[{i}] #{range_id} {first_page << 12:016x} +{num << 12:x} MSIX{msix} PBA{pba} NonTEE{nontee} Upd{upd}")
         if (range_attributes & 0xFFF0):
             print(f"[{i}] WARN: reserved={range_attributes:#x}")
         off += 16
