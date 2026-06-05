@@ -200,7 +200,7 @@ static void set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 		return;
 
 	parent = ndom->viommu->parent;
-	amd_iommu_make_clear_dte(dev_data, new);
+	amd_iommu_make_clear_dte(iommu, dev_data->devid, new);
 
 	/* Retrieve the current pagetable info via the IOMMU PT API. */
 	pt_iommu_amdv1_hw_info(&parent->amdv1, &pt_info);
