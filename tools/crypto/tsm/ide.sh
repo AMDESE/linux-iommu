@@ -1,7 +1,7 @@
 #!/bin/bash
 
 DEVPATH=$(readlink /sys/bus/pci/devices/$1)
-RP=$(echo $DEVPATH | sed -n 's#.*/\([0-9a-f]\{4\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9]\)/.*#\1#p')
+RP=$(echo $DEVPATH | sed -n 's#.*/pci[^\/]\+/\([0-9a-f]\{4\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9]\)/.*#\1#p')
 
 PCIUTILS=~/pciutils
 
