@@ -436,8 +436,8 @@ static int mmio_validate_range(struct snp_guest_dev *snp_dev, struct pci_dev *pd
 	struct tio_msg_mmio_validate_rsp *rsp __free(kfree_sensitive) = kzalloc(resp_len, GFP_KERNEL);
 	struct tio_msg_mmio_validate_req req = {
 		.tdi_id = tdi_id,
-		.subrange_base = start,
-		.subrange_page_count = size >> PAGE_SHIFT,
+		.subrange_base = start >> 12,
+		.subrange_page_count = size >> 12,
 		.range_offset = 0,
 		.validated = !invalidate, /* Desired value to set RMP.Validated for the range */
 		.force_validated = 0,
