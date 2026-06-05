@@ -76,6 +76,7 @@ struct tsm_tdi_tio {
 	u64 gctx_paddr;
 	u32 asid;
 	bool unfence;
+	u64 mmio_reporting_offset;
 };
 
 /* Describes TSM structure for TDI pointed by pci_dev->tsm->tdi */
