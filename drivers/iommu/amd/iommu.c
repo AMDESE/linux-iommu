@@ -2237,7 +2237,7 @@ static void set_dte_entry(struct amd_iommu *iommu,
 	struct gcr3_tbl_info *gcr3_info = &dev_data->gcr3_info;
 	struct dev_table_entry *dte = &get_dev_table(iommu)[dev_data->devid];
 
-	amd_iommu_make_clear_dte(dev_data, &new);
+	amd_iommu_make_clear_dte(iommu, dev_data->devid, &new);
 
 	old_domid = READ_ONCE(dte->data[1]) & DTE_DOMID_MASK;
 	if (gcr3_info->gcr3_tbl)
@@ -2269,7 +2269,7 @@ static void clear_dte_entry(struct amd_iommu *iommu, struct iommu_dev_data *dev_
 {
 	struct dev_table_entry new = {};
 
-	amd_iommu_make_clear_dte(dev_data, &new);
+	amd_iommu_make_clear_dte(iommu, dev_data->devid, &new);
 	amd_iommu_update_dte(iommu, dev_data, &new);
 }
 
