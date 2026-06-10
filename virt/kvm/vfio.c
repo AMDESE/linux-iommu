@@ -109,6 +109,22 @@ static void kvm_spapr_tce_release_vfio_group(struct kvm *kvm,
 }
 #endif
 
+static struct iommu_group *kvm_vfio_device_file_iommu_group(struct file *file)
+{
+	struct iommu_group *(*fn)(struct file *file);
+	struct iommu_group *ret;
+
+	fn = symbol_get(vfio_device_file_iommu_group);
+	if (!fn)
+		return NULL;
+
+	ret = fn(file);
+
+	symbol_put(vfio_device_file_iommu_group);
+
+	return ret;
+}
+
 /*
  * Groups/devices can use the same or different IOMMU domains. If the same
  * then adding a new group/device may change the coherency of groups/devices
@@ -385,3 +401,41 @@ void kvm_vfio_ops_exit(void)
 {
 	kvm_unregister_device_ops(KVM_DEV_TYPE_VFIO);
 }
+
+int kvm_vfio_for_each(struct kvm *kvm, kvm_vfio_for_each_fn fn, void *p)
+{
+	struct kvm_device *dev;
+	int ret = -ENODEV;
+
+	list_for_each_entry(dev, &kvm->devices, vm_node) {
+		if (dev->ops != &kvm_vfio_ops)
+			continue;
+
+		struct kvm_vfio *kv = dev->private;
+		struct kvm_vfio_file *kvf;
+
+		mutex_lock(&kv->lock);
+
+		list_for_each_entry(kvf, &kv->file_list, node) {
+			struct iommu_group *iommu_group = kvm_vfio_device_file_iommu_group(kvf->file);
+
+			if (WARN_ON_ONCE(!iommu_group)) {
+				ret = -EFAULT;
+				break;
+			}
+
+			ret = fn(iommu_group, p);
+
+			iommu_group_put(iommu_group);
+
+			if (ret)
+				break;
+		}
+
+		mutex_unlock(&kv->lock);
+		break;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(kvm_vfio_for_each);

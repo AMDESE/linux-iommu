@@ -2271,6 +2271,12 @@ struct iommu_domain *iommu_get_dma_domain(struct device *dev)
 	return dev->iommu_group->default_domain;
 }
 
+struct iommu_domain *iommu_group_get_domain(struct iommu_group *group)
+{
+	return group->domain;
+}
+EXPORT_SYMBOL_GPL(iommu_group_get_domain);
+
 static void *iommu_make_pasid_array_entry(struct iommu_domain *domain,
 					  struct iommu_attach_handle *handle)
 {
