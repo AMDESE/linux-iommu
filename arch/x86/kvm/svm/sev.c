@@ -3798,64 +3798,58 @@ static int rmp_psio(void *snp_context, struct iommu_domain *domain,
 
 DEFINE_STATIC_CALL(psmash_io, rmp_psio);
 
-static int call_psmash_io(struct kvm *kvm, u64 pfn, u64 gfn)
+struct psmash_io_for_each_param {
+	kvm_pfn_t pfn;
+	void *snp_context;
+	bool rmp_smashed;
+};
+
+static int psmash_io_for_each_cb(struct iommu_group *group, void *p)
 {
-	struct kvm_sev_info *sev;
-	struct pci_dev *pdev = NULL;
-	bool found = false, printed_one_dom_warning = false;
-	/* The psmash_io stub returns ENODEV by default, do the same here to fallback to psmash() */
-	int ret = -ENODEV;
+	struct iommu_domain *domain = iommu_group_get_domain(group);
+	struct psmash_io_for_each_param *pp = p;
 
-	if (!kvm)
-		return ret;
-
-	sev = &to_kvm_svm(kvm)->sev_info;
-	if (!sev->es_active)
-		return ret;
-
-	for_each_pci_dev(pdev) {
-		struct pci_tdi *tdi = (pdev)->tsm ? (pdev)->tsm->tdi : NULL;
-
-		if (!tdi)
-			continue;
-
-		if (tdi->kvm != kvm)
-			continue;
-
-		if (found) {
-			if (!printed_one_dom_warning)
-				pci_err(pdev, "TMPM does not like multiple domains");
-			printed_one_dom_warning = true;
-			goto put_continue;
-		}
-
-		struct iommu_domain *domain = iommu_get_domain_for_dev(&pdev->dev);
-
-		if (!domain) {
-			pci_err(pdev, "Passed through device must have a domain assigned");
-			goto put_continue;
-		}
-
-		found = true;
-		ret = static_call(psmash_io)(sev->snp_context, domain, pfn << PAGE_SHIFT);
-put_continue:
-		if (ret == -ENODEV)
-			break;
-		continue;
+	if (!domain) {
+		pr_err("Passed through device must have a domain assigned");
+		return -EFAULT;
 	}
+
+	if (pp->rmp_smashed) {
+		pr_warn("___K___ %s %u: One group is smashed, that's the maximum\n",
+			__func__, __LINE__);
+		return -EEXIST;
+	}
+
+	pr_err("___K___ %s %u\n", __func__, __LINE__);
+	int ret = static_call(psmash_io)(pp->snp_context, domain, pp->pfn << PAGE_SHIFT);
+	if (ret)
+		pr_err("___K___ %s %u: failed %d\n", __func__, __LINE__, ret);
+	if (!ret)
+		pp->rmp_smashed = true;
 
 	return ret;
 }
 
 static int snp_rmptable_psmash(struct kvm *kvm, kvm_pfn_t pfn, gfn_t gfn)
 {
+	struct psmash_io_for_each_param pp = {};
+	struct kvm_sev_info *sev;
 	int ret;
 
-	pfn = pfn & ~(KVM_PAGES_PER_HPAGE(PG_LEVEL_2M) - 1);
+	if (kvm) {
+		sev = &to_kvm_svm(kvm)->sev_info;
+		pfn = pfn & ~(KVM_PAGES_PER_HPAGE(PG_LEVEL_2M) - 1);
 
-	ret = call_psmash_io(kvm, pfn, gfn);
-	if (!ret)
-		return 0;
+		pp.pfn = pfn;
+		pp.snp_context = sev->snp_context;
+		ret = kvm_vfio_for_each(kvm, psmash_io_for_each_cb, &pp);
+
+		pr_err("___K___ %s %u: pfn=%llx gfn=%llx ctx=%lx => %d%s\n", __func__, __LINE__,
+		       pp.pfn, gfn, (ulong) pp.snp_context, ret,
+		       (ret && !pp.rmp_smashed) ? " calling PSMASH":"");
+		if (!ret || pp.rmp_smashed)
+			return 0;
+	}
 
 	/*
 	 * PSMASH_FAIL_INUSE indicates another processor is modifying the

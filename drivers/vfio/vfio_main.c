@@ -1446,6 +1446,16 @@ static struct vfio_device *vfio_device_from_file(struct file *file)
 	return df->device;
 }
 
+struct iommu_group *vfio_device_file_iommu_group(struct file *file)
+{
+	struct vfio_device *vdev = vfio_device_from_file(file);
+	struct vfio_group *group = vdev ? vdev->group : NULL;
+	struct iommu_group *iommu_group = group ? group->iommu_group : NULL;
+
+	return iommu_group ? iommu_group_ref_get(iommu_group) : NULL;
+}
+EXPORT_SYMBOL_GPL(vfio_device_file_iommu_group);
+
 /**
  * vfio_file_is_valid - True if the file is valid vfio file
  * @file: VFIO group file or VFIO device file
