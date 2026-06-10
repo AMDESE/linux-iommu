@@ -323,6 +323,7 @@ void vfio_combine_iova_ranges(struct rb_root_cached *root, u32 cur_nodes,
  * External user API
  */
 struct iommu_group *vfio_file_iommu_group(struct file *file);
+struct iommu_group *vfio_device_file_iommu_group(struct file *file);
 
 #if IS_ENABLED(CONFIG_VFIO_GROUP)
 bool vfio_file_is_group(struct file *file);

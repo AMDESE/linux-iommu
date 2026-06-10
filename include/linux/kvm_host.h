@@ -2674,6 +2674,8 @@ static inline int kvm_vfio_dmabuf_get_pfn(struct kvm *kvm,
 	return -EIO;
 }
 #endif
+typedef int (*kvm_vfio_for_each_fn)(struct iommu_group *group, void *p);
+int kvm_vfio_for_each(struct kvm *kvm, kvm_vfio_for_each_fn fn, void *p);
 
 unsigned long kvm_get_vm_memory_attributes(struct kvm *kvm, gfn_t gfn);
 int kvm_vm_ioctl_set_mem_attributes(struct kvm *kvm,
