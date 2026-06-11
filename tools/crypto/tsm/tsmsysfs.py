@@ -40,25 +40,36 @@ def skip_msgs(cmds, buf, offset=0):
         if expected_cmd != sh.request_response_code:
             print(f"Unexpected command at offset {pos}: {sh.request_response_code:02x}")
 
-        #print("pos={} cmd={:x}".format(pos, sh.request_response_code))
-
         # Skip based on message type
         if sh.request_response_code == SPDM_GET_VERSION:
+            print("pos={:x} cmd={:x} SPDM_GET_VERSION".format(pos, sh.request_response_code))
             pos += 4
         elif sh.request_response_code == SPDM_VERSION:
+            print("pos={:x} cmd={:x} SPDM_VERSION".format(pos, sh.request_response_code))
             pos += 6 + buf[pos + 5] * 2
         elif sh.request_response_code == SPDM_GET_CAPABILITIES:
+            print("pos={:x} cmd={:x} SPDM_GET_CAPABILITIES".format(pos, sh.request_response_code))
             pos += 20
         elif sh.request_response_code == SPDM_CAPABILITIES:
+            print("pos={:x} cmd={:x} SPDM_CAPABILITIES".format(pos, sh.request_response_code))
             pos += 20
         elif sh.request_response_code == SPDM_NEGOTIATE_ALGORITHMS:
+            print("pos={:x} cmd={:x} SPDM_NEGOTIATE_ALGORITHMS".format(pos, sh.request_response_code))
             pos += buf[pos + 4]
         elif sh.request_response_code == SPDM_ALGORITHMS:
+            print("pos={:x} cmd={:x} SPDM_ALGORITHMS".format(pos, sh.request_response_code))
             pos += buf[pos + 4]
         elif sh.request_response_code == SPDM_GET_MEASUREMENTS:
-            pos += 37 if (sh.param1 & 1) else 5
+            print("pos={:x} cmd={:x} SPDM_GET_MEASUREMENTS".format(pos, sh.request_response_code))
+            if (sh.param1 & 1):
+                 print(f"Req nonce={hex_dump(buf[pos + 4:pos + 36], 32, True)}")
+                 pos += 37
+            else:
+                 pos += 5
         elif sh.request_response_code == SPDM_MEASUREMENTS:
+            print("pos={:x} cmd={:x} SPDM_MEASUREMENTS".format(pos, sh.request_response_code))
             pos += 8  # Skip header only, don't skip message body
+            print("Parsing meas starting 0x{:x}".format(pos))
 
     return min(len(buf), pos - start_pos)
 
@@ -86,13 +97,16 @@ def parse_measurements(data, transcript=True):
         if transcript:
             off += skip_msgs(req_resp, data, off)
             if off >= 8:
-                meas_len = data[off - 8 + 5] + (data[off - 8 + 6] << 8)
+                meas_len = data[off - 8 + 5] + (data[off - 8 + 6] << 8) + (data[off - 8 + 7] << 16)
+                print("NumberOfBlocks={:d}".format(data[off - 8 + 4]))
             else:
                 meas_len = len(data)
         else:
             meas_len = len(data)
 
-        while off < meas_len and off < len(data):
+        print("Measurements block {:x}..{:x}".format(off, off + meas_len - 1))
+        meas_end = off + meas_len
+        while off < meas_end and off < len(data):
             if off + 4 > len(data):
                 break
 
@@ -100,11 +114,12 @@ def parse_measurements(data, transcript=True):
             mb_index, mb_spec, mb_size = struct.unpack('<BBH', data[off:off+4])
             dmtf = mb_spec & 1
 
-            print(f"#{mb_index} ({mb_size}) ", end='')
+            print(f"#{mb_index} len={mb_size} ", end='')
 
             if dmtf:
                 # DMTF measurement block
                 if off + 4 + mb_size > len(data):
+                    print("222")
                     break
 
                 h_type, h_size = struct.unpack('<BH', data[off+4:off+7])
@@ -113,7 +128,7 @@ def parse_measurements(data, transcript=True):
                 type_name = MEASUREMENT_TYPES[what] if what < len(MEASUREMENT_TYPES) else "reserved"
                 digest_or_raw = "digest" if (h_type & 0x80) else "raw"
 
-                print(f"{off:x} {h_type:02x}=[{digest_or_raw} {type_name} {h_type:x} {h_size:x}]: ", end='')
+                print(f"{off:x}..{off+mb_size-1:x} {h_type:02x}=[{digest_or_raw} {type_name} {h_type:x} {h_size:x}]: ", end='')
 
                 if what == 5:  # DevDbg
                     if off + 6 + 8 <= len(data):
@@ -135,6 +150,9 @@ def parse_measurements(data, transcript=True):
 
             off += 4 + mb_size
             print("...")
+
+        print(f"Resp nonce={hex_dump(data[off:off + 32], 32, True)}")
+        print("OpaqueDataLength={:x}".format(struct.unpack('<H', data[off+32:off+34])[0]))
 
         if transcript:
             off += meas_len + 34
