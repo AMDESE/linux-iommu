@@ -927,7 +927,10 @@ static ssize_t meas_nonce_show(struct device *dev, struct device_attribute *attr
 	return bin_show(tsm->nonce, sizeof(tsm->nonce), buf, PAGE_SIZE);
 }
 
-static DEVICE_ATTR_RW(meas_nonce);
+#define DEVICE_ATTR_USER_RW(_name) \
+	struct device_attribute dev_attr_##_name = __ATTR_RW_MODE(_name, 0664)
+
+static DEVICE_ATTR_USER_RW(meas_nonce);
 
 static ssize_t dsm_status_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
