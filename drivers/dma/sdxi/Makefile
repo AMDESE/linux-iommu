@@ -15,7 +15,8 @@ sdxi-objs += \
 	process.o     \
 	ring.o        \
 	sysfs.o       \
-	trace.o
+	trace.o       \
+	vendor.o
 
 sdxi-$(CONFIG_PCI_MSI) += pci.o
 

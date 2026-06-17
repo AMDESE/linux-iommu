@@ -2,7 +2,7 @@
 /*
  * SDXI vendor-command handler registry.
  *
- * Transitional stub until the full vendor handler infrastructure lands.
+ * Copyright (C) 2026 Advanced Micro Devices, Inc.
  */
 
 #ifndef __DMA_SDXI_VENDOR_H
@@ -37,6 +37,6 @@ int sdxi_vendor_get(const u8 guid[16],
 		    const struct sdxi_vendor_handler **handler_out);
 void sdxi_vendor_put(const struct sdxi_vendor_handler *handler);
 int sdxi_vendor_find_opcode_type(struct sdxi_dev *sdxi, const u8 guid[16],
-			 unsigned int timeout_ms, u16 *opcode_type);
+				 unsigned int timeout_ms, u16 *opcode_type);
 
 #endif /* __DMA_SDXI_VENDOR_H */
