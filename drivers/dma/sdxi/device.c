@@ -2,37 +2,36 @@
 /*
  * SDXI hardware device driver
  *
- * Copyright Advanced Micro Devices, Inc.
+ * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
  */
 
-#include <linux/bitfield.h>
-#include <linux/cache.h>
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
-#include <linux/idr.h>
-#include <linux/iopoll.h>
-#include <linux/jiffies.h>
+#include <linux/interrupt.h>
 #include <linux/log2.h>
-#include <linux/minmax.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/pci.h>
 #include <linux/slab.h>
-#include <linux/time.h>
-#include <linux/xarray.h>
+#include <asm/mmu.h>
 
+#include "admin.h"
 #include "context.h"
+#include "descriptor.h"
 #include "dma.h"
 #include "hw.h"
-#include "mmio.h"
 #include "sdxi.h"
 
 enum sdxi_fn_gsv {
-	SDXI_GSV_STOP     = 0,
-	SDXI_GSV_INIT     = 1,
-	SDXI_GSV_ACTIVE   = 2,
-	SDXI_GSV_STOPG_SF = 3,
-	SDXI_GSV_STOPG_HD = 4,
-	SDXI_GSV_ERROR    = 5,
+	SDXI_GSV_STOP,
+	SDXI_GSV_INIT,
+	SDXI_GSV_ACTIVE,
+	SDXI_GSV_STOPG_SF,
+	SDXI_GSV_STOPG_HD,
+	SDXI_GSV_ERROR,
 };
 
 static const char *const gsv_strings[] = {
@@ -55,34 +54,17 @@ static const char *gsv_str(enum sdxi_fn_gsv gsv)
 }
 
 enum sdxi_fn_gsr {
-	SDXI_GSRV_RESET   = 0,
-	SDXI_GSRV_STOP_SF = 1,
-	SDXI_GSRV_STOP_HD = 2,
-	SDXI_GSRV_ACTIVE  = 3,
+	SDXI_GSRV_RESET,
+	SDXI_GSRV_STOP_SF,
+	SDXI_GSRV_STOP_HD,
+	SDXI_GSRV_ACTIVE,
 };
 
 static enum sdxi_fn_gsv sdxi_dev_gsv(const struct sdxi_dev *sdxi)
 {
-	u64 sts0 = sdxi_read64(sdxi, SDXI_MMIO_STS0);
-	enum sdxi_fn_gsv gsv = FIELD_GET(SDXI_MMIO_STS0_FN_GSV, sts0);
-
-	switch (gsv) {
-	case SDXI_GSV_STOP ... SDXI_GSV_ERROR:
-		break;
-	default:
-		dev_warn_ratelimited(sdxi->dev, "unknown gsv %u\n", gsv);
-		break;
-	}
-
-	return gsv;
+	return (enum sdxi_fn_gsv)FIELD_GET(SDXI_MMIO_STS0_FN_GSV,
+					sdxi_read64(sdxi, SDXI_MMIO_STS0));
 }
-
-static const unsigned long gsv_poll_interval_us = USEC_PER_MSEC;
-static const unsigned long gsv_transition_timeout_us = USEC_PER_SEC;
-
-#define sdxi_dev_gsv_poll(sdxi, val, cond)				\
-	read_poll_timeout(sdxi_dev_gsv, val, cond, gsv_poll_interval_us, \
-			  gsv_transition_timeout_us, false, sdxi)
 
 static void sdxi_write_fn_gsr(struct sdxi_dev *sdxi, enum sdxi_fn_gsr cmd)
 {
@@ -92,98 +74,109 @@ static void sdxi_write_fn_gsr(struct sdxi_dev *sdxi, enum sdxi_fn_gsr cmd)
 	sdxi_write64(sdxi, SDXI_MMIO_CTL0, ctl0);
 }
 
-/*
- * Transition the function from stopped state to active.
- * See SDXI 1.0 4.1 SDXI Function State.
- */
 static int sdxi_dev_start(struct sdxi_dev *sdxi)
 {
-	enum sdxi_fn_gsv status = sdxi_dev_gsv(sdxi);
-	int ret;
+	unsigned long deadline;
+	enum sdxi_fn_gsv status;
 
+	status = sdxi_dev_gsv(sdxi);
 	if (status != SDXI_GSV_STOP) {
-		dev_err(sdxi->dev,
-			"can't activate busy device (unexpected gsv: %s)\n",
-			gsv_str(status));
-		return -EBUSY;
+		sdxi_err(sdxi,
+			 "can't activate busy device (unexpected gsv: %s)\n",
+			 gsv_str(status));
+		return -EIO;
 	}
 
 	sdxi_write_fn_gsr(sdxi, SDXI_GSRV_ACTIVE);
 
-	ret = sdxi_dev_gsv_poll(sdxi, status,
-				status == SDXI_GSV_ACTIVE ||
-				status == SDXI_GSV_ERROR);
-	if (ret) {
-		dev_err(sdxi->dev, "activation timed out, current state: %s\n",
-			gsv_str(status));
-		return ret;
-	}
+	deadline = jiffies + msecs_to_jiffies(1000);
+	do {
+		status = sdxi_dev_gsv(sdxi);
+		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, gsv_str(status));
 
-	if (status == SDXI_GSV_ERROR) {
-		dev_err(sdxi->dev, "went to error state during activation\n");
-		return -EIO;
-	}
+		switch (status) {
+		case SDXI_GSV_ACTIVE:
+			sdxi_dbg(sdxi, "activated\n");
+			return 0;
+		case SDXI_GSV_ERROR:
+			sdxi_err(sdxi, "went to error state\n");
+			return -EIO;
+		case SDXI_GSV_INIT:
+		case SDXI_GSV_STOP:
+			/* transitional states, wait */
+			fsleep(1000);
+			break;
+		default:
+			sdxi_err(sdxi, "unexpected gsv %u, giving up\n", status);
+			return -EIO;
+		}
+	} while (time_before(jiffies, deadline));
 
-	dev_dbg(sdxi->dev, "activated\n");
-	return 0;
+	sdxi_err(sdxi, "activation timed out, current status %u\n",
+		sdxi_dev_gsv(sdxi));
+	return -ETIMEDOUT;
 }
 
 /* Get the device to the GSV_STOP state. */
 static int sdxi_dev_stop(struct sdxi_dev *sdxi)
 {
-	enum sdxi_fn_gsv status = sdxi_dev_gsv(sdxi);
-	int ret;
+	unsigned long deadline = jiffies + msecs_to_jiffies(1000);
+	bool reset_issued = false;
 
-	dev_dbg(sdxi->dev, "attempting stop, current state: %s\n",
-		gsv_str(status));
+	do {
+		enum sdxi_fn_gsv status = sdxi_dev_gsv(sdxi);
 
-	switch (status) {
-	case SDXI_GSV_INIT:
-	case SDXI_GSV_ACTIVE:
-		sdxi_write_fn_gsr(sdxi, SDXI_GSRV_STOP_SF);
-		break;
-	case SDXI_GSV_STOPG_SF:
-		sdxi_write_fn_gsr(sdxi, SDXI_GSRV_STOP_HD);
-		break;
-	case SDXI_GSV_STOPG_HD:
-	case SDXI_GSV_ERROR:
-		/*
-		 * If hard-stopping, there's nothing to do but wait.
-		 * If in error state, the reset is issued below.
-		 */
-		break;
-	default:
-		/* Unrecognized state; try a reset. */
-		sdxi_write_fn_gsr(sdxi, SDXI_GSRV_RESET);
-		break;
-	}
+		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, gsv_str(status));
 
-	/* Wait for transition to either stop or error state. */
-	ret = sdxi_dev_gsv_poll(sdxi, status,
-				status == SDXI_GSV_STOP ||
-				status == SDXI_GSV_ERROR);
+		switch (status) {
+		case SDXI_GSV_ACTIVE:
+			sdxi_write_fn_gsr(sdxi, SDXI_GSRV_STOP_SF);
+			break;
+		case SDXI_GSV_ERROR:
+			if (!reset_issued) {
+				sdxi_info(sdxi,
+					  "function in error state, issuing reset\n");
+				sdxi_write_fn_gsr(sdxi, SDXI_GSRV_RESET);
+				reset_issued = true;
+			} else {
+				fsleep(1000);
+			}
+			break;
+		case SDXI_GSV_STOP:
+			return 0;
+		case SDXI_GSV_INIT:
+		case SDXI_GSV_STOPG_SF:
+		case SDXI_GSV_STOPG_HD:
+			/* transitional states, wait */
+			sdxi_dbg(sdxi, "waiting for stop (gsv = %u)\n",
+				 status);
+			fsleep(1000);
+			break;
+		default:
+			sdxi_err(sdxi, "unknown gsv %u, giving up\n", status);
+			return -EIO;
+		}
+	} while (time_before(jiffies, deadline));
 
-	if (ret == 0 && status == SDXI_GSV_ERROR) {
-		sdxi_write_fn_gsr(sdxi, SDXI_GSRV_RESET);
-		ret = sdxi_dev_gsv_poll(sdxi, status, status == SDXI_GSV_STOP);
-	}
-
-	if (ret) {
-		dev_err(sdxi->dev, "stop timed out, current state: %s\n",
-			gsv_str(status));
-		return ret;
-	}
-
-	return 0;
+	sdxi_err(sdxi, "stop attempt timed out, current status %u\n",
+		sdxi_dev_gsv(sdxi));
+	return -ETIMEDOUT;
 }
 
-/*
- * See SDXI 1.0 4.1.8 Activation of the SDXI Function by Software.
- */
+static void sdxi_stop(struct sdxi_dev *sdxi)
+{
+	sdxi_dev_stop(sdxi);
+}
+
+/* Refer to "Activation of the SDXI Function by Software". */
 static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 {
-	u64 version, cap0, cap1, ctl2, cxt_l2, lv01_ptr;
-	struct sdxi_cxt_L2_ent *L2_ent;
+	const struct sdxi_dev_ops *ops = sdxi->dev_ops;
+	u64 version;
+	u64 cxt_l2;
+	u64 cap0;
+	u64 cap1;
+	u64 ctl2;
 	int err;
 
 	/*
@@ -195,120 +188,156 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 	if (err)
 		return err;
 
+	/* Determine which spec version the function implements. */
 	version = sdxi_read64(sdxi, SDXI_MMIO_VERSION);
-	dev_info(sdxi->dev, "SDXI %llu.%llu device found\n",
-		  FIELD_GET(SDXI_MMIO_VERSION_MAJOR, version),
-		  FIELD_GET(SDXI_MMIO_VERSION_MINOR, version));
+	sdxi->sdxi_version = (struct sdxi_version){
+		.major = FIELD_GET(SDXI_MMIO_VERSION_MAJOR, version),
+		.minor = FIELD_GET(SDXI_MMIO_VERSION_MINOR, version),
+	};
 
-	/* Read capabilities and features. */
+	sdxi_info(sdxi, "SDXI %u.%u device found\n",
+		  sdxi->sdxi_version.major, sdxi->sdxi_version.minor);
+
+	/*
+	 * 1.a. Discover limits and implemented features via MMIO_CAP0
+	 * and MMIO_CAP1.
+	 */
 	cap0 = sdxi_read64(sdxi, SDXI_MMIO_CAP0);
+	sdxi->is_vf = FIELD_GET(SDXI_MMIO_CAP0_VF, cap0);
+	sdxi->sfunc = FIELD_GET(SDXI_MMIO_CAP0_SFUNC, cap0);
+	sdxi->max_ring_entries = SZ_1K;
+	sdxi->max_ring_entries *= 1U << FIELD_GET(SDXI_MMIO_CAP0_MAX_DS_RING_SZ, cap0);
 	sdxi->db_stride = SZ_4K;
 	sdxi->db_stride *= 1U << FIELD_GET(SDXI_MMIO_CAP0_DB_STRIDE, cap0);
 
 	cap1 = sdxi_read64(sdxi, SDXI_MMIO_CAP1);
+	sdxi->max_akeys = SZ_256;
+	sdxi->max_akeys *= 1U << FIELD_GET(SDXI_MMIO_CAP1_MAX_AKEY_SZ, cap1);
+	sdxi->max_cxts = 1 + FIELD_GET(SDXI_MMIO_CAP1_MAX_CXT, cap1);
 	sdxi->op_grp_cap = FIELD_GET(SDXI_MMIO_CAP1_OPB_000_CAP, cap1);
 
 	/*
-	 * Constrain the number of client contexts supported by the
-	 * driver to what fits in a single L1 table.
+	 * 1.b. Configure SDXI parameters via MMIO_CTL2. We don't have
+	 * any reason to impose more conservative limits than those
+	 * reported in the capability registers, so use those for now.
 	 */
-	sdxi->max_cxtid = min(SDXI_L1_TABLE_ENTRIES - 1,
-			      FIELD_GET(SDXI_MMIO_CAP1_MAX_CXT, cap1));
-
-	/* Apply our configuration. */
-	ctl2 = FIELD_PREP(SDXI_MMIO_CTL2_MAX_CXT, sdxi->max_cxtid);
+	ctl2 = 0;
 	ctl2 |= FIELD_PREP(SDXI_MMIO_CTL2_MAX_BUFFER,
 			   FIELD_GET(SDXI_MMIO_CAP1_MAX_BUFFER, cap1));
 	ctl2 |= FIELD_PREP(SDXI_MMIO_CTL2_MAX_AKEY_SZ,
 			   FIELD_GET(SDXI_MMIO_CAP1_MAX_AKEY_SZ, cap1));
+	ctl2 |= FIELD_PREP(SDXI_MMIO_CTL2_MAX_CXT,
+			   FIELD_GET(SDXI_MMIO_CAP1_MAX_CXT, cap1));
 	ctl2 |= FIELD_PREP(SDXI_MMIO_CTL2_OPB_000_AVL,
 			   FIELD_GET(SDXI_MMIO_CAP1_OPB_000_CAP, cap1));
 	sdxi_write64(sdxi, SDXI_MMIO_CTL2, ctl2);
 
-	/* SDXI 1.0 4.1.8.2 Context Level 2 Table Setup */
-	sdxi->L2_table = dmam_alloc_coherent(sdxi->dev,
-					     sizeof(*sdxi->L2_table),
-					     &sdxi->L2_dma, GFP_KERNEL);
-	if (!sdxi->L2_table)
-		return -ENOMEM;
+	sdxi_dbg(sdxi,
+		 "sfunc:%#x descmax:%llu dbstride:%#x akeymax:%u cxtmax:%u opgrps:%#x\n",
+		 sdxi->sfunc, sdxi->max_ring_entries, sdxi->db_stride,
+		 sdxi->max_akeys, sdxi->max_cxts, sdxi->op_grp_cap);
 
-	cxt_l2 = FIELD_PREP(SDXI_MMIO_CXT_L2_PTR, sdxi->L2_dma >> ilog2(SZ_4K));
+	/* 2.a-2.b. Allocate and zero the 4KB Context Level 2 Table */
+	sdxi->l2_table = dmam_alloc_coherent(sdxi_to_dev(sdxi), L2_TABLE_SIZE,
+					     &sdxi->l2_dma, GFP_KERNEL);
+	if (!sdxi->l2_table) {
+		err = -ENOMEM;
+		return err;
+	}
+
+	/* 2.c. Program MMIO_CXT_L2 */
+	cxt_l2 = FIELD_PREP(SDXI_MMIO_CXT_L2_PTR, sdxi->l2_dma >> ilog2(SZ_4K));
 	sdxi_write64(sdxi, SDXI_MMIO_CXT_L2, cxt_l2);
 
-	/* SDXI 1.0 4.1.8.3 Context Level 1 Table Setup */
-	sdxi->L1_table = dmam_alloc_coherent(sdxi->dev,
-					     sizeof(*sdxi->L1_table),
-					     &sdxi->L1_dma, GFP_KERNEL);
-	if (!sdxi->L1_table)
-		return -ENOMEM;
 	/*
-	 * SDXI 1.0 4.1.8.3.c: Initialize the Context level 2 table to
-	 * point to the Context Level 1 [table].
+	 * 2.c.i. Function-level PASID/PR programming is not required for
+	 * the host SVA dataplane supported by this driver.
 	 */
-	L2_ent = &sdxi->L2_table->entry[0];
-	lv01_ptr = FIELD_PREP(SDXI_CXT_L2_ENT_VL, 1) |
-		   FIELD_PREP(SDXI_CXT_L2_ENT_LV01_PTR,
-			      sdxi->L1_dma >> ilog2(SZ_4K));
-	L2_ent->lv01_ptr = cpu_to_le64(lv01_ptr);
 
 	/*
-	 * SDXI 1.0 4.1.8.4 Administrative Context
+	 * This covers the following steps:
+	 *
+	 * 3. Context Level 1 Table Setup for contexts 0..127.
+	 * 4.a. Create the administrative context and associated control
+	 * structures.
+	 * 4.b. Set its CXT_STS.state to CXTV_RUN; see 10.b.
 	 *
 	 * The admin context will not consume descriptors until we
 	 * write its doorbell later.
 	 */
-	err = sdxi_admin_cxt_init(sdxi);
-	if (err)
+	sdxi->admin_cxt = sdxi_working_cxt_init(sdxi, 0);
+	if (!sdxi->admin_cxt) {
+		err = -ENOMEM;
 		return err;
+	}
 
 	/*
-	 * SDXI 1.0 4.1.8.9: Set MMIO_CTL0.fn_gsr to GSRV_ACTIVE and
-	 * wait for MMIO_STS0.fn_gsv to reach GSV_ACTIVE or GSV_ERROR.
+	 * 5. Mailbox: we don't use this facility and we assume the
+	 * reset values are sane.
+	 *
+	 * 6. If restoring saved state, adjust as appropriate. (We're not.)
+	 */
+
+	/*
+	 * MSI allocation is informed by the function's maximum
+	 * supported contexts, which was discovered in 1.a. Need to do
+	 * this before step 7, which claims an IRQ.
+	 */
+	err = (ops && ops->irq_init) ? ops->irq_init(sdxi) : 0;
+	if (err)
+		goto admin_cxt_exit;
+
+	/*
+	 * 7. "Software may also need to configure and enable
+	 * additional [features]". We've already performed MSI setup,
+	 * nothing else for us to do here for now.
+	 */
+
+	/*
+	 * 8. Set MMIO_CTL0.fn_gsr to GSRV_ACTIVE and wait for
+	 * MMIO_STS0.fn_gsv to reach GSV_ACTIVE or GSV_ERROR.
 	 */
 	err = sdxi_dev_start(sdxi);
 	if (err)
-		return err;
+		goto irq_exit;
 
 	/*
-	 * SDXI 1.0 4.1.8.10.b: Start the admin context using method
-	 * #3 ("Jump Start 1") from 4.3.4 Starting A Context and
-	 * Context Signaling. We haven't queued any descriptors to the
-	 * admin context at this point, so the appropriate value for
-	 * the doorbell is 0.
+	 * 9. Jump start the admin context. This step refers to
+	 * "Starting A context and Context Signaling," where method #3
+	 * recommends writing an "appropriate" value to the doorbell
+	 * register. We haven't queued any descriptors to the admin
+	 * context at this point, so the appropriate value would be 0.
 	 */
-	sdxi_cxt_push_doorbell(sdxi->admin_cxt, 0);
+	iowrite64(0, sdxi->admin_cxt->db);
 
 	return 0;
+
+irq_exit:
+	if (ops && ops->irq_exit)
+		ops->irq_exit(sdxi);
+admin_cxt_exit:
+	sdxi_working_cxt_exit(sdxi->admin_cxt);
+	return err;
 }
 
-static int sdxi_legacy_device_init(struct sdxi_dev *sdxi)
+int sdxi_device_init(struct sdxi_dev *sdxi, const struct sdxi_dev_ops *ops)
 {
-	struct device *dev = sdxi->dev;
-	size_t size, align;
 	int err;
 
-	size = sizeof(__le64);
-	align = max(size, SMP_CACHE_BYTES);
-	sdxi->write_index_pool = dmam_pool_create("Write_Index", dev, size,
-						  align, 0);
-	if (!sdxi->write_index_pool)
-		return -ENOMEM;
+	sdxi->dev_ops = ops;
 
-	size = sizeof(struct sdxi_cxt_sts);
-	align = max(size, SMP_CACHE_BYTES);
-	sdxi->cxt_sts_pool = dmam_pool_create("CXT_STS", dev, size, align, 0);
-	if (!sdxi->cxt_sts_pool)
-		return -ENOMEM;
-
-	size = align = sizeof(struct sdxi_cxt_ctl);
-	sdxi->cxt_ctl_pool = dmam_pool_create("CXT_CTL", dev, size, align, 0);
-	if (!sdxi->cxt_ctl_pool)
-		return -ENOMEM;
-
-	size = sizeof(struct sdxi_cst_blk);
-	align = max(size, SMP_CACHE_BYTES);
-	sdxi->cst_blk_pool = dmam_pool_create("CST_BLK", dev, size, align, 0);
-	if (!sdxi->cst_blk_pool)
+	/*
+	 * Use page-sized write-index and context-status allocations until
+	 * user context mappings are converted to userspace-owned SVA pages.
+	 */
+	sdxi->write_index_pool = dmam_pool_create("Write_Index", sdxi_to_dev(sdxi),
+						  PAGE_SIZE, PAGE_SIZE, 0);
+	sdxi->cxt_sts_pool = dmam_pool_create("CXT_STS", sdxi_to_dev(sdxi),
+					      PAGE_SIZE, PAGE_SIZE, 0);
+	sdxi->cxt_ctl_pool = dmam_pool_create("CXT_CTL", sdxi_to_dev(sdxi),
+					      sizeof(struct sdxi_cxt_ctl),
+					      sizeof(struct sdxi_cxt_ctl), 0);
+	if (!sdxi->write_index_pool || !sdxi->cxt_sts_pool || !sdxi->cxt_ctl_pool)
 		return -ENOMEM;
 
 	err = sdxi_fn_activate(sdxi);
@@ -316,7 +345,181 @@ static int sdxi_legacy_device_init(struct sdxi_dev *sdxi)
 		return err;
 
 	sdxi_dma_register(sdxi);
+
 	return 0;
+}
+
+void sdxi_device_exit(struct sdxi_dev *sdxi)
+{
+	sdxi_dma_unregister(sdxi);
+
+	/* Walk sdxi->cxt_array freeing any allocated rows. */
+	for (size_t i = 0; i < L2_TABLE_ENTRIES; ++i) {
+		if (!sdxi->cxt_array[i])
+			continue;
+		/* When a context is released its entry in the table should be NULL. */
+		for (size_t j = 0; j < L1_TABLE_ENTRIES; ++j) {
+			struct sdxi_cxt *cxt = sdxi->cxt_array[i][j];
+
+			if (!cxt)
+				continue;
+			if (cxt->id != 0)  /* admin context shutdown is last */
+				sdxi_working_cxt_exit(cxt);
+			sdxi->cxt_array[i][j] = NULL;
+		}
+		if (i != 0)  /* another special case for admin cxt */
+			kfree(sdxi->cxt_array[i]);
+	}
+
+	sdxi_working_cxt_exit(sdxi->admin_cxt);
+	kfree(sdxi->cxt_array[0]);
+
+	sdxi_stop(sdxi);
+
+	if (sdxi->dev_ops && sdxi->dev_ops->irq_exit)
+		sdxi->dev_ops->irq_exit(sdxi);
+}
+
+static void sdxi_pm_restore_admin_cxt(struct sdxi_dev *sdxi)
+{
+	struct sdxi_cxt *adm = sdxi->admin_cxt;
+	struct sdxi_sq *sq;
+	u64 db_val;
+
+	if (!adm || !adm->sq)
+		return;
+
+	sq = adm->sq;
+	if (!sq->cxt_sts || !sq->write_index)
+		return;
+
+	WRITE_ONCE(sq->cxt_sts->state,
+		   FIELD_PREP(SDXI_CXT_STS_STATE, CXTV_RUN));
+
+	/* Ensure CXT_STS updates are visible before ringing the doorbell. */
+	dma_wmb();
+	db_val = le64_to_cpu(READ_ONCE(*sq->write_index));
+	iowrite64(db_val, adm->db);
+}
+
+static int sdxi_pm_restart_contexts(struct sdxi_dev *sdxi)
+{
+	int err = 0;
+	int ret;
+
+	mutex_lock(&sdxi->cxt_lock);
+	for (size_t l2 = 0; l2 < L2_TABLE_ENTRIES; l2++) {
+		struct sdxi_cxt **row = sdxi->cxt_array[l2];
+
+		if (!row)
+			continue;
+
+		for (size_t l1 = 0; l1 < L1_TABLE_ENTRIES; l1++) {
+			struct sdxi_cxt *cxt = row[l1];
+
+			if (!cxt)
+				continue;
+			if (sdxi_cxt_is_admin(cxt))
+				continue;
+			if (!READ_ONCE(cxt->started))
+				continue;
+
+			ret = sdxi_adm_start_cxt(cxt);
+			if (ret) {
+				sdxi_err(sdxi, "failed to restart cxt %u: %d\n",
+					 cxt->id, ret);
+				err = ret;
+			}
+		}
+	}
+
+	mutex_unlock(&sdxi->cxt_lock);
+	return err;
+}
+
+int sdxi_device_suspend(struct sdxi_dev *sdxi)
+{
+	int err;
+
+	if (!sdxi)
+		return -ENODEV;
+
+	mutex_lock(&sdxi->pm_lock);
+
+	if (sdxi->pm_suspended) {
+		mutex_unlock(&sdxi->pm_lock);
+		return 0;
+	}
+
+	sdxi->pm_ctl0 = sdxi_read64(sdxi, SDXI_MMIO_CTL0);
+	sdxi->pm_ctl2 = sdxi_read64(sdxi, SDXI_MMIO_CTL2);
+	sdxi->pm_fn_was_active =
+		FIELD_GET(SDXI_MMIO_CTL0_FN_GSR, sdxi->pm_ctl0) ==
+		(u64)SDXI_GSRV_ACTIVE;
+
+	err = sdxi_dev_stop(sdxi);
+	if (!err)
+		sdxi->pm_suspended = true;
+
+	mutex_unlock(&sdxi->pm_lock);
+
+	return err;
+}
+
+int sdxi_device_resume(struct sdxi_dev *sdxi)
+{
+	u64 ctl0;
+	u64 cxt_l2;
+	enum sdxi_fn_gsr gsr;
+	int err = 0;
+
+	if (!sdxi)
+		return -ENODEV;
+
+	mutex_lock(&sdxi->pm_lock);
+
+	if (!sdxi->pm_suspended) {
+		mutex_unlock(&sdxi->pm_lock);
+		return 0;
+	}
+
+	/*
+	 * Restore CTL0 but keep the function stopped while restoring state.
+	 * Avoid restoring GSRV_RESET (would reset the function) or GSRV_ACTIVE
+	 * (would start too early); bring the function to STOP first.
+	 */
+	gsr = SDXI_GSRV_STOP_SF;
+	if (FIELD_GET(SDXI_MMIO_CTL0_FN_GSR, sdxi->pm_ctl0) ==
+	    (u64)SDXI_GSRV_STOP_HD)
+		gsr = SDXI_GSRV_STOP_HD;
+
+	ctl0 = sdxi->pm_ctl0;
+	FIELD_MODIFY(SDXI_MMIO_CTL0_FN_GSR, &ctl0, gsr);
+	sdxi_write64(sdxi, SDXI_MMIO_CTL0, ctl0);
+
+	err = sdxi_dev_stop(sdxi);
+	if (err)
+		goto out_unlock;
+
+	sdxi_write64(sdxi, SDXI_MMIO_CTL2, sdxi->pm_ctl2);
+
+	cxt_l2 = FIELD_PREP(SDXI_MMIO_CXT_L2_PTR, sdxi->l2_dma >> ilog2(SZ_4K));
+	sdxi_write64(sdxi, SDXI_MMIO_CXT_L2, cxt_l2);
+
+	if (sdxi->pm_fn_was_active) {
+		err = sdxi_dev_start(sdxi);
+		if (err)
+			goto out_unlock;
+
+		sdxi_pm_restore_admin_cxt(sdxi);
+		err = sdxi_pm_restart_contexts(sdxi);
+	}
+
+	sdxi->pm_suspended = false;
+
+out_unlock:
+	mutex_unlock(&sdxi->pm_lock);
+	return err;
 }
 
 int sdxi_register(struct device *dev, const struct sdxi_bus_ops *ops)
@@ -330,28 +533,27 @@ int sdxi_register(struct device *dev, const struct sdxi_bus_ops *ops)
 
 	sdxi->dev = dev;
 	sdxi->bus_ops = ops;
+	sdxi->minor = -1;
+	sdxi->pf_id = -1;
+	sdxi->vf_id = -1;
 	ida_init(&sdxi->vectors);
 	xa_init_flags(&sdxi->client_cxts, XA_FLAGS_ALLOC1);
+	mutex_init(&sdxi->cxt_lock);
+	mutex_init(&sdxi->pm_lock);
 	dev_set_drvdata(dev, sdxi);
 
 	err = sdxi->bus_ops->init(sdxi);
 	if (err)
 		return err;
 
-	return sdxi_legacy_device_init(sdxi);
+	return sdxi_device_init(sdxi, NULL);
 }
 
 void sdxi_unregister(struct device *dev)
 {
 	struct sdxi_dev *sdxi = dev_get_drvdata(dev);
-	struct sdxi_cxt *cxt;
-	unsigned long index;
 
-	xa_for_each(&sdxi->client_cxts, index, cxt)
-		sdxi_cxt_exit(cxt);
+	sdxi_device_exit(sdxi);
 	xa_destroy(&sdxi->client_cxts);
-
 	ida_destroy(&sdxi->vectors);
-
-	sdxi_dev_stop(sdxi);
 }
