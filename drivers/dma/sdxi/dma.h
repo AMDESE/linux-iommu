@@ -7,6 +7,8 @@
 struct sdxi_dev;
 
 int sdxi_dma_register(struct sdxi_dev *sdxi);
-void sdxi_dma_unregister(struct sdxi_dev *sdxi);
+static inline void sdxi_dma_unregister(struct sdxi_dev *sdxi)
+{
+}
 
 #endif /* DMA_SDXI_DMA_H */
