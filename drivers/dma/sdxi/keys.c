@@ -12,6 +12,7 @@
 #include <linux/log2.h>
 #include <linux/sizes.h>
 #include <linux/string.h>
+#include <uapi/linux/sdxi.h>
 
 #include "keys.h"
 #include "sdxi.h"
@@ -46,7 +47,7 @@ static u32 sdxi_key_table_count_valid(const void *table, u32 nentries,
 	return count;
 }
 
-static u32 sdxi_key_table_build_bitmap(u8 *bitmap, u32 nentries,
+static u32 sdxi_key_table_build_bitmap(__u8 *bitmap, u32 nentries,
 				       const void *table, size_t stride)
 {
 	u32 count = 0;
@@ -193,3 +194,108 @@ void sdxi_keys_exit(struct sdxi_dev *sdxi)
 }
 
 /* Default per-call timeout for SET_*KEYS admin DSC_KEY_UPD + SYNC. */
+#define SDXI_KEY_DEFAULT_TIMEOUT_MS	5000U
+
+/*
+ * Shared helpers used by both the RKey (per-device) and AKey (per-context)
+ * ioctls. The two paths now exchange identical wire structs
+ * (struct sdxi_key_{list,get_keys,set_keys}_args, struct sdxi_key_entry);
+ * the table being addressed is identified by the ioctl number alone.
+ */
+
+/* Header validation common to GET_LIST / GET_KEYS / SET_KEYS. */
+static int sdxi_key_args_check_hdr(u32 argsz, size_t min_argsz,
+				   u32 flags, const u32 *rsvd,
+				   size_t rsvd_words)
+{
+	size_t i;
+
+	if (argsz < min_argsz)
+		return -EINVAL;
+
+	if (flags)
+		return -EINVAL;
+
+	for (i = 0; i < rsvd_words; i++)
+		if (rsvd[i])
+			return -EINVAL;
+
+	return 0;
+}
+
+/*
+ * Fill the validity bitmap for a key table. Returns 0 on success, -ENOSPC
+ * if the user buffer is too small (in which case @buf_size, @nentries and
+ * @nvalid still get updated so the caller can resize and retry).
+ */
+static int sdxi_key_list_fill(struct sdxi_key_list_args *args,
+			      const void *table, size_t stride, u32 nentries)
+{
+	u32 available = args->buf_size;
+	u32 required = sdxi_key_bitmap_bytes(nentries);
+
+	args->argsz = sizeof(*args);
+	args->nentries = nentries;
+	args->buf_size = required;
+	args->nvalid = sdxi_key_table_count_valid(table, nentries, stride);
+
+	if (available < required)
+		return -ENOSPC;
+
+	args->nvalid = sdxi_key_table_build_bitmap(args->data, nentries,
+						   table, stride);
+	return 0;
+}
+
+/*
+ * Validate per-entry index/reserved fields and (optionally) compute the
+ * min/max touched index for the post-write admin SYNC range.
+ */
+static int sdxi_key_check_indices(const struct sdxi_key_entry *entries,
+				  u32 nkeys, u32 nentries,
+				  u16 *out_min, u16 *out_max)
+{
+	u16 key_min = U16_MAX;
+	u16 key_max = 0;
+	u32 i;
+
+	for (i = 0; i < nkeys; i++) {
+		const struct sdxi_key_entry *entry = &entries[i];
+
+		if (entry->rsvd0)
+			return -EINVAL;
+		if (entry->index >= nentries)
+			return -EINVAL;
+
+		if (entry->index < key_min)
+			key_min = entry->index;
+		if (entry->index > key_max)
+			key_max = entry->index;
+	}
+
+	if (out_min)
+		*out_min = key_min;
+	if (out_max)
+		*out_max = key_max;
+
+	return 0;
+}
+
+/*
+ * Initialize the kernel-output bookkeeping in struct sdxi_set_keys_args.
+ * The dispatcher already zeroes @data, but be defensive since handlers
+ * may bail out at any point.
+ */
+static void sdxi_set_keys_init_status(struct sdxi_set_keys_args *args)
+{
+	args->cst_flags = 0;
+	args->commit_state = SDXI_KEY_COMMIT_NONE;
+	args->first_failed_index = 0;
+}
+
+static unsigned int sdxi_set_keys_timeout(const struct sdxi_set_keys_args *args)
+{
+	if (args->timeout_ms == SDXI_KEY_TIMEOUT_DEFAULT)
+		return SDXI_KEY_DEFAULT_TIMEOUT_MS;
+	return args->timeout_ms;
+}
