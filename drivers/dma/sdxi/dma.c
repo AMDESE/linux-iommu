@@ -2,22 +2,23 @@
 /*
  * SDXI dmaengine provider
  *
- * Copyright Advanced Micro Devices, Inc.
+ * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
  */
 
 #include <linux/cleanup.h>
+#include <linux/bitfield.h>
 #include <linux/delay.h>
-#include <linux/dev_printk.h>
 #include <linux/container_of.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
 #include <linux/list.h>
-#include <linux/module.h>
-#include <linux/overflow.h>
+#include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/string.h>
 
 #include "../dmaengine.h"
 #include "../virt-dma.h"
+#include "admin.h"
 #include "completion.h"
 #include "context.h"
 #include "descriptor.h"
@@ -25,19 +26,18 @@
 #include "ring.h"
 #include "sdxi.h"
 
-static unsigned short dma_channels = 1;
-module_param(dma_channels, ushort, 0644);
-MODULE_PARM_DESC(dma_channels, "DMA channels per function (default: 1)");
-
 /*
- * An SDXI context is allocated for each channel configured.
+ * This provider uses virt_dma_chan / virt_dma_desc.
  *
- * Each context has a descriptor ring with a minimum of 1K entries.
- * SDXI supports a variety of primitive operations, e.g. copy,
- * interrupt, nop. Each Linux virtual DMA descriptor may be composed
- * of a grouping of SDXI descriptors in the ring. E.g. two SDXI
- * descriptors (copy, then interrupt) to implement a
- * dma_async_tx_descriptor for memcpy with DMA_PREP_INTERRUPT flag.
+ * SDXI supports up to 16K submission queues (contexts) per device. One
+ * SDXI context is allocated for each virtual DMA channel.
+ *
+ * Each context has a descriptor ring with a minimum of 1K slots. SDXI
+ * supports a variety of primitive operations, e.g. copy, interrupt,
+ * nop. Each Linux virtual DMA descriptor may be composed of a
+ * grouping of SDXI descriptors in the ring. E.g. two SDXI descriptors
+ * (copy, then interrupt) to implement a dma_async_tx_descriptor for
+ * memcpy with DMA_PREP_INTERRUPT flag.
  *
  * dma_device->device_prep_dma_* functions reserve space in the
  * descriptor ring and serialize SDXI descriptors implementing the
@@ -48,24 +48,24 @@ MODULE_PARM_DESC(dma_channels, "DMA channels per function (default: 1)");
  * which merely assigns a cookie and moves the txd to the submitted
  * list without entering the SDXI provider code.
  *
- * dma_device->device_issue_pending() (sdxi_dma_issue_pending()) sets vl
+ * dma_device->device_issue_pending (sdxi_dma_issue_pending()) sets vl
  * on each SDXI descriptor reachable from the submitted list, then
- * rings the context doorbell. The submitted txds are moved to the
- * issued list via vchan_issue_pending().
+ * rings the doorbell. The submitted txds are moved to the issued list
+ * via vchan_issue_pending().
  */
 
 struct sdxi_dma_chan {
 	struct virt_dma_chan vchan;
 	struct sdxi_cxt *cxt;
-	unsigned int vector;
-	unsigned int irq;
-	struct sdxi_akey_ent *akey;
+	int irq;
+	u32 intr_msg;
+	u16 intr_akey;
 };
 
 struct sdxi_dma_dev {
 	struct dma_device dma_dev;
-	size_t nr_channels;
-	struct sdxi_dma_chan sdchan[] __counted_by(nr_channels);
+	struct sdxi_dev *sdxi;
+	struct sdxi_dma_chan chan;
 };
 
 /*
@@ -99,18 +99,67 @@ static void sdxi_tx_desc_free(struct virt_dma_desc *vdesc)
 	kfree(to_sdxi_dma_desc(vdesc));
 }
 
+static int sdxi_dma_alloc_intr_akey(struct sdxi_cxt *cxt, u32 intr_msg,
+				    u16 *akey)
+{
+	struct sdxi_akey_table *tbl;
+	u32 i;
+	u16 intr;
+
+	if (!cxt || !cxt->akey_table || !akey)
+		return -EINVAL;
+	if (!FIELD_FIT(SDXI_AKEY_ENT_INTR_NUM, intr_msg))
+		return -ENOSPC;
+
+	tbl = cxt->akey_table;
+
+	/*
+	 * Slot 0 is owned by context-table programming. Find a free slot for
+	 * dmaengine interrupt delivery instead of relying on a fixed index.
+	 */
+	for (i = 1; i < ARRAY_SIZE(tbl->entry); i++) {
+		intr = le16_to_cpu(tbl->entry[i].intr_num);
+		if (intr & SDXI_AKEY_ENT_VL)
+			continue;
+
+		intr = FIELD_PREP(SDXI_AKEY_ENT_VL, 1) |
+		       FIELD_PREP(SDXI_AKEY_ENT_IV, 1) |
+		       FIELD_PREP(SDXI_AKEY_ENT_INTR_NUM, intr_msg);
+		tbl->entry[i].intr_num = cpu_to_le16(intr);
+		dma_wmb();
+
+		*akey = i;
+		return 0;
+	}
+
+	return -ENOSPC;
+}
+
+static void sdxi_dma_free_intr_akey(struct sdxi_cxt *cxt, u16 akey)
+{
+	if (!cxt || !cxt->akey_table || !akey)
+		return;
+	if (akey >= ARRAY_SIZE(cxt->akey_table->entry))
+		return;
+
+	memset(&cxt->akey_table->entry[akey], 0,
+	       sizeof(cxt->akey_table->entry[akey]));
+	dma_wmb();
+}
+
 static struct sdxi_dma_desc *
 prep_memcpy_intr(struct dma_chan *dma_chan, const struct sdxi_copy *params)
 {
 	struct sdxi_cxt *cxt = to_sdxi_dma_chan(dma_chan)->cxt;
-	struct sdxi_akey_ent *akey = to_sdxi_dma_chan(dma_chan)->akey;
+	struct sdxi_completion *completion __free(sdxi_completion) = NULL;
+	struct sdxi_dma_desc *sddesc __free(kfree) = NULL;
 	struct sdxi_desc *copy, *intr;
 
-	struct sdxi_completion *comp __free(sdxi_completion) = sdxi_completion_alloc(cxt->sdxi);
-	if (!comp)
+	completion = sdxi_completion_alloc(cxt->sdxi);
+	if (!completion)
 		return NULL;
 
-	struct sdxi_dma_desc *sddesc __free(kfree) = kzalloc(sizeof(*sddesc), GFP_NOWAIT);
+	sddesc = kzalloc_obj(*sddesc, GFP_NOWAIT);
 	if (!sddesc)
 		return NULL;
 
@@ -120,13 +169,13 @@ prep_memcpy_intr(struct dma_chan *dma_chan, const struct sdxi_copy *params)
 	copy = sdxi_ring_resv_next(&sddesc->resv);
 	(void)sdxi_encode_copy(copy, params); /* Caller checked validity. */
 	sdxi_desc_set_fence(copy); /* Conservatively fence every descriptor. */
-	sdxi_completion_attach(copy, comp);
+	sdxi_completion_attach(copy, completion);
 
-	sddesc->completion = no_free_ptr(comp);
+	sddesc->completion = no_free_ptr(completion);
 
 	intr = sdxi_ring_resv_next(&sddesc->resv);
 	sdxi_encode_intr(intr, &(const struct sdxi_intr) {
-			.akey = sdxi_akey_index(cxt, akey),
+			.akey = to_sdxi_dma_chan(dma_chan)->intr_akey,
 		});
 	/* Raise the interrupt only after the copy has completed. */
 	sdxi_desc_set_fence(intr);
@@ -137,13 +186,15 @@ static struct sdxi_dma_desc *
 prep_memcpy_polled(struct dma_chan *dma_chan, const struct sdxi_copy *params)
 {
 	struct sdxi_cxt *cxt = to_sdxi_dma_chan(dma_chan)->cxt;
+	struct sdxi_completion *completion __free(sdxi_completion) = NULL;
+	struct sdxi_dma_desc *sddesc __free(kfree) = NULL;
 	struct sdxi_desc *copy;
 
-	struct sdxi_completion *comp __free(sdxi_completion) = sdxi_completion_alloc(cxt->sdxi);
-	if (!comp)
+	completion = sdxi_completion_alloc(cxt->sdxi);
+	if (!completion)
 		return NULL;
 
-	struct sdxi_dma_desc *sddesc __free(kfree) = kzalloc(sizeof(*sddesc), GFP_NOWAIT);
+	sddesc = kzalloc_obj(*sddesc, GFP_NOWAIT);
 	if (!sddesc)
 		return NULL;
 
@@ -152,9 +203,9 @@ prep_memcpy_polled(struct dma_chan *dma_chan, const struct sdxi_copy *params)
 
 	copy = sdxi_ring_resv_next(&sddesc->resv);
 	(void)sdxi_encode_copy(copy, params); /* Caller checked validity. */
-	sdxi_completion_attach(copy, comp);
+	sdxi_completion_attach(copy, completion);
 
-	sddesc->completion = no_free_ptr(comp);
+	sddesc->completion = no_free_ptr(completion);
 	return_ptr(sddesc);
 }
 
@@ -162,30 +213,31 @@ static struct dma_async_tx_descriptor *
 sdxi_dma_prep_memcpy(struct dma_chan *dma_chan, dma_addr_t dst,
 		     dma_addr_t src, size_t len, unsigned long flags)
 {
-	struct sdxi_akey_ent *akey = to_sdxi_dma_chan(dma_chan)->akey;
-	struct sdxi_cxt *cxt = to_sdxi_dma_chan(dma_chan)->cxt;
-	u16 akey_index = sdxi_akey_index(cxt, akey);
+	bool always_interrupt;
 	struct sdxi_dma_desc *sddesc;
 	struct sdxi_copy copy = {
 		.src = src,
 		.dst = dst,
-		.src_akey = akey_index,
-		.dst_akey = akey_index,
+		.src_akey = 0,
+		.dst_akey = 0,
 		.len = len,
 	};
 
 	/*
-	 * Perform a trial encode to a dummy descriptor on the stack
-	 * so we can reject bad inputs without touching the ring
-	 * state.
+	 * Validate on a stack descriptor before reserving ring entries so
+	 * rejected requests do not consume hardware slots.
 	 */
 	if (sdxi_encode_copy(&(struct sdxi_desc){}, &copy))
 		return NULL;
+	/*
+	 * No attempt to batch/coalesce for now; raise an interrupt
+	 * for each descriptor completion.
+	 */
+	always_interrupt = true;
 
-	sddesc = (flags & DMA_PREP_INTERRUPT) ?
+	sddesc = ((flags & DMA_PREP_INTERRUPT) || always_interrupt) ?
 		prep_memcpy_intr(dma_chan, &copy) :
 		prep_memcpy_polled(dma_chan, &copy);
-
 	if (!sddesc)
 		return NULL;
 
@@ -236,7 +288,8 @@ static void sdxi_dma_issue_pending(struct dma_chan *dma_chan)
 
 	scoped_guard(spinlock_irqsave, &vchan->lock) {
 		/*
-		 * This can happen with racing submitters.
+		 * This can happen with racing submitters. We could
+		 * speculatively check this without taking the lock?
 		 */
 		if (list_empty(&vchan->desc_submitted))
 			return;
@@ -314,26 +367,24 @@ static void sdxi_dma_synchronize(struct dma_chan *dma_chan)
 	struct sdxi_cxt *cxt = to_sdxi_dma_chan(dma_chan)->cxt;
 	struct sdxi_ring_resv resv;
 	struct sdxi_desc *nop;
-	int err;
+	struct sdxi_completion *sc;
 
 	/* Submit a single nop with fence and wait for it to complete. */
-
 	if (sdxi_ring_reserve(cxt->ring_state, 1, &resv))
 		return;
 
-	struct sdxi_completion *comp __free(sdxi_completion) = sdxi_completion_alloc(cxt->sdxi);
-	if (!comp)
+	sc = sdxi_completion_alloc(cxt->sdxi);
+	if (!sc)
 		return;
 
 	nop = sdxi_ring_resv_next(&resv);
 	sdxi_serialize_nop(nop);
-	sdxi_completion_attach(nop, comp);
+	sdxi_completion_attach(nop, sc);
 	sdxi_desc_set_fence(nop);
 	sdxi_desc_make_valid(nop);
 	sdxi_cxt_push_doorbell(cxt, sdxi_ring_resv_dbval(&resv));
-
-	err = sdxi_completion_poll(comp);
-	WARN_ONCE(err, "got %d polling cst_blk", err);
+	sdxi_completion_poll(sc);
+	sdxi_completion_free(sc);
 
 	vchan_synchronize(to_virt_chan(dma_chan));
 }
@@ -366,107 +417,130 @@ static irqreturn_t sdxi_dma_cxt_irq(int irq, void *data)
 
 static int sdxi_dma_alloc_chan_resources(struct dma_chan *dma_chan)
 {
-	struct sdxi_dev *sdxi = dev_get_drvdata(dma_chan->device->dev);
 	struct sdxi_dma_chan *sdchan = to_sdxi_dma_chan(dma_chan);
-	int vector, irq, err;
 
-	sdchan->cxt = sdxi_cxt_new(sdxi);
 	if (!sdchan->cxt)
-		return -ENOMEM;
-	/*
-	 * This irq and akey setup should perhaps all be pushed into
-	 * the context allocation.
-	 */
-	err = vector = sdxi_alloc_vector(sdxi);
-	if (vector < 0)
-		goto exit_cxt;
+		return -ENODEV;
 
-	sdchan->vector = vector;
-
-	err = irq = sdxi_vector_to_irq(sdxi, vector);
-	if (irq < 0)
-		goto free_vector;
-
-	sdchan->irq = irq;
-
-	/*
-	 * Note this akey entry is used for both the completion
-	 * interrupt and source and destination access for copies.
-	 */
-	sdchan->akey = sdxi_alloc_akey(sdchan->cxt);
-	if (!sdchan->akey) {
-		err = -ENOMEM;
-		goto free_vector;
-	}
-
-	*sdchan->akey = (typeof(*sdchan->akey)) {
-		.intr_num = cpu_to_le16(FIELD_PREP(SDXI_AKEY_ENT_VL, 1) |
-					FIELD_PREP(SDXI_AKEY_ENT_IV, 1) |
-					FIELD_PREP(SDXI_AKEY_ENT_INTR_NUM,
-						   vector)),
-	};
-
-	err = request_irq(sdchan->irq, sdxi_dma_cxt_irq,
-			  IRQF_TRIGGER_NONE, "SDXI DMAengine", sdchan);
-	if (err)
-		goto free_akey;
-
-	err = sdxi_start_cxt(sdchan->cxt);
-	if (err)
-		goto free_irq;
-
-	return 0;
-free_irq:
-	free_irq(sdchan->irq, sdchan);
-free_akey:
-	sdxi_free_akey(sdchan->cxt, sdchan->akey);
-free_vector:
-	sdxi_free_vector(sdxi, vector);
-exit_cxt:
-	sdxi_cxt_exit(sdchan->cxt);
-	return err;
+	return sdxi_adm_start_cxt(sdchan->cxt);
 }
 
 static void sdxi_dma_free_chan_resources(struct dma_chan *dma_chan)
 {
 	struct sdxi_dma_chan *sdchan = to_sdxi_dma_chan(dma_chan);
 
-	sdxi_stop_cxt(sdchan->cxt);
-	free_irq(sdchan->irq, sdchan);
-	sdxi_free_vector(sdchan->cxt->sdxi, sdchan->vector);
-	sdxi_free_akey(sdchan->cxt, sdchan->akey);
+	if (sdchan->cxt)
+		sdxi_adm_stop_cxt(sdchan->cxt);
 	vchan_free_chan_resources(to_virt_chan(dma_chan));
-	sdxi_cxt_exit(sdchan->cxt);
+}
+
+static void sdxi_dma_cleanup_channel(struct sdxi_dma_chan *sdchan)
+{
+	if (!sdchan || !sdchan->cxt)
+		return;
+
+	if (READ_ONCE(sdchan->cxt->started))
+		sdxi_adm_stop_cxt(sdchan->cxt);
+
+	if (sdchan->irq >= 0)
+		free_irq(sdchan->irq, sdchan);
+
+	vchan_synchronize(&sdchan->vchan);
+	vchan_free_chan_resources(&sdchan->vchan);
+
+	sdxi_dma_free_intr_akey(sdchan->cxt, sdchan->intr_akey);
+	sdxi_working_cxt_exit(sdchan->cxt);
+
+	sdchan->cxt = NULL;
+	sdchan->irq = -1;
+	sdchan->intr_msg = 0;
+	sdchan->intr_akey = 0;
+}
+
+static int sdxi_dma_setup_channel(struct sdxi_dma_dev *sddev)
+{
+	struct dma_device *dma_dev = &sddev->dma_dev;
+	struct sdxi_dma_chan *sdchan = &sddev->chan;
+	struct sdxi_dev *sdxi = sddev->sdxi;
+	u32 intr_msg;
+	int irq;
+	int err;
+
+	sdchan->irq = -1;
+
+	sdchan->cxt = sdxi_kcxt_new(sdxi);
+	if (!sdchan->cxt)
+		return -ENOMEM;
+
+	intr_msg = sdchan->cxt->id + 1;
+	if (!FIELD_FIT(SDXI_AKEY_ENT_INTR_NUM, intr_msg)) {
+		err = -ENOSPC;
+		goto err_context;
+	}
+
+	irq = sdxi_irq_get(sdxi, intr_msg);
+	if (irq < 0) {
+		err = irq;
+		goto err_context;
+	}
+
+	err = sdxi_dma_alloc_intr_akey(sdchan->cxt, intr_msg,
+				       &sdchan->intr_akey);
+	if (err)
+		goto err_context;
+
+	err = request_irq(irq, sdxi_dma_cxt_irq, IRQF_TRIGGER_NONE,
+			  "SDXI DMAengine", sdchan);
+	if (err)
+		goto err_akey;
+
+	sdchan->irq = irq;
+	sdchan->intr_msg = intr_msg;
+	sdchan->vchan.desc_free = sdxi_tx_desc_free;
+	vchan_init(&sdchan->vchan, dma_dev);
+
+	return 0;
+
+err_akey:
+	sdxi_dma_free_intr_akey(sdchan->cxt, sdchan->intr_akey);
+	sdchan->intr_akey = 0;
+err_context:
+	sdxi_working_cxt_exit(sdchan->cxt);
+	sdchan->cxt = NULL;
+	return err;
+}
+
+static void sdxi_dma_device_release(struct dma_device *dma_dev)
+{
+	struct sdxi_dma_dev *sddev =
+		container_of(dma_dev, struct sdxi_dma_dev, dma_dev);
+
+	put_device(dma_dev->dev);
+	kfree(sddev);
 }
 
 int sdxi_dma_register(struct sdxi_dev *sdxi)
 {
-	struct device *dev = sdxi->dev;
+	struct device *dev = sdxi_to_dev(sdxi);
 	struct sdxi_dma_dev *sddev;
 	struct dma_device *dma_dev;
 	int err;
 
-	if (!dma_channels)
-		return 0;
-	/*
-	 * Note that this code assumes the device supports the
-	 * interrupt operation group (IntrGrp), which is optional. See
-	 * SDXI 1.0 Table 6-1 SDXI Operation Groups.
-	 *
-	 * TODO: check sdxi->op_grp_cap for IntrGrp support and error
-	 * out if it's missing.
-	 */
+	if (!(sdxi->op_grp_cap & SDXI_OPB_000_INTR))
+		return -EOPNOTSUPP;
 
-	sddev = devm_kzalloc(dev, struct_size(sddev, sdchan, dma_channels),
-			     GFP_KERNEL);
+	if (sdxi->dma_dev)
+		return 0;
+
+	sddev = kzalloc_obj(*sddev, GFP_KERNEL);
 	if (!sddev)
 		return -ENOMEM;
 
-	sddev->nr_channels = dma_channels;
-
+	sddev->sdxi = sdxi;
 	dma_dev = &sddev->dma_dev;
+
 	*dma_dev = (typeof(*dma_dev)) {
-		.dev                 = dev,
+		.dev                 = get_device(dev),
 		.src_addr_widths     = DMA_SLAVE_BUSWIDTH_64_BYTES,
 		.dst_addr_widths     = DMA_SLAVE_BUSWIDTH_64_BYTES,
 		.directions          = BIT(DMA_MEM_TO_MEM),
@@ -481,21 +555,46 @@ int sdxi_dma_register(struct sdxi_dev *sdxi)
 		.device_synchronize = sdxi_dma_synchronize,
 		.device_tx_status = sdxi_tx_status,
 		.device_issue_pending = sdxi_dma_issue_pending,
+		.device_release = sdxi_dma_device_release,
 	};
 
 	dma_cap_set(DMA_MEMCPY, dma_dev->cap_mask);
+	dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));
 	INIT_LIST_HEAD(&dma_dev->channels);
 
-	for (size_t i = 0; i < sddev->nr_channels; ++i) {
-		struct sdxi_dma_chan *sdchan = &sddev->sdchan[i];
-
-		sdchan->vchan.desc_free = sdxi_tx_desc_free;
-		vchan_init(&sdchan->vchan, &sddev->dma_dev);
-	}
-
-	err = dmaenginem_async_device_register(dma_dev);
+	err = sdxi_dma_setup_channel(sddev);
 	if (err)
-		return dev_warn_probe(dev, err, "failed to register dma device\n");
+		goto err_release;
+
+	err = dma_async_device_register(dma_dev);
+	if (err)
+		goto err_cleanup;
+
+	sdxi->dma_dev = dma_dev;
 
 	return 0;
+
+err_cleanup:
+	sdxi_dma_cleanup_channel(&sddev->chan);
+err_release:
+	sdxi_dma_device_release(dma_dev);
+	return err;
+}
+
+void sdxi_dma_unregister(struct sdxi_dev *sdxi)
+{
+	struct dma_device *dma_dev;
+	struct sdxi_dma_dev *sddev;
+
+	if (!sdxi)
+		return;
+
+	dma_dev = sdxi->dma_dev;
+	if (!dma_dev)
+		return;
+
+	sdxi->dma_dev = NULL;
+	sddev = container_of(dma_dev, struct sdxi_dma_dev, dma_dev);
+	sdxi_dma_cleanup_channel(&sddev->chan);
+	dma_async_device_unregister(dma_dev);
 }

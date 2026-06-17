@@ -1,14 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Copyright Advanced Micro Devices, Inc. */
+/*
+ * SDXI dmaengine provider.
+ *
+ * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
+ */
 
-#ifndef DMA_SDXI_DMA_H
-#define DMA_SDXI_DMA_H
+#ifndef __DMA_SDXI_DMA_H
+#define __DMA_SDXI_DMA_H
 
 struct sdxi_dev;
 
 int sdxi_dma_register(struct sdxi_dev *sdxi);
-static inline void sdxi_dma_unregister(struct sdxi_dev *sdxi)
-{
-}
+void sdxi_dma_unregister(struct sdxi_dev *sdxi);
 
-#endif /* DMA_SDXI_DMA_H */
+#endif /* __DMA_SDXI_DMA_H */

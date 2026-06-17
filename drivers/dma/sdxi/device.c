@@ -28,6 +28,10 @@
 #include "sdxi.h"
 #include "trace.h"
 
+static bool dma_engine;
+module_param(dma_engine, bool, 0644);
+MODULE_PARM_DESC(dma_engine, "Enable DMA engine interface (default: false)");
+
 enum sdxi_fn_gsv {
 	SDXI_GSV_STOP,
 	SDXI_GSV_INIT,
@@ -360,7 +364,15 @@ int sdxi_device_init(struct sdxi_dev *sdxi, const struct sdxi_dev_ops *ops)
 	if (err)
 		return err;
 
-	sdxi_dma_register(sdxi);
+	/* Set up DMA engine provider. */
+
+	if (dma_engine) {
+		err = sdxi_dma_register(sdxi);
+		if (err) {
+			sdxi_device_exit(sdxi);
+			return err;
+		}
+	}
 
 	return 0;
 }
