@@ -23,6 +23,7 @@
 #include "descriptor.h"
 #include "dma.h"
 #include "hw.h"
+#include "error.h"
 #include "keys.h"
 #include "sdxi.h"
 
@@ -292,22 +293,27 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 	if (err)
 		goto admin_cxt_exit;
 
+	/* 7. Initialize error log according to "Error Log Initialization". */
+	err = sdxi_error_init(sdxi);
+	if (err)
+		goto irq_exit;
+
 	/*
-	 * 7. "Software may also need to configure and enable
+	 * 8. "Software may also need to configure and enable
 	 * additional [features]". We've already performed MSI setup,
 	 * nothing else for us to do here for now.
 	 */
 
 	/*
-	 * 8. Set MMIO_CTL0.fn_gsr to GSRV_ACTIVE and wait for
+	 * 9. Set MMIO_CTL0.fn_gsr to GSRV_ACTIVE and wait for
 	 * MMIO_STS0.fn_gsv to reach GSV_ACTIVE or GSV_ERROR.
 	 */
 	err = sdxi_dev_start(sdxi);
 	if (err)
-		goto irq_exit;
+		goto error_exit;
 
 	/*
-	 * 9. Jump start the admin context. This step refers to
+	 * 10. Jump start the admin context. This step refers to
 	 * "Starting A context and Context Signaling," where method #3
 	 * recommends writing an "appropriate" value to the doorbell
 	 * register. We haven't queued any descriptors to the admin
@@ -317,6 +323,8 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 
 	return 0;
 
+error_exit:
+	sdxi_error_exit(sdxi);
 irq_exit:
 	if (ops && ops->irq_exit)
 		ops->irq_exit(sdxi);
@@ -383,9 +391,69 @@ void sdxi_device_exit(struct sdxi_dev *sdxi)
 
 	sdxi_keys_exit(sdxi);
 	sdxi_stop(sdxi);
+	sdxi_error_exit(sdxi);
 
 	if (sdxi->dev_ops && sdxi->dev_ops->irq_exit)
 		sdxi->dev_ops->irq_exit(sdxi);
+}
+
+static void sdxi_pm_disable_errlog(struct sdxi_dev *sdxi)
+{
+	u64 reg;
+
+	if (!sdxi || !sdxi->err_log)
+		return;
+
+	/* Prevent any new error log interrupts from being generated. */
+	disable_irq(sdxi->error_irq);
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_CFG, 0);
+
+	reg = sdxi_read64(sdxi, SDXI_MMIO_ERR_CTL);
+	FIELD_MODIFY(SDXI_MMIO_ERR_CTL_EN, &reg, 0);
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_CTL, reg);
+
+	reg = sdxi_read64(sdxi, SDXI_MMIO_CTL0);
+	FIELD_MODIFY(SDXI_MMIO_CTL0_FN_ERR_INTR_EN, &reg, 0);
+	sdxi_write64(sdxi, SDXI_MMIO_CTL0, reg);
+}
+
+static void sdxi_pm_restore_errlog(struct sdxi_dev *sdxi)
+{
+	u64 reg;
+
+	if (!sdxi || !sdxi->err_log)
+		return;
+
+	/* Inhibit interrupts until the config pointer is restored. */
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_CFG, 0);
+
+	/* Clear MMIO_ERR_STS. The flags in this register are RW1C. */
+	reg = FIELD_PREP(SDXI_MMIO_ERR_STS_STS_BIT, 1) |
+	      FIELD_PREP(SDXI_MMIO_ERR_STS_OVF_BIT, 1) |
+	      FIELD_PREP(SDXI_MMIO_ERR_STS_ERR_BIT, 1);
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_STS, reg);
+
+	reg = sdxi_read64(sdxi, SDXI_MMIO_ERR_CTL);
+	FIELD_MODIFY(SDXI_MMIO_ERR_CTL_EN, &reg, 1);
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_CTL, reg);
+
+	reg = sdxi_read64(sdxi, SDXI_MMIO_CTL0);
+	FIELD_MODIFY(SDXI_MMIO_CTL0_FN_ERR_INTR_EN, &reg, 1);
+	sdxi_write64(sdxi, SDXI_MMIO_CTL0, reg);
+
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_WRT, 0);
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_RD, 0);
+
+	/*
+	 * Keep the error log size consistent with sdxi_error_init(): fixed to
+	 * the spec minimum (64 entries).
+	 */
+	reg = FIELD_PREP(SDXI_MMIO_ERR_CFG_PTR, sdxi->err_log_dma >> 12) |
+	      FIELD_PREP(SDXI_MMIO_ERR_CFG_SZ, 1) |
+	      FIELD_PREP(SDXI_MMIO_ERR_CFG_EN, 1);
+	sdxi_write64(sdxi, SDXI_MMIO_ERR_CFG, reg);
+
+	enable_irq(sdxi->error_irq);
 }
 
 static void sdxi_pm_restore_admin_cxt(struct sdxi_dev *sdxi)
@@ -465,9 +533,13 @@ int sdxi_device_suspend(struct sdxi_dev *sdxi)
 		FIELD_GET(SDXI_MMIO_CTL0_FN_GSR, sdxi->pm_ctl0) ==
 		(u64)SDXI_GSRV_ACTIVE;
 
+	sdxi_pm_disable_errlog(sdxi);
+
 	err = sdxi_dev_stop(sdxi);
 	if (!err)
 		sdxi->pm_suspended = true;
+	else
+		sdxi_pm_restore_errlog(sdxi);
 
 	mutex_unlock(&sdxi->pm_lock);
 
@@ -523,6 +595,8 @@ int sdxi_device_resume(struct sdxi_dev *sdxi)
 		      FIELD_PREP(SDXI_MMIO_RKEY_EN, 1);
 		sdxi_write64(sdxi, SDXI_MMIO_RKEY, reg);
 	}
+
+	sdxi_pm_restore_errlog(sdxi);
 
 	if (sdxi->pm_fn_was_active) {
 		err = sdxi_dev_start(sdxi);
