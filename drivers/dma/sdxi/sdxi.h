@@ -17,6 +17,7 @@
 #include <linux/xarray.h>
 
 #include "mmio.h"
+#include "hw.h"
 
 #define ID_TO_L1_INDEX(id)	((id) & 0x7F)
 
