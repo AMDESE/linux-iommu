@@ -5,17 +5,6 @@
  * follows the order of their definitions in the SDXI spec.
  *
  * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
- *
- * Names of structures, members, and subfields (bit ranges within
- * members) are written to match the spec, generally. E.g. struct
- * sdxi_cxt_l2_ent corresponds to CXT_L2_ENT in the spec.
- *
- * Note: a member can have a subfield whose name is identical to the
- * member's name. E.g. CXT_L2_ENT's lv01_ptr.
- *
- * All reserved fields and bits (usually named "rsvd" or some
- * variation) must be set to zero by the driver unless otherwise
- * specified.
  */
 
 #ifndef __DMA_SDXI_HW_H
@@ -61,6 +50,13 @@ struct sdxi_cxt_l1_ent {
 #define SDXI_CXT_L1_ENT_PASID          GENMASK(19, 0)
 #define SDXI_CXT_L1_ENT_MAX_BUFFER     GENMASK(23, 20)
 	__le32 opb_000_enb;
+#define SDXI_OPB_000_ADMIN             BIT(2)
+#define SDXI_OPB_000_ATOMIC_FULL       BIT(3)
+#define SDXI_OPB_000_INTR              BIT(4)
+#define SDXI_OPB_000_ATOMIC_MIN        BIT(5)
+#define SDXI_OPB_000_ATOMIC            (SDXI_OPB_000_ATOMIC_FULL | \
+					SDXI_OPB_000_ATOMIC_MIN)
+#define SDXI_OPB_000_DISC_MASK         GENMASK(31, 6)
 	__u8 rsvd_0[8];
 } __packed;
 static_assert(sizeof(struct sdxi_cxt_l1_ent) == 32);
@@ -120,11 +116,13 @@ struct sdxi_akey_ent {
 #define SDXI_AKEY_ENT_VL BIT(0)
 #define SDXI_AKEY_ENT_IV BIT(1)
 #define SDXI_AKEY_ENT_PV BIT(2)
+#define SDXI_AKEY_ENT_STE BIT(3)
 #define SDXI_AKEY_ENT_INTR_NUM GENMASK(14, 4)
 	__le16 tgt_sfunc;
 	__le32 pasid;
 #define SDXI_AKEY_ENT_PASID GENMASK(19, 0)
 #define SDXI_AKEY_ENT_PR    BIT(29)
+#define SDXI_AKEY_ENT_PH    GENMASK(31, 30)
 	__le16 stag;
 	__u8   rsvd_0[2];
 	__le16 rkey;
@@ -143,7 +141,8 @@ struct sdxi_rkey_ent {
 	__le16 req_sfunc;
 	__le32 pasid;
 #define SDXI_RKEY_ENT_PASID GENMASK(19, 0)
-#define SDXI_RKEY_ENT_PH GENMASK(31, 30)
+#define SDXI_RKEY_ENT_PR    BIT(29)
+#define SDXI_RKEY_ENT_PH    GENMASK(31, 30)
 	__le16 stag;
 	__u8   rsvd_0[6];
 } __packed;
@@ -269,8 +268,8 @@ struct sdxi_desc {
 			__u8 rsvd_1[44];
 		);
 /* For use with cxt_stop.vflags */
-#define SDXI_DSC_CXT_STOP_HS BIT(6)
-#define SDXI_DSC_CXT_STOP_VF BIT(8)
+#define SDXI_DSC_CXT_STOP_HS BIT(5)
+#define SDXI_DSC_CXT_STOP_VF BIT(7)
 
 #define SDXI_DSC_OP_SUBTYPE_SYNC 0x06
 		/* AdminGrp: DSC_SYNC */
@@ -324,12 +323,5 @@ struct sdxi_desc {
 	};
 } __packed;
 static_assert(sizeof(struct sdxi_desc) == 64);
-
-
-/* Temporary aliases while the context code is converted. */
-#define sdxi_cxt_L2_ent sdxi_cxt_l2_ent
-#define sdxi_cxt_L2_table sdxi_cxt_l2_table
-#define sdxi_cxt_L1_ent sdxi_cxt_l1_ent
-#define sdxi_cxt_L1_table sdxi_cxt_l1_table
 
 #endif /* __DMA_SDXI_HW_H */
