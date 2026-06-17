@@ -1,7 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Copyright Advanced Micro Devices, Inc. */
-#ifndef DMA_SDXI_RING_H
-#define DMA_SDXI_RING_H
+/*
+ * SDXI descriptor ring management.
+ *
+ * Copyright (C) 2026 Advanced Micro Devices, Inc.
+ */
+
+#ifndef __DMA_SDXI_RING_H
+#define __DMA_SDXI_RING_H
 
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/range.h>
@@ -81,4 +86,4 @@ static inline u64 sdxi_ring_resv_dbval(const struct sdxi_ring_resv *resv)
 	     desc_;						\
 	     desc_ = sdxi_ring_resv_next(resv_))
 
-#endif /* DMA_SDXI_RING_H */
+#endif /* __DMA_SDXI_RING_H */

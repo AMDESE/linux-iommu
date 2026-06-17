@@ -281,7 +281,7 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 	return 0;
 }
 
-static int sdxi_device_init(struct sdxi_dev *sdxi)
+static int sdxi_legacy_device_init(struct sdxi_dev *sdxi)
 {
 	struct device *dev = sdxi->dev;
 	size_t size, align;
@@ -338,7 +338,7 @@ int sdxi_register(struct device *dev, const struct sdxi_bus_ops *ops)
 	if (err)
 		return err;
 
-	return sdxi_device_init(sdxi);
+	return sdxi_legacy_device_init(sdxi);
 }
 
 void sdxi_unregister(struct device *dev)

@@ -6,9 +6,9 @@
 #ifndef DMA_SDXI_CONTEXT_H
 #define DMA_SDXI_CONTEXT_H
 
-#include <linux/array_size.h>
 #include <linux/dma-mapping.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
+#include <linux/array_size.h>
 #include <linux/idr.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -71,6 +71,7 @@ void sdxi_cxt_exit(struct sdxi_cxt *cxt);
 int sdxi_start_cxt(struct sdxi_cxt *cxt);
 void sdxi_stop_cxt(struct sdxi_cxt *cxt);
 
+#define SDXI_TO_ADMIN_CXT_HELPER_DEFINED 1
 static inline struct sdxi_cxt *to_admin_cxt(const struct sdxi_cxt *cxt)
 {
 	return cxt->sdxi->admin_cxt;

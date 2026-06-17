@@ -2,9 +2,8 @@
 /*
  * SDXI descriptor ring management tests.
  *
- * Copyright Advanced Micro Devices, Inc.
+ * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
  */
-#include <kunit/device.h>
 #include <kunit/test-bug.h>
 #include <kunit/test.h>
 #include <linux/container_of.h>
@@ -84,19 +83,9 @@ static struct kunit_case testcases[] = {
 	{}
 };
 
-static int setup_device(struct kunit *t)
-{
-	struct device *dev = kunit_device_register(t, "sdxi-mock-device");
-
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(t, dev);
-	t->priv = dev;
-	return 0;
-}
-
 static struct kunit_suite generic_desc_ts = {
 	.name = "SDXI descriptor ring management",
 	.test_cases = testcases,
-	.init = setup_device,
 };
 kunit_test_suite(generic_desc_ts);
 
