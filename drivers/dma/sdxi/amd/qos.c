@@ -773,3 +773,275 @@ static int sdxi_amd_qos_prevalidate_tel(struct sdxi_dev *sdxi,
 		return 0;
 	}
 }
+
+static size_t sdxi_amd_qos_tel_bytes_active_pools(u16 max_pools)
+{
+	return SDXI_AMD_QOS_TEL_HDR_BYTES + (size_t)(max_pools + 7U) / 8U;
+}
+
+static int sdxi_amd_qos_exec(struct sdxi_dev *sdxi, u16 opcode_type,
+			     struct sdxi_admin_vendor_args *args,
+			     unsigned int timeout_ms)
+{
+	struct sdxi_cxt *adm = sdxi->admin_cxt;
+	struct sdxi_amd_qos_cap_info cap;
+	struct sdxi_desc desc;
+	void *buf = NULL;
+	dma_addr_t buf_dma = 0;
+	size_t required = 0;
+	void __user *ubuf = NULL;
+	int err;
+
+	err = sdxi_amd_qos_admin_ready(adm);
+	if (err)
+		return err;
+
+	switch (args->op) {
+	case SDXI_AMD_QOS_ADMIN_OP_CAP:
+		err = sdxi_amd_qos_copy_input(args, NULL, 0);
+		if (err)
+			return err;
+
+		required = SDXI_AMD_QOS_CAP_BYTES;
+		err = sdxi_amd_qos_prepare_output(args, required, &ubuf);
+		if (err)
+			return err;
+
+		sdxi_amd_qos_desc_init(&desc, opcode_type,
+				       SDXI_AMD_QOS_DSC_SUBTYPE_CAP);
+		break;
+	case SDXI_AMD_QOS_ADMIN_OP_DEVUPD: {
+		struct sdxi_amd_qos_devupd_req req;
+		struct sdxi_amd_qos_dev_info info;
+
+		err = sdxi_amd_qos_copy_input(args, &req, sizeof(req));
+		if (err)
+			return err;
+		err = sdxi_amd_qos_get_cap_info(sdxi, adm, opcode_type,
+						timeout_ms, &cap);
+		if (err)
+			return err;
+		err = sdxi_amd_qos_get_dev_info(sdxi, adm, opcode_type,
+						timeout_ms, &info);
+		if (err)
+			return err;
+		err = sdxi_amd_qos_validate_devupd_req(req.device_maxbw,
+						       info.total_allocated_bw,
+						       cap.granularity_bw);
+		if (err)
+			return err;
+
+		err = sdxi_amd_qos_require_no_output(args);
+		if (err)
+			return err;
+
+		sdxi_amd_qos_desc_init(&desc, opcode_type,
+				       SDXI_AMD_QOS_DSC_SUBTYPE_DEVUPD);
+		put_unaligned_le32(req.device_maxbw, &desc.generic.operation[4]);
+
+		return sdxi_adm_submit_desc(adm, &desc, timeout_ms,
+					    &args->cst_flags);
+	}
+	case SDXI_AMD_QOS_ADMIN_OP_POOLUPD: {
+		struct sdxi_amd_qos_poolupd_req req;
+		u32 pool_ctl;
+
+		err = sdxi_amd_qos_copy_input(args, &req, sizeof(req));
+		if (err)
+			return err;
+		err = sdxi_amd_qos_get_cap_info(sdxi, adm, opcode_type,
+						timeout_ms, &cap);
+		if (err)
+			return err;
+		err = sdxi_amd_qos_prevalidate_poolupd(sdxi, adm, opcode_type,
+						       timeout_ms, &cap, &req);
+		if (err)
+			return err;
+
+		err = sdxi_amd_qos_require_no_output(args);
+		if (err)
+			return err;
+
+		pool_ctl = FIELD_PREP(GENMASK(11, 0), req.pool_num) |
+			   FIELD_PREP(GENMASK(13, 12), req.pool_operation);
+
+		sdxi_amd_qos_desc_init(&desc, opcode_type,
+				       SDXI_AMD_QOS_DSC_SUBTYPE_POOLUPD);
+		put_unaligned_le32(pool_ctl, &desc.generic.operation[0]);
+		put_unaligned_le32(req.pool_maxbw, &desc.generic.operation[4]);
+		put_unaligned_le32(req.pool_minbw, &desc.generic.operation[8]);
+
+		return sdxi_adm_submit_desc(adm, &desc, timeout_ms,
+					    &args->cst_flags);
+	}
+	case SDXI_AMD_QOS_ADMIN_OP_FNUPD: {
+		struct sdxi_amd_qos_fnupd_req req;
+		u32 target_scope;
+		u32 cxt_range;
+
+		err = sdxi_amd_qos_copy_input(args, &req, sizeof(req));
+		if (err)
+			return err;
+		err = sdxi_amd_qos_get_cap_info(sdxi, adm, opcode_type,
+						timeout_ms, &cap);
+		if (err)
+			return err;
+		err = sdxi_amd_qos_prevalidate_fnupd(sdxi, adm, opcode_type,
+						     timeout_ms, &cap, &req);
+		if (err)
+			return err;
+
+		err = sdxi_amd_qos_target_scope(req.pool_num, req.flags,
+						req.vf_num, &target_scope);
+		if (err)
+			return err;
+
+		err = sdxi_amd_qos_require_no_output(args);
+		if (err)
+			return err;
+
+		cxt_range = FIELD_PREP(GENMASK(15, 0), req.cxt_start) |
+			    ((u32)req.cxt_end << 16);
+
+		sdxi_amd_qos_desc_init(&desc, opcode_type,
+				       SDXI_AMD_QOS_DSC_SUBTYPE_FNUPD);
+		put_unaligned_le32(target_scope, &desc.generic.operation[0]);
+		put_unaligned_le32(cxt_range, &desc.generic.operation[4]);
+
+		return sdxi_adm_submit_desc(adm, &desc, timeout_ms,
+					    &args->cst_flags);
+	}
+	case SDXI_AMD_QOS_ADMIN_OP_TEL: {
+		struct sdxi_amd_qos_tel_req req;
+		u32 target_scope;
+		u64 query_selector;
+		u16 assigned_functions;
+
+		err = sdxi_amd_qos_copy_input(args, &req, sizeof(req));
+		if (err)
+			return err;
+		err = sdxi_amd_qos_get_cap_info(sdxi, adm, opcode_type,
+						timeout_ms, &cap);
+		if (err)
+			return err;
+		err = sdxi_amd_qos_prevalidate_tel(sdxi, adm, opcode_type,
+						   timeout_ms, &cap, &req);
+		if (err)
+			return err;
+
+		switch (req.query_type) {
+		case SDXI_AMD_QOS_TEL_QTYPE_DEVICE:
+			target_scope = 0;
+			query_selector = sdxi_amd_qos_query_selector(0,
+								     req.query_type);
+			required = SDXI_AMD_QOS_TEL_FIXED_BYTES;
+			break;
+		case SDXI_AMD_QOS_TEL_QTYPE_POOL_CONFIG:
+			target_scope = FIELD_PREP(GENMASK(11, 0),
+						  req.pool_num);
+			query_selector = sdxi_amd_qos_query_selector(0,
+								     req.query_type);
+			required = SDXI_AMD_QOS_TEL_FIXED_BYTES;
+			break;
+		case SDXI_AMD_QOS_TEL_QTYPE_POOL_ASSIGN:
+			err = sdxi_amd_qos_target_scope(0, req.flags,
+							req.vf_num,
+							&target_scope);
+			if (err)
+				return err;
+			query_selector =
+				sdxi_amd_qos_query_selector(req.cxt_num,
+							    req.query_type);
+			required = SDXI_AMD_QOS_TEL_FIXED_BYTES;
+			break;
+		case SDXI_AMD_QOS_TEL_QTYPE_ACTIVE_POOLS:
+			target_scope = 0;
+			query_selector = sdxi_amd_qos_query_selector(0,
+								     req.query_type);
+			required =
+				sdxi_amd_qos_tel_bytes_active_pools(cap.max_pools);
+			break;
+		case SDXI_AMD_QOS_TEL_QTYPE_POOL_REPORT:
+			target_scope = FIELD_PREP(GENMASK(11, 0),
+						  req.pool_num);
+			query_selector = sdxi_amd_qos_query_selector(0,
+								     req.query_type);
+			err = sdxi_amd_qos_get_assigned_functions(sdxi, adm,
+								  opcode_type,
+								  req.pool_num,
+								  timeout_ms,
+								  &assigned_functions);
+			if (err)
+				return err;
+
+			if (assigned_functions >
+			    (SDXI_AMD_QOS_MAX_TEL_BYTES -
+			     SDXI_AMD_QOS_TEL_HDR_BYTES) /
+				    SDXI_AMD_QOS_POOL_REPORT_ENTRY_BYTES)
+				return -E2BIG;
+
+			required = SDXI_AMD_QOS_TEL_HDR_BYTES +
+				   (size_t)assigned_functions *
+					   SDXI_AMD_QOS_POOL_REPORT_ENTRY_BYTES;
+			break;
+		case SDXI_AMD_QOS_TEL_QTYPE_POOL_VARIANCE:
+			target_scope = FIELD_PREP(GENMASK(11, 0),
+						  req.pool_num);
+			query_selector = sdxi_amd_qos_query_selector(0,
+								     req.query_type);
+			required = SDXI_AMD_QOS_TEL_FIXED_BYTES;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		err = sdxi_amd_qos_prepare_output(args, required, &ubuf);
+		if (err)
+			return err;
+
+		sdxi_amd_qos_desc_init(&desc, opcode_type,
+				       SDXI_AMD_QOS_DSC_SUBTYPE_TEL);
+		put_unaligned_le32(target_scope, &desc.generic.operation[0]);
+		put_unaligned_le64(query_selector, &desc.generic.operation[4]);
+		break;
+	}
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	buf = dma_alloc_coherent(sdxi_to_dev(sdxi), required, &buf_dma,
+				 GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	memset(buf, 0, required);
+
+	if (!IS_ALIGNED(buf_dma, SZ_4K)) {
+		err = -EIO;
+		goto out_free_submit;
+	}
+
+	switch (args->op) {
+	case SDXI_AMD_QOS_ADMIN_OP_CAP:
+		put_unaligned_le64(buf_dma, &desc.generic.operation[4]);
+		break;
+	case SDXI_AMD_QOS_ADMIN_OP_TEL:
+		put_unaligned_le64(buf_dma, &desc.generic.operation[12]);
+		break;
+	default:
+		err = -EINVAL;
+		goto out_free_submit;
+	}
+
+	err = sdxi_adm_submit_desc(adm, &desc, timeout_ms, &args->cst_flags);
+	if (err)
+		goto out_free_submit;
+
+	dma_rmb();
+	if (copy_to_user(ubuf, buf, required))
+		err = -EFAULT;
+
+out_free_submit:
+	dma_free_coherent(sdxi_to_dev(sdxi), required, buf, buf_dma);
+	return err;
+}
