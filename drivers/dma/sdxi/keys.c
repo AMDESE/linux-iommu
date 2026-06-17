@@ -14,7 +14,10 @@
 #include <linux/string.h>
 #include <uapi/linux/sdxi.h>
 
+#include "admin.h"
+#include "ioctl.h"
 #include "keys.h"
+#include "process.h"
 #include "sdxi.h"
 
 static u32 sdxi_key_bitmap_bytes(u32 nentries)
@@ -298,4 +301,176 @@ static unsigned int sdxi_set_keys_timeout(const struct sdxi_set_keys_args *args)
 	if (args->timeout_ms == SDXI_KEY_TIMEOUT_DEFAULT)
 		return SDXI_KEY_DEFAULT_TIMEOUT_MS;
 	return args->timeout_ms;
+}
+
+int sdxi_ioctl_get_rkey_list(struct file *filep, struct sdxi_file *sf,
+			     void *data)
+{
+	struct sdxi_key_list_args *args = data;
+	struct sdxi_process *p;
+	struct sdxi_dev *sdxi;
+	int err;
+
+	if (!sf || !sf->process)
+		return -EINVAL;
+
+	p = sf->process;
+
+	err = sdxi_key_args_check_hdr(args->argsz, sizeof(*args), args->flags,
+				      &args->rsvd0, 1);
+	if (err)
+		return err;
+
+	sdxi = p->sdxi;
+	if (!sdxi)
+		return -ENODEV;
+
+	if (!sdxi->rkey_cap)
+		return -EOPNOTSUPP;
+
+	if (!sdxi->rkey_table || !sdxi->rkey_entries)
+		return -ENODEV;
+
+	return sdxi_key_list_fill(args, sdxi->rkey_table,
+				  sizeof(*sdxi->rkey_table),
+				  sdxi->rkey_entries);
+}
+
+int sdxi_ioctl_get_rkeys(struct file *filep, struct sdxi_file *sf,
+			 void *data)
+{
+	struct sdxi_get_keys_args *args = data;
+	struct sdxi_process *p;
+	struct sdxi_dev *sdxi;
+	u32 nkeys;
+	u32 i;
+	int err;
+
+	if (!sf || !sf->process)
+		return -EINVAL;
+
+	p = sf->process;
+
+	err = sdxi_key_args_check_hdr(args->argsz, sizeof(*args), args->flags,
+				      &args->rsvd0, 1);
+	if (err)
+		return err;
+
+	sdxi = p->sdxi;
+	if (!sdxi)
+		return -ENODEV;
+
+	if (!sdxi->rkey_cap)
+		return -EOPNOTSUPP;
+
+	if (!sdxi->rkey_table || !sdxi->rkey_entries)
+		return -ENODEV;
+
+	nkeys = args->nkeys;
+	if (nkeys > sdxi->rkey_entries)
+		return -EINVAL;
+
+	args->argsz = sizeof(*args);
+
+	err = sdxi_key_check_indices(args->entries, nkeys, sdxi->rkey_entries,
+				     NULL, NULL);
+	if (err)
+		return err;
+
+	for (i = 0; i < nkeys; i++) {
+		struct sdxi_key_entry *entry = &args->entries[i];
+
+		memcpy(entry->data, &sdxi->rkey_table[entry->index],
+		       sizeof(entry->data));
+	}
+
+	/* Every requested entry was populated; @nkeys is unchanged. */
+	return 0;
+}
+
+int sdxi_ioctl_set_rkeys(struct file *filep, struct sdxi_file *sf,
+			 void *data)
+{
+	struct sdxi_set_keys_args *args = data;
+	struct sdxi_process *p;
+	struct sdxi_dev *sdxi;
+	u32 nkeys;
+	u32 i;
+	u16 key_min;
+	u16 key_max;
+	int err;
+
+	if (!sf || !sf->process)
+		return -EINVAL;
+
+	p = sf->process;
+
+	err = sdxi_key_args_check_hdr(args->argsz, sizeof(*args), args->flags,
+				      args->rsvd0,
+				      ARRAY_SIZE(args->rsvd0));
+	if (err)
+		return err;
+
+	args->argsz = sizeof(*args);
+	sdxi_set_keys_init_status(args);
+
+	sdxi = p->sdxi;
+	if (!sdxi)
+		return -ENODEV;
+
+	if (!sdxi->rkey_cap)
+		return -EOPNOTSUPP;
+
+	if (!sdxi->rkey_table || !sdxi->rkey_entries)
+		return -ENODEV;
+
+	nkeys = args->nkeys;
+	if (!nkeys) {
+		args->commit_state = SDXI_KEY_COMMIT_ALL;
+		return 0;
+	}
+
+	if (nkeys > sdxi->rkey_entries)
+		return -EINVAL;
+
+	err = sdxi_key_check_indices(args->entries, nkeys, sdxi->rkey_entries,
+				     &key_min, &key_max);
+	if (err)
+		return err;
+
+	for (i = 0; i < nkeys; i++) {
+		const struct sdxi_key_entry *entry = &args->entries[i];
+		struct sdxi_rkey_ent ent;
+
+		memcpy(&ent, entry->data, sizeof(ent));
+		err = sdxi_rkey_ent_validate(&ent);
+		if (err)
+			return err;
+	}
+
+	for (i = 0; i < nkeys; i++) {
+		const struct sdxi_key_entry *entry = &args->entries[i];
+		struct sdxi_rkey_ent ent;
+
+		memcpy(&ent, entry->data, sizeof(ent));
+		sdxi_rkey_ent_store(&sdxi->rkey_table[entry->index], &ent);
+	}
+
+	dma_wmb();
+
+	err = sdxi_adm_rkey_update_sync(sdxi, key_min, key_max,
+					sdxi_set_keys_timeout(args), NULL);
+	if (err) {
+		/*
+		 * In-memory entries were written but hardware adoption could
+		 * not be confirmed; report PARTIAL with first_failed_index = 0
+		 * (no per-entry boundary is recoverable from a single SYNC).
+		 */
+		args->commit_state = SDXI_KEY_COMMIT_PARTIAL;
+		args->first_failed_index = 0;
+		return err;
+	}
+
+	args->commit_state = SDXI_KEY_COMMIT_ALL;
+	return 0;
 }
