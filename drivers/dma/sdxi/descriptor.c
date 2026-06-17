@@ -2,14 +2,17 @@
 /*
  * SDXI descriptor encoding.
  *
- * Copyright Advanced Micro Devices, Inc.
+ * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
  */
 
 #include <kunit/visibility.h>
+#include <linux/align.h>
 #include <linux/bitfield.h>
-#include <linux/bug.h>
+#include <linux/bitmap.h>
+#include <linux/dma-mapping.h>
+#include <linux/log2.h>
 #include <linux/range.h>
-#include <linux/sizes.h>
+#include <linux/string.h>
 #include <linux/types.h>
 #include <asm/byteorder.h>
 
@@ -26,8 +29,7 @@ VISIBLE_IF_KUNIT int __must_check sdxi_encode_size32(u64 size, __le32 *dest)
 	 *   ...
 	 *    4G  0xffffffff
 	 */
-	if (WARN_ON_ONCE(size > SZ_4G) ||
-	    WARN_ON_ONCE(size == 0))
+	if (size == 0 || size > SZ_4G)
 		return -EINVAL;
 	size = clamp_val(size, 1, SZ_4G);
 	*dest = cpu_to_le32((u32)(size - 1));
@@ -61,10 +63,10 @@ int sdxi_encode_copy(struct sdxi_desc *desc, const struct sdxi_copy *params)
 	if (err)
 		return err;
 	/*
-	 * Reject overlapping src and dst. "Software ... shall not
-	 * overlap the source buffer, destination buffer, Atomic
-	 * Return Data, or completion status block." - SDXI 1.0 5.6
-	 * Memory Consistency Model
+	 * Reject overlapping src and dst. Quoting "Memory Consistency
+	 * Model": "Software shall not ... overlap the source buffer,
+	 * destination buffer, Atomic Return Data, or completion
+	 * status block."
 	 */
 	if (range_overlaps(&(const struct range) {
 				   .start = params->src,
@@ -168,7 +170,6 @@ int sdxi_encode_cxt_stop(struct sdxi_desc *desc,
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(sdxi_encode_cxt_stop);
 
 int sdxi_encode_sync(struct sdxi_desc *desc, const struct sdxi_sync *params)
 {
@@ -187,8 +188,10 @@ int sdxi_encode_sync(struct sdxi_desc *desc, const struct sdxi_sync *params)
 		.sync = (typeof(desc->sync)) {
 			.opcode = cpu_to_le32(opcode),
 			.cflags = cflags,
-			.cxt_start = cpu_to_le16(params->range.cxt_start),
-			.cxt_end = cpu_to_le16(params->range.cxt_end),
+			.cxt_start = cpu_to_le16(params->cxt.cxt_start),
+			.cxt_end = cpu_to_le16(params->cxt.cxt_end),
+			.key_start = cpu_to_le16(params->key_start),
+			.key_end = cpu_to_le16(params->key_end),
 			.csb_ptr = cpu_to_le64(csb_ptr),
 		},
 	};
@@ -196,3 +199,89 @@ int sdxi_encode_sync(struct sdxi_desc *desc, const struct sdxi_sync *params)
 	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(sdxi_encode_sync);
+
+int sdxi_encode_disc(struct sdxi_desc *desc, const struct sdxi_disc *params)
+{
+	u64 csb_ptr;
+	u32 opcode;
+
+	if (params->index_start > params->index_end)
+		return -EINVAL;
+	if (params->index_end > 2047)
+		return -EINVAL;
+	if (!IS_ALIGNED(params->addr, 16))
+		return -EINVAL;
+
+	opcode = (FIELD_PREP(SDXI_DSC_SUBTYPE, SDXI_DSC_OP_SUBTYPE_DISC) |
+		  FIELD_PREP(SDXI_DSC_TYPE, SDXI_DSC_OP_TYPE_ADMIN));
+
+	csb_ptr = FIELD_PREP(SDXI_DSC_NP, 1);
+
+	*desc = (typeof(*desc)) {
+		.disc = (typeof(desc->disc)) {
+			.opcode = cpu_to_le32(opcode),
+			.index_start = cpu_to_le16(params->index_start),
+			.index_end = cpu_to_le16(params->index_end),
+			.addr = cpu_to_le64(params->addr),
+			.csb_ptr = cpu_to_le64(csb_ptr),
+		},
+	};
+
+	return 0;
+}
+
+int sdxi_encode_akey_upd(struct sdxi_desc *desc,
+			 const struct sdxi_akey_upd *params)
+{
+	u64 csb_ptr;
+	u32 opcode;
+
+	if (params->cxt.cxt_start > params->cxt.cxt_end)
+		return -EINVAL;
+	if (params->akey_start > params->akey_end)
+		return -EINVAL;
+
+	opcode = (FIELD_PREP(SDXI_DSC_SUBTYPE, SDXI_DSC_OP_SUBTYPE_AKEY_UPD) |
+		  FIELD_PREP(SDXI_DSC_TYPE, SDXI_DSC_OP_TYPE_ADMIN));
+
+	csb_ptr = FIELD_PREP(SDXI_DSC_NP, 1);
+
+	*desc = (typeof(*desc)) {
+		.akey_upd = (typeof(desc->akey_upd)) {
+			.opcode = cpu_to_le32(opcode),
+			.cxt_start = cpu_to_le16(params->cxt.cxt_start),
+			.cxt_end = cpu_to_le16(params->cxt.cxt_end),
+			.akey_start = cpu_to_le16(params->akey_start),
+			.akey_end = cpu_to_le16(params->akey_end),
+			.csb_ptr = cpu_to_le64(csb_ptr),
+		},
+	};
+
+	return 0;
+}
+
+int sdxi_encode_rkey_upd(struct sdxi_desc *desc,
+			 const struct sdxi_rkey_upd *params)
+{
+	u64 csb_ptr;
+	u32 opcode;
+
+	if (params->rkey_start > params->rkey_end)
+		return -EINVAL;
+
+	opcode = (FIELD_PREP(SDXI_DSC_SUBTYPE, SDXI_DSC_OP_SUBTYPE_RKEY_UPD) |
+		  FIELD_PREP(SDXI_DSC_TYPE, SDXI_DSC_OP_TYPE_ADMIN));
+
+	csb_ptr = FIELD_PREP(SDXI_DSC_NP, 1);
+
+	*desc = (typeof(*desc)) {
+		.rkey_upd = (typeof(desc->rkey_upd)) {
+			.opcode = cpu_to_le32(opcode),
+			.rkey_start = cpu_to_le16(params->rkey_start),
+			.rkey_end = cpu_to_le16(params->rkey_end),
+			.csb_ptr = cpu_to_le64(csb_ptr),
+		},
+	};
+
+	return 0;
+}
