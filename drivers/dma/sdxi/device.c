@@ -23,6 +23,7 @@
 #include "descriptor.h"
 #include "dma.h"
 #include "hw.h"
+#include "keys.h"
 #include "sdxi.h"
 
 enum sdxi_fn_gsv {
@@ -232,6 +233,10 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 			   FIELD_GET(SDXI_MMIO_CAP1_OPB_000_CAP, cap1));
 	sdxi_write64(sdxi, SDXI_MMIO_CTL2, ctl2);
 
+	err = sdxi_keys_init(sdxi, cap1);
+	if (err)
+		return err;
+
 	sdxi_dbg(sdxi,
 		 "sfunc:%#x descmax:%llu dbstride:%#x akeymax:%u cxtmax:%u opgrps:%#x\n",
 		 sdxi->sfunc, sdxi->max_ring_entries, sdxi->db_stride,
@@ -242,7 +247,7 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 					     &sdxi->l2_dma, GFP_KERNEL);
 	if (!sdxi->l2_table) {
 		err = -ENOMEM;
-		return err;
+		goto keys_exit;
 	}
 
 	/* 2.c. Program MMIO_CXT_L2 */
@@ -268,7 +273,7 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 	sdxi->admin_cxt = sdxi_working_cxt_init(sdxi, 0);
 	if (!sdxi->admin_cxt) {
 		err = -ENOMEM;
-		return err;
+		goto keys_exit;
 	}
 
 	/*
@@ -317,6 +322,8 @@ irq_exit:
 		ops->irq_exit(sdxi);
 admin_cxt_exit:
 	sdxi_working_cxt_exit(sdxi->admin_cxt);
+keys_exit:
+	sdxi_keys_exit(sdxi);
 	return err;
 }
 
@@ -374,6 +381,7 @@ void sdxi_device_exit(struct sdxi_dev *sdxi)
 	sdxi_working_cxt_exit(sdxi->admin_cxt);
 	kfree(sdxi->cxt_array[0]);
 
+	sdxi_keys_exit(sdxi);
 	sdxi_stop(sdxi);
 
 	if (sdxi->dev_ops && sdxi->dev_ops->irq_exit)
@@ -505,6 +513,16 @@ int sdxi_device_resume(struct sdxi_dev *sdxi)
 
 	cxt_l2 = FIELD_PREP(SDXI_MMIO_CXT_L2_PTR, sdxi->l2_dma >> ilog2(SZ_4K));
 	sdxi_write64(sdxi, SDXI_MMIO_CXT_L2, cxt_l2);
+
+	if (sdxi->rkey_cap && sdxi->rkey_table) {
+		u64 reg;
+
+		reg = FIELD_PREP(SDXI_MMIO_RKEY_PTR,
+				 sdxi->rkey_table_dma >> ilog2(SZ_4K)) |
+		      FIELD_PREP(SDXI_MMIO_RKEY_SZ, sdxi->rkey_order) |
+		      FIELD_PREP(SDXI_MMIO_RKEY_EN, 1);
+		sdxi_write64(sdxi, SDXI_MMIO_RKEY, reg);
+	}
 
 	if (sdxi->pm_fn_was_active) {
 		err = sdxi_dev_start(sdxi);
