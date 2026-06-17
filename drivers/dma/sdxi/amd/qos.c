@@ -140,9 +140,12 @@ u32 sdxi_amd_qos_align_bw(u32 bw, u32 granularity)
 }
 EXPORT_SYMBOL_IF_KUNIT(sdxi_amd_qos_align_bw);
 
-int sdxi_amd_qos_validate_devupd_req(u32 device_maxbw, u32 total_allocated_bw,
-				     u32 granularity_bw)
+int sdxi_amd_qos_validate_devupd_req(u32 device_maxbw, u32 device_maxbw_cap,
+				     u32 total_allocated_bw, u32 granularity_bw)
 {
+	if (device_maxbw > device_maxbw_cap)
+		return -EINVAL;
+
 	if (sdxi_amd_qos_align_bw(device_maxbw, granularity_bw) <
 	    total_allocated_bw)
 		return -EINVAL;
@@ -826,6 +829,7 @@ static int sdxi_amd_qos_exec(struct sdxi_dev *sdxi, u16 opcode_type,
 		if (err)
 			return err;
 		err = sdxi_amd_qos_validate_devupd_req(req.device_maxbw,
+						       cap.device_maxbw_cap,
 						       info.total_allocated_bw,
 						       cap.granularity_bw);
 		if (err)
@@ -1045,3 +1049,48 @@ out_free_submit:
 	dma_free_coherent(sdxi_to_dev(sdxi), required, buf, buf_dma);
 	return err;
 }
+
+static int sdxi_amd_qos_authorize(struct sdxi_dev *sdxi,
+				  const struct sdxi_admin_vendor_args *args)
+{
+	(void)args;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	/* ASQOSE is PF admin-context only, including vendor PROBE. */
+	if (sdxi_fn_reports_vf(sdxi))
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
+static const struct sdxi_vendor_handler_ops sdxi_amd_qos_ops = {
+	.authorize = sdxi_amd_qos_authorize,
+	.exec = sdxi_amd_qos_exec,
+};
+
+static struct sdxi_vendor_handler sdxi_amd_qos_handler = {
+	.name = "sdxi-amd-qos",
+	.guid = sdxi_amd_guid_qos,
+	.owner = THIS_MODULE,
+	.ops = &sdxi_amd_qos_ops,
+};
+
+static int __init sdxi_amd_qos_init(void)
+{
+	return sdxi_vendor_register(&sdxi_amd_qos_handler);
+}
+
+static void __exit sdxi_amd_qos_exit(void)
+{
+	sdxi_vendor_unregister(&sdxi_amd_qos_handler);
+}
+
+module_init(sdxi_amd_qos_init);
+module_exit(sdxi_amd_qos_exit);
+
+MODULE_AUTHOR("Wei Huang <wei.huang2@amd.com>");
+MODULE_DESCRIPTION("AMD SDXI QoS extension support");
+MODULE_LICENSE("GPL");
+MODULE_SOFTDEP("pre: sdxi");
