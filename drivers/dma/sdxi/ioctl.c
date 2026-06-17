@@ -766,6 +766,130 @@ static int sdxi_ioctl_cxt_eventfd(struct file *filep,
 
 	args->argsz = sizeof(*args);
 
-return sdxi_cxt_set_intr_fd(cxt, args->eventfd,
+	return sdxi_cxt_set_intr_fd(cxt, args->eventfd,
 				    &args->intr_akey, &args->intr_num);
+}
+
+static int sdxi_admin_get_device(struct sdxi_file *sf,
+				 struct sdxi_dev **sdxi_out)
+{
+	struct sdxi_process *p = sf->process;
+	struct sdxi_dev *sdxi = p->sdxi;
+	struct sdxi_cxt *adm;
+
+	if (!sdxi)
+		return -ENODEV;
+
+	adm = sdxi->admin_cxt;
+	if (!adm || !adm->ring_state)
+		return -ENODEV;
+	if (adm->id != SDXI_ADMIN_CXT_ID)
+		return -ENODEV;
+
+	*sdxi_out = sdxi;
+
+	return 0;
+}
+
+static unsigned int sdxi_admin_timeout_ms(u32 timeout_ms)
+{
+	if (!timeout_ms)
+		timeout_ms = 5000;
+
+	return clamp_val(timeout_ms, 1U, 60000U);
+}
+
+static bool sdxi_admin_disc_reserved_zero(const struct sdxi_admin_disc_args *args)
+{
+	if (args->flags)
+		return false;
+
+	return sdxi_u32_array_zero(args->rsvd0, ARRAY_SIZE(args->rsvd0));
+}
+
+static bool
+sdxi_admin_vendor_reserved_zero(const struct sdxi_admin_vendor_args *args)
+{
+	if (args->flags || args->rsvd0 || args->rsvd1)
+		return false;
+
+	return sdxi_u32_array_zero(args->rsvd2, ARRAY_SIZE(args->rsvd2));
+}
+
+static int sdxi_admin_disc_validate_range(u16 index_start, u16 index_end)
+{
+	if (index_start > index_end)
+		return -EINVAL;
+
+	if (index_end > 2047)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int sdxi_ioctl_admin_disc(struct file *filep,
+				 struct sdxi_file *sf, void *data)
+{
+	struct sdxi_admin_disc_args *args = data;
+	struct sdxi_dev *sdxi;
+	void *buf;
+	dma_addr_t buf_dma;
+	size_t required;
+	u32 available;
+	void __user *ubuf;
+	unsigned int timeout_ms;
+	int err;
+
+	err = sdxi_admin_get_device(sf, &sdxi);
+	if (err)
+		return err;
+
+	if (!sdxi_dev_compatible(sdxi, SDXI_VERSION_1_1))
+		return -EOPNOTSUPP;
+
+	if (args->argsz < sizeof(*args))
+		return -EINVAL;
+	args->argsz = sizeof(*args);
+
+	if (!sdxi_admin_disc_reserved_zero(args))
+		return -EINVAL;
+
+	timeout_ms = sdxi_admin_timeout_ms(args->timeout_ms);
+	args->cst_flags = 0;
+
+	err = sdxi_admin_disc_validate_range(args->index.start, args->index.end);
+	if (err)
+		return err;
+
+	available = args->buf_size;
+	required = (size_t)(args->index.end - args->index.start + 1) * 16;
+	args->buf_size = (u32)required;
+
+	if (available < required)
+		return -ENOSPC;
+
+	if (!args->buf_uptr)
+		return -EINVAL;
+
+	ubuf = u64_to_user_ptr(args->buf_uptr);
+	if (!access_ok(ubuf, required))
+		return -EFAULT;
+
+	buf = dma_alloc_coherent(sdxi_to_dev(sdxi), required, &buf_dma,
+				 GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	err = sdxi_adm_disc(sdxi, args->index.start, args->index.end, buf_dma,
+			    timeout_ms, &args->cst_flags);
+	if (err)
+		goto out_free_disc;
+
+	dma_rmb();
+	if (copy_to_user(ubuf, buf, required))
+		err = -EFAULT;
+
+out_free_disc:
+	dma_free_coherent(sdxi_to_dev(sdxi), required, buf, buf_dma);
+	return err;
 }
