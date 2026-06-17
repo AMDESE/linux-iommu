@@ -138,3 +138,36 @@ static int sdxi_cxt_doorbell_mmap(struct sdxi_process *process,
 
 	return ret;
 }
+
+static int sdxi_ioctl_get_uapi_info(struct file *filep,
+				    struct sdxi_file *sf, void *data)
+{
+	struct sdxi_uapi_info_args *args = data;
+	u64 caps0;
+
+	if (args->flags)
+		return -EINVAL;
+
+	if (args->argsz < sizeof(*args))
+		return -EINVAL;
+
+	caps0 = SDXI_UAPI_CAP_DEV_INFO |
+		SDXI_UAPI_CAP_DEV_ATTR_MGMT |
+		SDXI_UAPI_CAP_RKEY_MGMT |
+		SDXI_UAPI_CAP_CXT_CREATE |
+		SDXI_UAPI_CAP_CXT_EVENTFD |
+		SDXI_UAPI_CAP_AKEY_MGMT |
+		SDXI_UAPI_CAP_ADMIN_DISC |
+		SDXI_UAPI_CAP_ADMIN_VENDOR;
+
+	args->argsz = sizeof(*args);
+	args->uapi_major = SDXI_UAPI_MAJOR;
+	args->uapi_minor = SDXI_UAPI_MINOR;
+	args->cap_words = SDXI_UAPI_CAP_WORDS;
+	args->rsvd0 = 0;
+
+	memset(args->caps, 0, sizeof(args->caps));
+	args->caps[0] = caps0;
+
+	return 0;
+}
