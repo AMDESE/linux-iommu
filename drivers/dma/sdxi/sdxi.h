@@ -18,9 +18,6 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
-#include <linux/bug.h>
-#include <linux/idr.h>
-#include <linux/xarray.h>
 
 #include "hw.h"
 #include "mmio.h"
@@ -89,23 +86,6 @@ struct sdxi_dev_ops {
 	int (*irq_get)(struct sdxi_dev *sdxi, unsigned int msg);
 };
 
-
-
-/* Legacy interfaces kept until the PCI and context conversions land. */
-struct sdxi_bus_ops {
-	int (*init)(struct sdxi_dev *sdxi);
-	int (*get_irq)(struct sdxi_dev *sdxi, unsigned int index);
-};
-
-enum {
-	SDXI_ERROR_VECTOR = 0,
-	SDXI_MIN_VECTORS = 1,
-};
-
-int sdxi_register(struct device *dev, const struct sdxi_bus_ops *ops);
-void sdxi_unregister(struct device *dev);
-/* End legacy interfaces. */
-
 struct device;
 struct dma_pool;
 
@@ -126,19 +106,6 @@ struct sdxi_dev {
 	u32 max_akeys;			/* max akey # supported */
 	u32 max_cxts;			/* max contexts # supported */
 	u32 op_grp_cap;			/* supported operatation group cap */
-
-	/* Legacy context table fields kept until the context conversion lands. */
-	u16 max_cxtid;
-	struct sdxi_cxt_L2_table *L2_table;
-	dma_addr_t L2_dma;
-	struct sdxi_cxt_L1_table *L1_table;
-	dma_addr_t L1_dma;
-	unsigned int nr_vectors;
-	struct ida vectors;
-	struct xarray client_cxts;
-	const struct sdxi_bus_ops *bus_ops;
-	/* End legacy context table fields. */
-
 
 	/* rkey table (MMIO_RKEY) */
 	struct mutex rkey_lock;
@@ -192,25 +159,6 @@ struct sdxi_dev {
 	u64 pm_ctl0;
 	u64 pm_ctl2;
 };
-
-/* Legacy vector helpers kept until the PCI conversion lands. */
-static inline int sdxi_alloc_vector(struct sdxi_dev *sdxi)
-{
-	return ida_alloc_range(&sdxi->vectors, SDXI_MIN_VECTORS,
-			       sdxi->nr_vectors - 1, GFP_KERNEL);
-}
-
-static inline void sdxi_free_vector(struct sdxi_dev *sdxi, unsigned int nr)
-{
-	ida_free(&sdxi->vectors, nr);
-}
-
-static inline int sdxi_vector_to_irq(struct sdxi_dev *sdxi, unsigned int nr)
-{
-	WARN_ON_ONCE(!ida_exists(&sdxi->vectors, nr));
-	return sdxi->bus_ops->get_irq(sdxi, nr);
-}
-/* End legacy vector helpers. */
 
 static inline bool sdxi_dev_compatible(const struct sdxi_dev *sdxi,
 				       struct sdxi_version v)
