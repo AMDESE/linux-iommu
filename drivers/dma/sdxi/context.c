@@ -14,6 +14,7 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/jiffies.h>
 #include <linux/mm.h>
+#include <linux/poll.h>
 #include <linux/types.h>
 #include <linux/wordpart.h>
 
@@ -46,7 +47,7 @@ static struct sdxi_sq *sdxi_sq_alloc(struct sdxi_cxt *cxt, u32 ring_entries)
 		return NULL;
 	}
 
-	sq = kzalloc(sizeof(*sq), GFP_KERNEL);
+	sq = kzalloc_obj(*sq, GFP_KERNEL);
 	if (!sq)
 		return NULL;
 
@@ -221,9 +222,11 @@ static void set_cxt_l1_entry(struct sdxi_dev *sdxi,
 		.opb_000_enb = cpu_to_le32(cxt->opb_000_enb),
 	};
 
-	intr_num = le16_to_cpu(cxt->akey_table->entry[0].intr_num);
-	FIELD_MODIFY(SDXI_AKEY_ENT_VL, &intr_num, 1);
-	cxt->akey_table->entry[0].intr_num = cpu_to_le16(intr_num);
+	if (!pv) {
+		intr_num = le16_to_cpu(cxt->akey_table->entry[0].intr_num);
+		FIELD_MODIFY(SDXI_AKEY_ENT_VL, &intr_num, 1);
+		cxt->akey_table->entry[0].intr_num = cpu_to_le16(intr_num);
+	}
 }
 
 static int config_cxt_tables(struct sdxi_dev *sdxi,
@@ -264,16 +267,17 @@ static int config_cxt_tables(struct sdxi_dev *sdxi,
 	return 0;
 }
 
-static void clear_cxt_table_entries(struct sdxi_cxt_l2_table *l2_table,
+static void clear_cxt_table_entries(struct sdxi_dev *sdxi,
 				    struct sdxi_cxt_l1_table *l1_table,
 				    struct sdxi_cxt *cxt)
 {
 	struct sdxi_cxt_l2_ent *l2_entry;
 	struct sdxi_cxt_l1_ent *l1_entry;
-	struct sdxi_dev *sdxi = cxt->sdxi;
 	dma_addr_t l1_dma;
+	u16 l2_idx;
 
-	l2_entry = &l2_table->entry[ID_TO_L2_INDEX(cxt->id)];
+	l2_idx = ID_TO_L2_INDEX(cxt->id);
+	l2_entry = &sdxi->l2_table->entry[l2_idx];
 	l1_entry = &l1_table->entry[ID_TO_L1_INDEX(cxt->id)];
 
 	memset(l1_entry, 0, sizeof(*l1_entry));
@@ -285,6 +289,7 @@ static void clear_cxt_table_entries(struct sdxi_cxt_l2_table *l2_table,
 	l1_dma = sdxi_cxt_l2_ent_lv01_ptr(l2_entry);
 
 	memset(l2_entry, 0, sizeof(*l2_entry));
+	sdxi->l1_table_array[l2_idx] = NULL;
 
 	dma_free_coherent(sdxi_to_dev(sdxi), sizeof(*l1_table),
 			  l1_table, l1_dma);
@@ -302,8 +307,10 @@ static void cleanup_cxt_tables(struct sdxi_dev *sdxi,
 	l2_idx = ID_TO_L2_INDEX(cxt->id);
 
 	l1_table = sdxi->l1_table_array[l2_idx];
-	/* clear l1 entry */
-	clear_cxt_table_entries(sdxi->l2_table, l1_table, cxt);
+	if (!l1_table)
+		return;
+
+	clear_cxt_table_entries(sdxi, l1_table, cxt);
 }
 
 static bool sdxi_cxt_cleanup_requested(const struct sdxi_cxt *cxt)
@@ -330,6 +337,33 @@ void sdxi_cxt_put(struct sdxi_cxt *cxt)
 
 	if (refcount_dec_and_test(&cxt->refs))
 		sdxi_cxt_release_memory(cxt);
+}
+
+struct sdxi_cxt *sdxi_cxt_get_by_id(struct sdxi_dev *sdxi, u16 cxt_id)
+{
+	struct sdxi_cxt **row;
+	struct sdxi_cxt *cxt = NULL;
+	u16 l2_idx;
+	u8 l1_idx;
+
+	if (!sdxi)
+		return NULL;
+
+	l2_idx = ID_TO_L2_INDEX(cxt_id);
+	l1_idx = ID_TO_L1_INDEX(cxt_id);
+
+	mutex_lock(&sdxi->cxt_lock);
+	row = sdxi->cxt_array[l2_idx];
+	if (row) {
+		cxt = row[l1_idx];
+		if (cxt && cxt->id == cxt_id)
+			sdxi_cxt_get(cxt);
+		else
+			cxt = NULL;
+	}
+	mutex_unlock(&sdxi->cxt_lock);
+
+	return cxt;
 }
 
 static void sdxi_cxt_destroy_table_slot(struct sdxi_cxt *cxt)
@@ -425,7 +459,7 @@ static void sdxi_cxt_cleanup_workfn(struct work_struct *work)
 	if (cxt->vma_refs)
 		goto out_unlock;
 
-	cxt->resources_released = true;
+	WRITE_ONCE(cxt->resources_released, true);
 	process = cxt->process;
 	cxt->process = NULL;
 	destroy = true;
@@ -441,6 +475,8 @@ out_unlock:
 
 	if (!destroy)
 		return;
+
+	wake_up_poll(&cxt->poll_wq, EPOLLHUP);
 
 	sdxi_cxt_exit_intr(cxt);
 	sdxi_sq_free(cxt->sq);
@@ -515,7 +551,7 @@ static struct sdxi_cxt *alloc_cxt(struct sdxi_dev *sdxi, bool admin)
 	if (WARN_ON_ONCE(id == SDXI_ADMIN_CXT_ID && !admin))
 		return NULL;
 
-	cxt = kzalloc(sizeof(*cxt), GFP_KERNEL);
+	cxt = kzalloc_obj(*cxt, GFP_KERNEL);
 	if (!cxt)
 		return NULL;
 
@@ -530,6 +566,9 @@ static struct sdxi_cxt *alloc_cxt(struct sdxi_dev *sdxi, bool admin)
 	cxt->sdxi = sdxi;
 	refcount_set(&cxt->refs, 1);
 	mutex_init(&cxt->cleanup_lock);
+	init_waitqueue_head(&cxt->poll_wq);
+	mutex_init(&cxt->akey_lock);
+	spin_lock_init(&cxt->intr_lock);
 	INIT_DELAYED_WORK(&cxt->cleanup_work, sdxi_cxt_cleanup_workfn);
 	cxt->id = id;
 	cxt->mmap_gen = ++sdxi->mmap_gen_ctr;
@@ -557,6 +596,7 @@ static void free_cxt(struct sdxi_cxt *cxt)
 			  cxt->akey_table, cxt->akey_table_dma);
 	kfree(cxt->ring_state);
 	cancel_delayed_work_sync(&cxt->cleanup_work);
+	mutex_destroy(&cxt->akey_lock);
 	mutex_destroy(&cxt->cleanup_lock);
 	kfree(cxt);
 
@@ -584,7 +624,7 @@ static struct sdxi_cxt *sdxi_cxt_alloc(struct sdxi_dev *sdxi, bool admin,
 	if (!cxt->cxt_ctl)
 		goto release_cxt;
 
-	cxt->ring_state = kzalloc(sizeof(*cxt->ring_state), GFP_KERNEL);
+	cxt->ring_state = kzalloc_obj(*cxt->ring_state, GFP_KERNEL);
 	if (!cxt->ring_state)
 		goto release_cxt_ctl;
 
@@ -680,14 +720,48 @@ struct sdxi_cxt *sdxi_kcxt_new(struct sdxi_dev *sdxi)
 	if (!cxt)
 		return NULL;
 
-	if (!sdxi_sq_alloc_default(cxt)) {
+	sq = sdxi_sq_alloc_default(cxt);
+	if (!sq) {
 		sdxi_working_cxt_exit(cxt);
-		cxt = NULL;
+		return NULL;
 	}
 
-	sq = cxt->sq;
 	sdxi_ring_state_init(cxt->ring_state, &sq->cxt_sts->read_index,
 			     sq->write_index, sq->ring_entries, sq->desc_ring);
+
+	return cxt;
+}
+
+struct sdxi_cxt *sdxi_ucxt_new(struct sdxi_dev *sdxi, u32 ring_entries,
+			       u64 ds_ring, u64 write_index, u64 cxt_sts,
+			       u32 pasid, u32 opb_000_enb)
+{
+	struct sdxi_cxt *cxt;
+	u64 write_index_ptr;
+	u64 cxt_sts_ptr;
+	u64 ds_ring_ptr;
+
+	cxt = sdxi_cxt_alloc(sdxi, false, true, pasid, opb_000_enb);
+	if (!cxt)
+		return NULL;
+
+	write_index_ptr = FIELD_PREP(SDXI_CXT_CTL_WRITE_INDEX_PTR,
+				     write_index >> WRT_INDEX_PTR_SHIFT);
+	cxt_sts_ptr = FIELD_PREP(SDXI_CXT_CTL_CXT_STS_PTR,
+				 cxt_sts >> CXT_STATUS_PTR_SHIFT);
+	cxt->cxt_ctl->write_index_ptr = cpu_to_le64(write_index_ptr);
+	cxt->cxt_ctl->cxt_sts_ptr     = cpu_to_le64(cxt_sts_ptr);
+	cxt->cxt_ctl->ds_ring_sz      = cpu_to_le32(ring_entries);
+
+	/*
+	 * Set ds_ring_ptr and its valid bit last, after all prior
+	 * updates to the control hierarchy are visible to the device.
+	 */
+	ds_ring_ptr = (FIELD_PREP(SDXI_CXT_CTL_DS_RING_PTR,
+				  ds_ring >> DESC_RING_BASE_PTR_SHIFT) |
+		       FIELD_PREP(SDXI_CXT_CTL_VL, 1));
+	dma_wmb();
+	WRITE_ONCE(cxt->cxt_ctl->ds_ring_ptr, cpu_to_le64(ds_ring_ptr));
 
 	return cxt;
 }
@@ -737,10 +811,12 @@ void sdxi_working_cxt_exit(struct sdxi_cxt *cxt)
 	if (!cxt->quiesced)
 		(void)sdxi_cxt_quiesce_locked(cxt, 0, NULL, false);
 
-	cxt->resources_released = true;
+	WRITE_ONCE(cxt->resources_released, true);
 	process = cxt->process;
 	cxt->process = NULL;
 	mutex_unlock(&cxt->cleanup_lock);
+
+	wake_up_poll(&cxt->poll_wq, EPOLLHUP);
 
 	sdxi_cxt_exit_intr(cxt);
 	sdxi_sq_free(cxt->sq);
@@ -781,6 +857,16 @@ int sdxi_cxt_quiesce(struct sdxi_cxt *cxt, unsigned int timeout_ms,
 	return err;
 }
 
+bool sdxi_cxt_is_user(const struct sdxi_cxt *cxt)
+{
+	if (!cxt)
+		return false;
+
+	return cxt->id != SDXI_ADMIN_CXT_ID &&
+	       READ_ONCE(cxt->pasid_valid) &&
+	       READ_ONCE(cxt->process);
+}
+
 bool sdxi_cxt_is_fatal(const struct sdxi_cxt *cxt)
 {
 	if (!cxt)
@@ -798,6 +884,7 @@ void sdxi_cxt_kill(struct sdxi_cxt *cxt)
 		return;
 
 	WRITE_ONCE(cxt->fatal, true);
+	wake_up_poll(&cxt->poll_wq, EPOLLERR);
 	mod_delayed_work(system_wq, &cxt->cleanup_work, 0);
 }
 
@@ -843,6 +930,41 @@ int sdxi_cxt_notify_mm_release(struct sdxi_cxt *cxt)
 		mod_delayed_work(system_wq, &cxt->cleanup_work, 0);
 
 	return err;
+}
+
+void sdxi_cxt_vma_open(struct sdxi_cxt *cxt)
+{
+	if (!cxt)
+		return;
+
+	sdxi_cxt_get(cxt);
+	mutex_lock(&cxt->cleanup_lock);
+	cxt->vma_refs++;
+	mutex_unlock(&cxt->cleanup_lock);
+}
+
+void sdxi_cxt_vma_close(struct sdxi_cxt *cxt)
+{
+	bool schedule = false;
+
+	if (!cxt)
+		return;
+
+	mutex_lock(&cxt->cleanup_lock);
+	if (WARN_ON_ONCE(!cxt->vma_refs))
+		goto out_unlock;
+
+	cxt->vma_refs--;
+	if (!cxt->resources_released && sdxi_cxt_cleanup_requested(cxt))
+		schedule = true;
+
+out_unlock:
+	mutex_unlock(&cxt->cleanup_lock);
+
+	if (schedule)
+		mod_delayed_work(system_wq, &cxt->cleanup_work, 0);
+
+	sdxi_cxt_put(cxt);
 }
 
 void sdxi_cxt_push_doorbell(struct sdxi_cxt *cxt, u64 index)
