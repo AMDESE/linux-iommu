@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * SDXI Descriptor Completion Status Block handling.
+ * SDXI completion status block helpers.
  *
- * Copyright Advanced Micro Devices, Inc.
+ * Copyright (C) 2026 Advanced Micro Devices, Inc.
  */
-#include <linux/cleanup.h>
-#include <linux/dma-mapping.h>
-#include <linux/dmapool.h>
-#include <linux/jiffies.h>
+
 #include <linux/slab.h>
+#include <linux/dma-mapping.h>
+#include <linux/delay.h>
+#include <linux/jiffies.h>
+#include <linux/sched/signal.h>
 
 #include "completion.h"
 #include "descriptor.h"
-#include "hw.h"
 
 struct sdxi_completion {
 	struct sdxi_dev *sdxi;
@@ -22,21 +22,21 @@ struct sdxi_completion {
 
 struct sdxi_completion *sdxi_completion_alloc(struct sdxi_dev *sdxi)
 {
+	struct sdxi_completion *sc __free(kfree) = kmalloc(sizeof(*sc),
+							   GFP_KERNEL);
 	struct sdxi_cst_blk *cst_blk;
 	dma_addr_t cst_blk_dma;
 
-	/*
-	 * Assume callers can't tolerate GFP_KERNEL and use
-	 * GFP_NOWAIT. Add a gfp_t flags parameter if that changes.
-	 */
-	struct sdxi_completion *sc __free(kfree) = kmalloc(sizeof(*sc), GFP_NOWAIT);
 	if (!sc)
 		return NULL;
 
-	cst_blk = dma_pool_zalloc(sdxi->cst_blk_pool, GFP_NOWAIT, &cst_blk_dma);
+	/* Should use a dma_pool. */
+	cst_blk = dma_alloc_coherent(sdxi_to_dev(sdxi), sizeof(*cst_blk),
+				     &cst_blk_dma, GFP_KERNEL);
 	if (!cst_blk)
 		return NULL;
 
+	memset(cst_blk, 0, sizeof(*cst_blk));
 	cst_blk->signal = cpu_to_le64(1);
 
 	*sc = (typeof(*sc)) {
@@ -50,21 +50,47 @@ struct sdxi_completion *sdxi_completion_alloc(struct sdxi_dev *sdxi)
 
 void sdxi_completion_free(struct sdxi_completion *sc)
 {
-	dma_pool_free(sc->sdxi->cst_blk_pool, sc->cst_blk, sc->cst_blk_dma);
+	dma_free_coherent(sdxi_to_dev(sc->sdxi), sizeof(*sc->cst_blk),
+			  sc->cst_blk, sc->cst_blk_dma);
 	kfree(sc);
 }
 
 int sdxi_completion_poll(const struct sdxi_completion *sc)
 {
-	unsigned long deadline = jiffies + msecs_to_jiffies(1000);
-
-	while (le64_to_cpu(READ_ONCE(sc->cst_blk->signal)) != 0) {
-		if (time_after(jiffies, deadline))
-			return -ETIMEDOUT;
+	while (READ_ONCE(sc->cst_blk->signal) != 0)
 		cpu_relax();
-	}
 
-	return sdxi_completion_errored(sc) ? -EIO : 0;
+	return 0;
+}
+
+static int sdxi_completion_wait_timeout_common(const struct sdxi_completion *sc,
+					       unsigned int timeout_ms,
+					       bool interruptible)
+{
+	unsigned long timeout = msecs_to_jiffies(timeout_ms);
+	unsigned long deadline = jiffies + timeout;
+
+	for (;;) {
+		if (READ_ONCE(sc->cst_blk->signal) == 0)
+			return 0;
+		if (interruptible && signal_pending(current))
+			return -ERESTARTSYS;
+		if (timeout_ms && time_after(jiffies, deadline))
+			return -ETIMEDOUT;
+		usleep_range(50, 200);
+	}
+}
+
+int sdxi_completion_wait_timeout(const struct sdxi_completion *sc,
+				 unsigned int timeout_ms)
+{
+	return sdxi_completion_wait_timeout_common(sc, timeout_ms, true);
+}
+
+int sdxi_completion_wait_timeout_nosignal(const struct sdxi_completion *sc,
+					  unsigned int timeout_ms)
+{
+	return sdxi_completion_wait_timeout_common(sc, timeout_ms, false);
 }
 
 bool sdxi_completion_signaled(const struct sdxi_completion *sc)
@@ -79,6 +105,11 @@ bool sdxi_completion_errored(const struct sdxi_completion *sc)
 	return FIELD_GET(SDXI_CST_BLK_ER_BIT, le32_to_cpu(sc->cst_blk->flags));
 }
 
+u32 sdxi_completion_flags(const struct sdxi_completion *sc)
+{
+	dma_rmb();
+	return le32_to_cpu(sc->cst_blk->flags);
+}
 
 void sdxi_completion_attach(struct sdxi_desc *desc,
 			    const struct sdxi_completion *cs)

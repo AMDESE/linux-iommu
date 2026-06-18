@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * SDXI descriptor ring state management. Handles advancing the write
- * index correctly and supplies "reservations" i.e. slices of the ring
- * to be filled with descriptors.
+ * SDXI descriptor ring management.
  *
- * Copyright Advanced Micro Devices, Inc.
+ * Copyright (C) 2026 Advanced Micro Devices, Inc.
  */
+
 #include <kunit/visibility.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
-#include <linux/lockdep.h>
+#include <linux/jiffies.h>
 #include <linux/range.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
@@ -33,12 +32,7 @@ void sdxi_ring_state_init(struct sdxi_ring_state *rs, const __le64 *read_index,
 {
 	WARN_ON_ONCE(!read_index);
 	WARN_ON_ONCE(!write_index);
-	/*
-	 * See SDXI 1.0 Table 3-1 Memory Structure Summary. Minimum
-	 * descriptor ring size in bytes is 64KB; thus 1024 64-byte
-	 * entries.
-	 */
-	WARN_ON_ONCE(entries < SZ_1K);
+	WARN_ON_ONCE(entries < SZ_1K); /* SDXI minimum ring size */
 
 	*rs = (typeof(*rs)) {
 		.write_index = le64_to_cpu(*write_index),
@@ -49,20 +43,22 @@ void sdxi_ring_state_init(struct sdxi_ring_state *rs, const __le64 *read_index,
 	};
 	spin_lock_init(&rs->lock);
 	init_waitqueue_head(&rs->wqh);
+
+	pr_debug("initialized ring state at %p with %u entries\n",
+		 rs, rs->entries);
 }
 EXPORT_SYMBOL_IF_KUNIT(sdxi_ring_state_init);
 
 static u64 sdxi_ring_state_load_ridx(struct sdxi_ring_state *rs)
 {
-	lockdep_assert_held(&rs->lock);
+	assert_spin_locked(&rs->lock);
 	return le64_to_cpu(READ_ONCE(*rs->read_index_ptr));
 }
 
 static void sdxi_ring_state_store_widx(struct sdxi_ring_state *rs, u64 new_widx)
 {
-	lockdep_assert_held(&rs->lock);
-	rs->write_index = new_widx;
-	WRITE_ONCE(*rs->write_index_ptr, cpu_to_le64(new_widx));
+	assert_spin_locked(&rs->lock);
+	*rs->write_index_ptr = cpu_to_le64(rs->write_index = new_widx);
 }
 
 /* Non-blocking ring reservation. Callers must handle ring full (-EBUSY). */
@@ -71,12 +67,7 @@ int sdxi_ring_try_reserve(struct sdxi_ring_state *rs, size_t nr,
 {
 	u64 new_widx;
 
-	/*
-	 * Caller bug, warn and reject.
-	 */
-	if (WARN_ONCE(nr < 1 || nr > rs->entries,
-		      "Reservation of size %zu requested from ring of size %u\n",
-		      nr, rs->entries))
+	if (nr < 1 || nr > rs->entries)
 		return -EINVAL;
 
 	scoped_guard(spinlock_irqsave, &rs->lock) {
@@ -119,12 +110,21 @@ EXPORT_SYMBOL_IF_KUNIT(sdxi_ring_try_reserve);
 int sdxi_ring_reserve(struct sdxi_ring_state *rs, size_t nr,
 		      struct sdxi_ring_resv *resv)
 {
-	int ret;
+	int ret = -EBUSY;
 
-	wait_event(rs->wqh,
-		   (ret = sdxi_ring_try_reserve(rs, nr, resv)) != -EBUSY);
-
-	return ret;
+	for (;;) {
+		/*
+		 * Wait until space becomes available. The wakeup can come from
+		 * another thread calling sdxi_ring_wake_up(), but also use a
+		 * periodic timeout to avoid indefinite sleeps in purely-polled
+		 * contexts.
+		 */
+		wait_event_timeout(rs->wqh,
+				   (ret = sdxi_ring_try_reserve(rs, nr, resv)) != -EBUSY,
+				   msecs_to_jiffies(10));
+		if (ret != -EBUSY)
+			return ret;
+	}
 }
 
 /* Completion code should call this whenever descriptors have been consumed. */
