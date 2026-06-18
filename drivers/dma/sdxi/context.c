@@ -8,7 +8,6 @@
 #define pr_fmt(fmt)     "SDXI: " fmt
 
 #include <linux/delay.h>
-#include <linux/cleanup.h>
 #include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
@@ -19,8 +18,6 @@
 #include <linux/wordpart.h>
 
 #include "admin.h"
-#include "completion.h"
-#include "descriptor.h"
 #include "context.h"
 #include "hw.h"
 #include "intr.h"
@@ -31,95 +28,6 @@
 
 #define SDXI_CXT_QUIESCE_TIMEOUT_MS	5000U
 #define SDXI_CXT_CLEANUP_RETRY_MS	100U
-
-
-static struct sdxi_sq *sdxi_sq_alloc_default(struct sdxi_cxt *cxt);
-static void sdxi_sq_free(struct sdxi_sq *sq);
-static int config_cxt_tables(struct sdxi_dev *sdxi, struct sdxi_cxt *cxt);
-static void cleanup_cxt_tables(struct sdxi_dev *sdxi, struct sdxi_cxt *cxt);
-
-static struct sdxi_cxt *sdxi_alloc_cxt(struct sdxi_dev *sdxi)
-{
-	struct sdxi_cxt *cxt;
-	struct device *dev = sdxi_to_dev(sdxi);
-
-	cxt = kzalloc(sizeof(*cxt), GFP_KERNEL);
-	if (!cxt)
-		return NULL;
-
-	cxt->sdxi = sdxi;
-	mutex_init(&cxt->cleanup_lock);
-
-	cxt->ring_state = kzalloc(sizeof(*cxt->ring_state), GFP_KERNEL);
-	if (!cxt->ring_state)
-		goto free_cxt;
-
-	cxt->akey_table = dma_alloc_coherent(dev, sizeof(*cxt->akey_table),
-					 &cxt->akey_table_dma, GFP_KERNEL);
-	if (!cxt->akey_table)
-		goto free_ring_state;
-
-	cxt->cxt_ctl = dma_pool_zalloc(sdxi->cxt_ctl_pool, GFP_KERNEL,
-				       &cxt->cxt_ctl_dma);
-	if (!cxt->cxt_ctl)
-		goto free_akey_table;
-
-	cxt->sq = sdxi_sq_alloc_default(cxt);
-	if (!cxt->sq)
-		goto free_cxt_ctl;
-
-	return cxt;
-
-free_cxt_ctl:
-	dma_pool_free(sdxi->cxt_ctl_pool, cxt->cxt_ctl, cxt->cxt_ctl_dma);
-	cxt->cxt_ctl = NULL;
-free_akey_table:
-	dma_free_coherent(dev, sizeof(*cxt->akey_table), cxt->akey_table,
-			  cxt->akey_table_dma);
-	cxt->akey_table = NULL;
-free_ring_state:
-	kfree(cxt->ring_state);
-free_cxt:
-	mutex_destroy(&cxt->cleanup_lock);
-	kfree(cxt);
-	return NULL;
-}
-
-static void sdxi_free_cxt(struct sdxi_cxt *cxt)
-{
-	struct sdxi_dev *sdxi;
-
-	if (!cxt)
-		return;
-
-	sdxi = cxt->sdxi;
-	if (cxt->id)
-		WARN_ON(xa_erase(&sdxi->client_cxts, cxt->id) != cxt);
-
-	sdxi_sq_free(cxt->sq);
-	if (cxt->cxt_ctl)
-		dma_pool_free(sdxi->cxt_ctl_pool, cxt->cxt_ctl, cxt->cxt_ctl_dma);
-	if (cxt->akey_table)
-		dma_free_coherent(sdxi_to_dev(sdxi), sizeof(*cxt->akey_table),
-				  cxt->akey_table, cxt->akey_table_dma);
-
-	ida_destroy(&cxt->akey_ida);
-	kfree(cxt->ring_state);
-	mutex_destroy(&cxt->cleanup_lock);
-	kfree(cxt);
-}
-
-DEFINE_FREE(sdxi_cxt, struct sdxi_cxt *, if (_T) sdxi_free_cxt(_T))
-
-static int sdxi_publish_cxt(const struct sdxi_cxt *cxt)
-{
-	return config_cxt_tables(cxt->sdxi, (struct sdxi_cxt *)cxt);
-}
-
-static void sdxi_rescind_cxt(struct sdxi_cxt *cxt)
-{
-	cleanup_cxt_tables(cxt->sdxi, cxt);
-}
 
 /* Alloc sdxi_sq in kernel space */
 static struct sdxi_sq *sdxi_sq_alloc(struct sdxi_cxt *cxt, u32 ring_entries)
@@ -398,206 +306,472 @@ static void cleanup_cxt_tables(struct sdxi_dev *sdxi,
 	clear_cxt_table_entries(sdxi->l2_table, l1_table, cxt);
 }
 
-
-static void free_admin_cxt(void *ptr)
+static bool sdxi_cxt_cleanup_requested(const struct sdxi_cxt *cxt)
 {
-	struct sdxi_dev *sdxi = ptr;
-
-	sdxi_free_cxt(sdxi->admin_cxt);
+	return cxt->handle_closed || cxt->mm_dead || READ_ONCE(cxt->fatal);
 }
 
-int sdxi_admin_cxt_init(struct sdxi_dev *sdxi)
+static void sdxi_cxt_release_memory(struct sdxi_cxt *cxt)
 {
-	int err;
-	struct sdxi_sq *sq;
+	WARN_ON_ONCE(!cxt->resources_released);
+	mutex_destroy(&cxt->cleanup_lock);
+	kfree(cxt);
+}
 
-	struct sdxi_cxt *cxt __free(sdxi_cxt) = sdxi_alloc_cxt(sdxi);
+void sdxi_cxt_get(struct sdxi_cxt *cxt)
+{
+	refcount_inc(&cxt->refs);
+}
+
+void sdxi_cxt_put(struct sdxi_cxt *cxt)
+{
 	if (!cxt)
-		return -ENOMEM;
+		return;
 
-	sq = cxt->sq;
-	/* SDXI 1.0 4.1.8.4.b: Set CXT_STS.state to CXTV_RUN. */
-	sq->cxt_sts->state = FIELD_PREP(SDXI_CXT_STS_STATE, CXTV_RUN);
-	cxt->id = SDXI_ADMIN_CXT_ID;
-	cxt->db = sdxi->dbs + cxt->id * sdxi->db_stride;
+	if (refcount_dec_and_test(&cxt->refs))
+		sdxi_cxt_release_memory(cxt);
+}
+
+static void sdxi_cxt_destroy_table_slot(struct sdxi_cxt *cxt)
+{
+	struct sdxi_dev *sdxi = cxt->sdxi;
+	u16 l2_idx = ID_TO_L2_INDEX(cxt->id);
+	u8 l1_idx = ID_TO_L1_INDEX(cxt->id);
+
+	sdxi->cxt_count--;
+	dma_free_coherent(sdxi_to_dev(sdxi), sizeof(*cxt->akey_table),
+			  cxt->akey_table, cxt->akey_table_dma);
+	cxt->akey_table = NULL;
+	cxt->akey_table_dma = 0;
+	kfree(cxt->ring_state);
+	cxt->ring_state = NULL;
+
+	(sdxi->cxt_array)[l2_idx][l1_idx] = NULL;
+}
+
+static void sdxi_cxt_release_resources(struct sdxi_cxt *cxt)
+{
+	struct sdxi_dev *sdxi = cxt->sdxi;
+
+	trace_sdxi_free_cxt(sdxi, cxt);
+
+	mutex_lock(&sdxi->cxt_lock);
+	cleanup_cxt_tables(sdxi, cxt);
+	if (cxt->cxt_ctl) {
+		dma_pool_free(sdxi->cxt_ctl_pool, cxt->cxt_ctl, cxt->cxt_ctl_dma);
+		cxt->cxt_ctl = NULL;
+		cxt->cxt_ctl_dma = 0;
+	}
+	sdxi_cxt_destroy_table_slot(cxt);
+	mutex_unlock(&sdxi->cxt_lock);
+}
+
+static int sdxi_cxt_quiesce_locked(struct sdxi_cxt *cxt,
+				   unsigned int timeout_ms, u32 *cst_flags,
+				   bool interruptible)
+{
+	u32 flags = 0;
+	int err = 0;
+
+	if (cxt->resources_released)
+		return -ENODEV;
+
+	if (cxt->quiesced) {
+		if (cst_flags)
+			*cst_flags = 0;
+		return 0;
+	}
+
+	if (!timeout_ms)
+		timeout_ms = SDXI_CXT_QUIESCE_TIMEOUT_MS;
+
+	if (!sdxi_cxt_is_admin(cxt))
+		err = sdxi_adm_stop_cxt_sync(cxt, timeout_ms, &flags,
+					     interruptible);
+
+	if (err)
+		return err;
+
+	cxt->quiesced = true;
+	cxt->quiesce_cst_flags = flags;
+	if (cst_flags)
+		*cst_flags = flags;
+
+	return 0;
+}
+
+static void sdxi_cxt_cleanup_workfn(struct work_struct *work)
+{
+	struct sdxi_cxt *cxt = container_of(to_delayed_work(work),
+					     struct sdxi_cxt, cleanup_work);
+	struct sdxi_process *process = NULL;
+	struct iommu_sva *sva = NULL;
+	u32 pasid = 0;
+	bool destroy = false;
+	bool retry = false;
+
+	mutex_lock(&cxt->cleanup_lock);
+
+	if (cxt->resources_released || !sdxi_cxt_cleanup_requested(cxt))
+		goto out_unlock;
+
+	if (!cxt->quiesced) {
+		if (sdxi_cxt_quiesce_locked(cxt, 0, NULL, false)) {
+			retry = true;
+			goto out_unlock;
+		}
+	}
+
+	if (cxt->vma_refs)
+		goto out_unlock;
+
+	cxt->resources_released = true;
+	process = cxt->process;
+	cxt->process = NULL;
+	destroy = true;
+
+out_unlock:
+	mutex_unlock(&cxt->cleanup_lock);
+
+	if (retry) {
+		mod_delayed_work(system_wq, &cxt->cleanup_work,
+				 msecs_to_jiffies(SDXI_CXT_CLEANUP_RETRY_MS));
+		return;
+	}
+
+	if (!destroy)
+		return;
+
+	sdxi_cxt_exit_intr(cxt);
+	sdxi_sq_free(cxt->sq);
+
+	if (process) {
+		mutex_lock(&process->mutex);
+		if (process->cxt == cxt)
+			process->cxt = NULL;
+		sva = sdxi_process_detach_sva_locked(process, &pasid);
+		mutex_unlock(&process->mutex);
+
+		sdxi_process_unbind_sva(process, sva, pasid);
+		sdxi_put_process(process);
+	}
+
+	sdxi_cxt_release_resources(cxt);
+	sdxi_cxt_put(cxt);
+}
+
+static struct sdxi_cxt *alloc_cxt(struct sdxi_dev *sdxi, bool admin)
+{
+	struct sdxi_cxt *cxt;
+	u16 id, start_id, l2_idx, l1_idx;
+	u32 max_cxts;
+
+	max_cxts = 1 + FIELD_GET(SDXI_MMIO_CTL2_MAX_CXT,
+				 sdxi_read64(sdxi, SDXI_MMIO_CTL2));
+
+	if (sdxi->cxt_count >= max_cxts)
+		return NULL;
+
+	/*
+	 * Context id 0 is the kernel-only admin context. Reserve it so that
+	 * only callers that explicitly ask for the admin context (admin == true)
+	 * can ever land in slot 0. All other in-kernel and user-visible
+	 * contexts must allocate from id 1 onwards.
+	 */
+	start_id = admin ? SDXI_ADMIN_CXT_ID : SDXI_ADMIN_CXT_ID + 1;
+	if (start_id >= max_cxts)
+		return NULL;
+
+	/* search for an empty context slot */
+	for (id = start_id; id < max_cxts; id++) {
+		l2_idx = ID_TO_L2_INDEX(id);
+		l1_idx = ID_TO_L1_INDEX(id);
+
+		if (sdxi->cxt_array[l2_idx] == NULL) {
+			struct sdxi_cxt **ptr;
+
+			ptr = kcalloc(L1_TABLE_ENTRIES, sizeof(ptr[0]),
+				      GFP_KERNEL);
+			if (!ptr)
+				return NULL;
+			sdxi->cxt_array[l2_idx] = ptr;
+		}
+
+		cxt = (sdxi->cxt_array)[l2_idx][l1_idx];
+		/* found one empty slot */
+		if (!cxt)
+			break;
+	}
+
+	/* nothing found, bail... */
+	if (id == max_cxts)
+		return NULL;
+
+	/*
+	 * Defensive: never hand out id 0 unless the caller is the admin
+	 * bring-up path. The loop above already enforces this via start_id,
+	 * but the check guards against future regressions.
+	 */
+	if (WARN_ON_ONCE(id == SDXI_ADMIN_CXT_ID && !admin))
+		return NULL;
+
+	cxt = kzalloc(sizeof(*cxt), GFP_KERNEL);
+	if (!cxt)
+		return NULL;
+
+	cxt->akey_table = dma_alloc_coherent(sdxi_to_dev(sdxi),
+					     sizeof(*cxt->akey_table),
+					     &cxt->akey_table_dma, GFP_KERNEL);
+	if (!cxt->akey_table) {
+		kfree(cxt);
+		return NULL;
+	}
+
+	cxt->sdxi = sdxi;
+	refcount_set(&cxt->refs, 1);
+	mutex_init(&cxt->cleanup_lock);
+	INIT_DELAYED_WORK(&cxt->cleanup_work, sdxi_cxt_cleanup_workfn);
+	cxt->id = id;
+	cxt->mmap_gen = ++sdxi->mmap_gen_ctr;
+	if (unlikely(!cxt->mmap_gen))
+		cxt->mmap_gen = ++sdxi->mmap_gen_ctr;
+	cxt->db_base = sdxi->dbs_bar + id * sdxi->db_stride;
+	cxt->db = sdxi->dbs + id * sdxi->db_stride;
+
+	sdxi->cxt_array[l2_idx][l1_idx] = cxt;
+	sdxi->cxt_count++;
+
+	return cxt;
+}
+
+static void free_cxt(struct sdxi_cxt *cxt)
+{
+	struct sdxi_dev *sdxi = cxt->sdxi;
+	u16 l2_idx, l1_idx;
+
+	l2_idx = ID_TO_L2_INDEX(cxt->id);
+	l1_idx = ID_TO_L1_INDEX(cxt->id);
+
+	sdxi->cxt_count--;
+	dma_free_coherent(sdxi_to_dev(sdxi), sizeof(*cxt->akey_table),
+			  cxt->akey_table, cxt->akey_table_dma);
+	kfree(cxt->ring_state);
+	cancel_delayed_work_sync(&cxt->cleanup_work);
+	mutex_destroy(&cxt->cleanup_lock);
+	kfree(cxt);
+
+	(sdxi->cxt_array)[l2_idx][l1_idx] = NULL;
+}
+
+/* alloc context resources and populate context table */
+static struct sdxi_cxt *sdxi_cxt_alloc(struct sdxi_dev *sdxi, bool admin,
+				       bool pasid_valid, u32 pasid,
+				       u32 opb_000_enb)
+{
+	struct sdxi_cxt *cxt;
+	u64 ctl2;
+	u32 opb_000_avl;
+	u8 max_akey_sz;
+
+	mutex_lock(&sdxi->cxt_lock);
+
+	cxt = alloc_cxt(sdxi, admin);
+	if (!cxt)
+		goto drop_cxt_lock;
+
+	cxt->cxt_ctl = dma_pool_zalloc(sdxi->cxt_ctl_pool, GFP_KERNEL,
+				       &cxt->cxt_ctl_dma);
+	if (!cxt->cxt_ctl)
+		goto release_cxt;
+
+	cxt->ring_state = kzalloc(sizeof(*cxt->ring_state), GFP_KERNEL);
+	if (!cxt->ring_state)
+		goto release_cxt_ctl;
+
+	cxt->pasid_valid = pasid_valid;
+	cxt->pasid = pasid;
+	cxt->opb_000_enb = opb_000_enb & sdxi->op_grp_cap;
+
+	ctl2 = sdxi_read64(sdxi, SDXI_MMIO_CTL2);
+	opb_000_avl = FIELD_GET(SDXI_MMIO_CTL2_OPB_000_AVL, ctl2);
+	max_akey_sz = FIELD_GET(SDXI_MMIO_CTL2_MAX_AKEY_SZ, ctl2);
+	if (cxt->opb_000_enb & ~opb_000_avl)
+		goto release_ring_state;
+	if (akey_table_order(cxt->akey_table) > max_akey_sz)
+		goto release_ring_state;
+
+	if (config_cxt_tables(sdxi, cxt))
+		goto release_ring_state;
+
+	trace_sdxi_create_cxt(sdxi, cxt);
+	mutex_unlock(&sdxi->cxt_lock);
+	return cxt;
+
+release_ring_state:
+	kfree(cxt->ring_state);
+release_cxt_ctl:
+	dma_pool_free(sdxi->cxt_ctl_pool, cxt->cxt_ctl, cxt->cxt_ctl_dma);
+release_cxt:
+	free_cxt(cxt);
+drop_cxt_lock:
+	mutex_unlock(&sdxi->cxt_lock);
+	return NULL;
+}
+
+struct sdxi_cxt *sdxi_working_cxt_init(struct sdxi_dev *sdxi,
+				       enum sdxi_cxt_id id)
+{
+	struct sdxi_cxt *cxt;
+	struct sdxi_sq *sq;
+	bool admin;
+
+	switch (id) {
+	case SDXI_ANY_CXT_ID:  /* User context */
+		admin = false;
+		break;
+	default:  /* kernel context */
+		admin = (id == SDXI_ADMIN_CXT_ID);
+		break;
+	}
+
+	cxt = sdxi_cxt_alloc(sdxi, admin, false, 0, sdxi->op_grp_cap);
+	if (!cxt) {
+		sdxi_err(sdxi, "failed to alloc a new context\n");
+		return NULL;
+	}
+
+	/* check if context ID matches */
+	if (id < SDXI_ANY_CXT_ID && cxt->id != id) {
+		sdxi_err(sdxi, "failed to alloc a context with id=%d\n", id);
+		goto err_cxt_id;
+	}
+
+	sq = sdxi_sq_alloc_default(cxt);
+	if (!sq) {
+		sdxi_err(sdxi, "failed to alloc a submission queue (sq)\n");
+		goto err_sq_alloc;
+	}
+
 	sdxi_ring_state_init(cxt->ring_state, &sq->cxt_sts->read_index,
 			     sq->write_index, sq->ring_entries, sq->desc_ring);
-	ida_init(&cxt->akey_ida);
 
-	err = sdxi_publish_cxt(cxt);
-	if (err)
-		return err;
+	if (id == SDXI_ADMIN_CXT_ID)
+		cxt->started = true;
 
-	sdxi->admin_cxt = no_free_ptr(cxt);
+	return cxt;
 
-	return devm_add_action_or_reset(sdxi->dev, free_admin_cxt, sdxi);
-}
+err_sq_alloc:
+err_cxt_id:
+	sdxi_working_cxt_exit(cxt);
 
-int sdxi_start_cxt(struct sdxi_cxt *cxt)
-{
-	struct sdxi_cxt *adm = to_admin_cxt(cxt);
-	struct sdxi_desc *desc;
-	struct sdxi_ring_resv resv;
-	int err;
-
-	might_sleep();
-
-	struct sdxi_completion *sc __free(sdxi_completion) =
-		sdxi_completion_alloc(cxt->sdxi);
-
-	if (!sc)
-		return -ENOMEM;
-
-	/* This is not how to start the admin context. */
-	if (WARN_ON(adm == cxt))
-		return -EINVAL;
-
-	err = sdxi_ring_reserve(adm->ring_state, 1, &resv);
-	if (err)
-		return err;
-
-	desc = sdxi_ring_resv_next(&resv);
-	sdxi_encode_cxt_start(desc, &(const struct sdxi_cxt_start) {
-			.range = sdxi_cxt_range_single(cxt->id),
-		});
-	sdxi_completion_attach(desc, sc);
-	sdxi_desc_make_valid(desc);
-	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
-
-	return sdxi_completion_poll(sc);
-}
-
-void sdxi_stop_cxt(struct sdxi_cxt *cxt)
-{
-	struct sdxi_cxt *adm = to_admin_cxt(cxt);
-	struct sdxi_desc *stop, *sync;
-	struct sdxi_ring_resv resv;
-	int err;
-
-	might_sleep();
-
-	struct sdxi_completion *sc __free(sdxi_completion) =
-		sdxi_completion_alloc(cxt->sdxi);
-
-	if (!sc)
-		return;
-
-	/* This is not how to stop the admin context. */
-	if (WARN_ON(adm == cxt))
-		return;
-
-	err = sdxi_ring_reserve(adm->ring_state, 2, &resv);
-	if (WARN_ON_ONCE(err))
-		return;
-
-	stop = sdxi_ring_resv_next(&resv);
-	sync = sdxi_ring_resv_next(&resv);
-
-	sdxi_encode_cxt_stop(stop, &(const struct sdxi_cxt_stop) {
-			.range = sdxi_cxt_range_single(cxt->id),
-		});
-	sdxi_encode_sync(sync, &(const struct sdxi_sync) {
-			.filter = SDXI_SYNC_FLT_STOP,
-			.range = sdxi_cxt_range_single(cxt->id),
-		});
-	sdxi_completion_attach(sync, sc);
-	sdxi_desc_make_valid(stop);
-	sdxi_desc_make_valid(sync);
-	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
-
-	WARN_ON(sdxi_completion_poll(sc));
-}
-
-/*
- * Temporary owner for context id until it can be assigned to a
- * context object; enables scope-based cleanup.
- */
-struct sdxi_cxt_id {
-	struct sdxi_dev *sdxi;
-	u16 index;
-};
-
-static void sdxi_cxt_id_dtor(const struct sdxi_cxt_id *cxt_id)
-{
-	if (cxt_id->index == 0)
-		return;
-	WARN_ON(xa_erase(&cxt_id->sdxi->client_cxts, cxt_id->index) != NULL);
-}
-
-static struct sdxi_cxt_id sdxi_cxt_id_ctor(struct sdxi_dev *sdxi)
-{
-	struct xa_limit limit = XA_LIMIT(1, sdxi->max_cxtid);
-	u32 index;
-
-	return (struct sdxi_cxt_id) {
-		.sdxi = sdxi,
-		.index = xa_alloc(&sdxi->client_cxts, &index, NULL,
-				  limit, GFP_KERNEL) ? 0 : (u16)index,
-	};
-}
-
-DEFINE_CLASS(sdxi_cxt_id, struct sdxi_cxt_id, sdxi_cxt_id_dtor(&_T),
-	     sdxi_cxt_id_ctor(sdxi), struct sdxi_dev *sdxi)
-
-static bool sdxi_cxt_id_valid(const struct sdxi_cxt_id *cxt_id)
-{
-	return cxt_id->index > 0;
-}
-
-/*
- * Transfer ownership of the id to the context object, recording the
- * context pointer in the device's client_cxt xarray. sdxi_cxt_free()
- * is responsible for releasing the id from now on.
- */
-static void sdxi_cxt_id_assign(struct sdxi_cxt *cxt, struct sdxi_cxt_id *cxt_id)
-{
-	/* We reserved the space in the constructor so this should not fail. */
-	WARN_ON(xa_store(&cxt_id->sdxi->client_cxts,
-			 cxt_id->index, cxt, GFP_KERNEL));
-	cxt->id = cxt_id->index;
-	cxt_id->index = 0;
+	return NULL;
 }
 
 /*
  * Allocate a context for in-kernel use. Starting the context is the
  * caller's responsibility.
  */
-struct sdxi_cxt *sdxi_cxt_new(struct sdxi_dev *sdxi)
+struct sdxi_cxt *sdxi_kcxt_new(struct sdxi_dev *sdxi)
 {
+	struct sdxi_cxt *cxt = sdxi_cxt_alloc(sdxi, false, false, 0,
+					      sdxi->op_grp_cap);
 	struct sdxi_sq *sq;
 
-	/*
-	 * Ensure an ID is available before allocating memory for the
-	 * context and its control structures.
-	 */
-	CLASS(sdxi_cxt_id, id)(sdxi);
-	if (!sdxi_cxt_id_valid(&id))
-		return NULL;
-
-	struct sdxi_cxt *cxt __free(sdxi_cxt) = sdxi_alloc_cxt(sdxi);
 	if (!cxt)
 		return NULL;
 
-	sdxi_cxt_id_assign(cxt, &id);
-
-	cxt->db = sdxi->dbs + cxt->id * sdxi->db_stride;
+	if (!sdxi_sq_alloc_default(cxt)) {
+		sdxi_working_cxt_exit(cxt);
+		cxt = NULL;
+	}
 
 	sq = cxt->sq;
 	sdxi_ring_state_init(cxt->ring_state, &sq->cxt_sts->read_index,
 			     sq->write_index, sq->ring_entries, sq->desc_ring);
-	ida_init(&cxt->akey_ida);
 
-	if (sdxi_publish_cxt(cxt))
-		return NULL;
-
-	return_ptr(cxt);
+	return cxt;
 }
 
-void sdxi_cxt_exit(struct sdxi_cxt *cxt)
+static const char *cxt_sts_state_str(enum cxt_sts_state state)
 {
-	if (WARN_ON(sdxi_cxt_is_admin(cxt)))
+	static const char *const context_states[] = {
+		[CXTV_STOP_SW]  = "stopped (software)",
+		[CXTV_RUN]      = "running",
+		[CXTV_STOPG_SW] = "stopping (software)",
+		[CXTV_STOP_FN]  = "stopped (function)",
+		[CXTV_STOPG_FN] = "stopping (function)",
+		[CXTV_ERR_FN]   = "error",
+	};
+	const char *str = "unknown";
+
+	switch (state) {
+	case CXTV_STOP_SW:
+	case CXTV_RUN:
+	case CXTV_STOPG_SW:
+	case CXTV_STOP_FN:
+	case CXTV_STOPG_FN:
+	case CXTV_ERR_FN:
+		str = context_states[state];
+	}
+
+	return str;
+}
+
+void sdxi_working_cxt_exit(struct sdxi_cxt *cxt)
+{
+	struct sdxi_process *process = NULL;
+	struct iommu_sva *sva = NULL;
+	u32 pasid = 0;
+
+	if (!cxt)
 		return;
 
-	sdxi_rescind_cxt(cxt);
-	sdxi_free_cxt(cxt);
+	cancel_delayed_work_sync(&cxt->cleanup_work);
+
+	mutex_lock(&cxt->cleanup_lock);
+	if (cxt->resources_released) {
+		mutex_unlock(&cxt->cleanup_lock);
+		return;
+	}
+
+	if (!cxt->quiesced)
+		(void)sdxi_cxt_quiesce_locked(cxt, 0, NULL, false);
+
+	cxt->resources_released = true;
+	process = cxt->process;
+	cxt->process = NULL;
+	mutex_unlock(&cxt->cleanup_lock);
+
+	sdxi_cxt_exit_intr(cxt);
+	sdxi_sq_free(cxt->sq);
+
+	if (process) {
+		mutex_lock(&process->mutex);
+		if (process->cxt == cxt)
+			process->cxt = NULL;
+		sva = sdxi_process_detach_sva_locked(process, &pasid);
+		mutex_unlock(&process->mutex);
+
+		sdxi_process_unbind_sva(process, sva, pasid);
+		sdxi_put_process(process);
+	}
+
+	sdxi_cxt_release_resources(cxt);
+	sdxi_cxt_put(cxt);
+}
+
+void sdxi_cxt_push_doorbell(struct sdxi_cxt *cxt, u64 index)
+{
+	enum cxt_sts_state state = sdxi_cxt_sts_state(cxt->sq->cxt_sts);
+
+	/*
+	 * To do: cache doorbell values as they're written to
+	 * eliminate redundant doorbell writes.
+	 */
+
+	/* Ensure write index is visible. */
+	dma_wmb();
+	sdxi_dbg(cxt->sdxi, "Ringing context %u (state = %s) doorbell: %llu\n",
+		 cxt->id, cxt_sts_state_str(state), index);
+	iowrite64(index, cxt->db);
 }

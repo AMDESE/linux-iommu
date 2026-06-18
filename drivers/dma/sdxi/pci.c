@@ -22,7 +22,9 @@
 #include <linux/pci.h>
 #include <linux/pm.h>
 
+#include "error.h"
 #include "mmio.h"
+#include "process.h"
 #include "sdxi.h"
 
 /*
@@ -43,11 +45,12 @@ static struct pci_dev *sdxi_to_pci_dev(const struct sdxi_dev *sdxi)
 static int sdxi_pci_irq_init(struct sdxi_dev *sdxi)
 {
 	struct pci_dev *pdev = sdxi_to_pci_dev(sdxi);
-	int msi_count;
+	unsigned int msi_count;
 	int ret;
 
 	/* 1st irq for error + 1 for each context */
-	msi_count = sdxi->max_cxts + 1;
+	msi_count = min_t(unsigned int, sdxi->max_cxts + 1,
+			  FIELD_MAX(SDXI_AKEY_ENT_INTR_NUM) + 1);
 
 	ret = pci_alloc_irq_vectors(pdev, 1, msi_count,
 				    PCI_IRQ_MSI | PCI_IRQ_MSIX);
@@ -57,6 +60,12 @@ static int sdxi_pci_irq_init(struct sdxi_dev *sdxi)
 	}
 
 	sdxi->error_irq = pci_irq_vector(pdev, ERROR_IRQ_MSG);
+	if (sdxi->error_irq < 0) {
+		ret = sdxi->error_irq;
+		sdxi_err(sdxi, "failed to get error irq vector (%d)\n", ret);
+		pci_free_irq_vectors(pdev);
+		return ret;
+	}
 
 	sdxi_dbg(sdxi, "allocated %d irq vectors", ret);
 
@@ -73,27 +82,51 @@ static void sdxi_pci_irq_exit(struct sdxi_dev *sdxi)
 	pci_free_irq_vectors(sdxi_to_pci_dev(sdxi));
 }
 
+static void sdxi_pci_enable_atomics(struct sdxi_dev *sdxi)
+{
+	struct pci_dev *pdev = sdxi_to_pci_dev(sdxi);
+	int ret;
+
+	ret = pci_enable_atomic_ops_to_root(pdev,
+					    PCI_EXP_DEVCAP2_ATOMIC_COMP32 |
+					    PCI_EXP_DEVCAP2_ATOMIC_COMP64);
+	if (ret) {
+		sdxi_dbg(sdxi, "PCIe AtomicOp requester path unavailable (%d)\n",
+			 ret);
+		return;
+	}
+
+	sdxi->atomic_ops_enabled = true;
+}
+
 static int sdxi_pci_map(struct sdxi_dev *sdxi)
 {
 	struct pci_dev *pdev = sdxi_to_pci_dev(sdxi);
-	int bars, ret;
+	void __iomem *ctrl_regs;
+	void __iomem *dbs;
+	int ret;
 
-	bars = 1 << MMIO_CTL_REGS_BAR | 1 << MMIO_DOORBELL_BAR;
-	ret = pcim_iomap_regions(pdev, bars, SDXI_DRV_NAME);
-	if (ret) {
-		sdxi_err(sdxi, "pcim_iomap_regions failed (%d)\n", ret);
+	ctrl_regs = pcim_iomap_region(pdev, MMIO_CTL_REGS_BAR, SDXI_DRV_NAME);
+	if (IS_ERR(ctrl_regs)) {
+		ret = PTR_ERR(ctrl_regs);
+		sdxi_err(sdxi, "failed to map control BAR%d (%d)\n",
+			 MMIO_CTL_REGS_BAR, ret);
 		return ret;
 	}
 
-	sdxi->dbs_bar = pci_resource_start(pdev, MMIO_DOORBELL_BAR);
-
-	/* FIXME: pcim_iomap_table may return NULL, and it's deprecated. */
-	sdxi->ctrl_regs = pcim_iomap_table(pdev)[MMIO_CTL_REGS_BAR];
-	sdxi->dbs = pcim_iomap_table(pdev)[MMIO_DOORBELL_BAR];
-	if (!sdxi->ctrl_regs || !sdxi->dbs) {
-		sdxi_err(sdxi, "pcim_iomap_table failed\n");
-		return -EINVAL;
+	dbs = pcim_iomap_region(pdev, MMIO_DOORBELL_BAR, SDXI_DRV_NAME);
+	if (IS_ERR(dbs)) {
+		ret = PTR_ERR(dbs);
+		sdxi_err(sdxi, "failed to map doorbell BAR%d (%d)\n",
+			 MMIO_DOORBELL_BAR, ret);
+		pcim_iounmap_region(pdev, MMIO_CTL_REGS_BAR);
+		return ret;
 	}
+
+	sdxi->ctrl_regs_bar = pci_resource_start(pdev, MMIO_CTL_REGS_BAR);
+	sdxi->dbs_bar = pci_resource_start(pdev, MMIO_DOORBELL_BAR);
+	sdxi->ctrl_regs = ctrl_regs;
+	sdxi->dbs = dbs;
 
 	return 0;
 }
@@ -102,8 +135,13 @@ static void sdxi_pci_unmap(struct sdxi_dev *sdxi)
 {
 	struct pci_dev *pdev = sdxi_to_pci_dev(sdxi);
 
-	pcim_iounmap(pdev, sdxi->ctrl_regs);
-	pcim_iounmap(pdev, sdxi->dbs);
+	pcim_iounmap_region(pdev, MMIO_DOORBELL_BAR);
+	pcim_iounmap_region(pdev, MMIO_CTL_REGS_BAR);
+
+	sdxi->ctrl_regs = NULL;
+	sdxi->dbs = NULL;
+	sdxi->ctrl_regs_bar = 0;
+	sdxi->dbs_bar = 0;
 }
 
 static int sdxi_pci_init(struct sdxi_dev *sdxi)
@@ -119,6 +157,8 @@ static int sdxi_pci_init(struct sdxi_dev *sdxi)
 	}
 
 	pci_set_master(pdev);
+	sdxi_pci_enable_atomics(sdxi);
+
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));
 	if (ret) {
 		sdxi_err(sdxi, "failed to set DMA mask & coherent bits\n");
@@ -143,7 +183,7 @@ static struct sdxi_dev *sdxi_device_alloc(struct device *dev)
 {
 	struct sdxi_dev *sdxi;
 
-	sdxi = kzalloc(sizeof(*sdxi), GFP_KERNEL);
+	sdxi = kzalloc_obj(*sdxi, GFP_KERNEL);
 	if (!sdxi)
 		return NULL;
 
@@ -153,6 +193,7 @@ static struct sdxi_dev *sdxi_device_alloc(struct device *dev)
 	sdxi->minor = -1;
 	sdxi->pf_id = -1;
 	sdxi->vf_id = -1;
+	mutex_init(&sdxi->rkey_lock);
 	mutex_init(&sdxi->cxt_lock);
 	mutex_init(&sdxi->pm_lock);
 
@@ -195,6 +236,8 @@ static int sdxi_vf_ids_init(struct sdxi_dev *sdxi)
 
 	if (sdxi_fn_reports_vf(pf_sdxi))
 		return -EINVAL;
+
+	sdxi->atomic_ops_enabled = pf_sdxi->atomic_ops_enabled;
 
 	vf_id = pci_iov_vf_id(pdev);
 	if (vf_id < 0)
@@ -242,6 +285,7 @@ dev_exit:
 pci_exit:
 	sdxi_pci_exit(sdxi);
 free_sdxi:
+	pci_set_drvdata(pdev, NULL);
 	sdxi_device_free(sdxi);
 
 	return err;
@@ -254,6 +298,7 @@ static void sdxi_pci_remove(struct pci_dev *pdev)
 	sdxi_chardev_unregister(sdxi);
 	sdxi_device_exit(sdxi);
 	sdxi_pci_exit(sdxi);
+	pci_set_drvdata(pdev, NULL);
 	sdxi_device_free(sdxi);
 }
 
