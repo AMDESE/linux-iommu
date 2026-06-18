@@ -760,6 +760,91 @@ void sdxi_working_cxt_exit(struct sdxi_cxt *cxt)
 	sdxi_cxt_put(cxt);
 }
 
+int sdxi_cxt_quiesce(struct sdxi_cxt *cxt, unsigned int timeout_ms,
+		     u32 *cst_flags)
+{
+	int err;
+	bool schedule = false;
+
+	if (!cxt)
+		return -EINVAL;
+
+	mutex_lock(&cxt->cleanup_lock);
+	err = sdxi_cxt_quiesce_locked(cxt, timeout_ms, cst_flags, true);
+	if (!err && !cxt->resources_released && sdxi_cxt_cleanup_requested(cxt))
+		schedule = true;
+	mutex_unlock(&cxt->cleanup_lock);
+
+	if (schedule)
+		mod_delayed_work(system_wq, &cxt->cleanup_work, 0);
+
+	return err;
+}
+
+bool sdxi_cxt_is_fatal(const struct sdxi_cxt *cxt)
+{
+	if (!cxt)
+		return true;
+
+	return READ_ONCE(cxt->fatal);
+}
+
+void sdxi_cxt_kill(struct sdxi_cxt *cxt)
+{
+	if (!cxt)
+		return;
+
+	if (READ_ONCE(cxt->fatal))
+		return;
+
+	WRITE_ONCE(cxt->fatal, true);
+	mod_delayed_work(system_wq, &cxt->cleanup_work, 0);
+}
+
+void sdxi_cxt_release_user_handle(struct sdxi_cxt *cxt)
+{
+	bool schedule = false;
+
+	if (!cxt)
+		return;
+
+	mutex_lock(&cxt->cleanup_lock);
+	cxt->handle_closed = true;
+	if (!cxt->resources_released)
+		schedule = true;
+	mutex_unlock(&cxt->cleanup_lock);
+
+	if (schedule)
+		mod_delayed_work(system_wq, &cxt->cleanup_work, 0);
+}
+
+int sdxi_cxt_notify_mm_release(struct sdxi_cxt *cxt)
+{
+	bool schedule = false;
+	int err = 0;
+
+	if (!cxt)
+		return -EINVAL;
+
+	mutex_lock(&cxt->cleanup_lock);
+	cxt->mm_dead = true;
+	/*
+	 * mmu_notifier->release must freeze the device's secondary MMU view
+	 * before returning, otherwise the hardware can keep walking user VA
+	 * while exit_mmap tears the address space down underneath it.
+	 */
+	if (!cxt->resources_released) {
+		err = sdxi_cxt_quiesce_locked(cxt, 0, NULL, false);
+		schedule = true;
+	}
+	mutex_unlock(&cxt->cleanup_lock);
+
+	if (schedule)
+		mod_delayed_work(system_wq, &cxt->cleanup_work, 0);
+
+	return err;
+}
+
 void sdxi_cxt_push_doorbell(struct sdxi_cxt *cxt, u64 index)
 {
 	enum cxt_sts_state state = sdxi_cxt_sts_state(cxt->sq->cxt_sts);
