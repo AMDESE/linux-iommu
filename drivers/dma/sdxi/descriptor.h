@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef __DMA_SDXI_DESCRIPTOR_H
-#define __DMA_SDXI_DESCRIPTOR_H
-
 /*
  * Facilities for encoding SDXI descriptors.
  *
  * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
  */
+
+#ifndef __DMA_SDXI_DESCRIPTOR_H
+#define __DMA_SDXI_DESCRIPTOR_H
 
 #include <linux/bitfield.h>
 #include <linux/bits.h>
@@ -103,11 +103,6 @@ static inline struct sdxi_cxt_range __sdxi_cxt_range(u16 a, u16 b)
 	_sdxi_cxt_range(__VA_ARGS__,					\
 			sdxi_cxt_range_2, sdxi_cxt_range_1)(__VA_ARGS__)
 
-static inline struct sdxi_cxt_range sdxi_cxt_range_single(u16 nr)
-{
-	return sdxi_cxt_range(nr);
-}
-
 void sdxi_serialize_nop(struct sdxi_desc *desc);
 
 struct sdxi_copy {
@@ -150,10 +145,7 @@ struct sdxi_sync {
 		SDXI_SYNC_FLT_RKEY = 0x3,
 		SDXI_SYNC_FLT_FN   = 0x4,
 	} filter;
-	union {
-		struct sdxi_cxt_range cxt;
-		struct sdxi_cxt_range range;
-	};
+	struct sdxi_cxt_range cxt;
 	u16 key_start;
 	u16 key_end;
 };

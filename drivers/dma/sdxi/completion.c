@@ -55,12 +55,10 @@ void sdxi_completion_free(struct sdxi_completion *sc)
 	kfree(sc);
 }
 
-int sdxi_completion_poll(const struct sdxi_completion *sc)
+void sdxi_completion_poll(const struct sdxi_completion *sc)
 {
 	while (READ_ONCE(sc->cst_blk->signal) != 0)
 		cpu_relax();
-
-	return 0;
 }
 
 static int sdxi_completion_wait_timeout_common(const struct sdxi_completion *sc,
