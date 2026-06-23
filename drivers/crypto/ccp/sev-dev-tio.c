@@ -554,8 +554,8 @@ struct sev_data_tio_tdi_reclaim {
 
 struct sev_data_tio_tdi_bind {
 	u32 length;
-	u8 version;
 	u8 reserved[3];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
