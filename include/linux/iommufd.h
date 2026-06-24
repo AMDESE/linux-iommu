@@ -135,6 +135,7 @@ struct iommufd_hw_queue {
 	size_t length;
 
 	enum iommu_hw_queue_type type;
+	u32 flags;
 
 	/* Clean up all driver-specific parts of an iommufd_hw_queue */
 	void (*destroy)(struct iommufd_hw_queue *hw_queue);

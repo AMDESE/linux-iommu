@@ -1322,12 +1322,41 @@ enum iommu_hw_queue_type {
 	 *   emulated vSMMU's IDR1.CMDQS to log2(huge page size / 16 bytes)
 	 */
 	IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV = 1,
+	IOMMU_HW_QUEUE_TYPE_AMD_CMD,
+	IOMMU_HW_QUEUE_TYPE_AMD_EVT,
+	IOMMU_HW_QUEUE_TYPE_AMD_PPR,
+};
+
+/**
+ * enum iommu_hw_queue_flags_amd - AMD HW Queue Flags
+ * @IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN        : Command buffer enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN       : Command wait enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN       : Event log enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN       : Event interrupt enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN        : PPR log enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN        : PPR print enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN           : PPR enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN  : PPR auto response enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN    : Block stop mark enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON : PPR auto response on next enable
+ */
+enum iommu_hw_queue_flags_amd {
+	IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN = 1 << 0,
+	IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN = 1 << 1,
+	IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN = 1 << 2,
+	IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN = 1 << 3,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN = 1 << 4,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN = 1 << 5,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN = 1 << 6,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN = 1 << 7,
+	IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN = 1 << 8,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON = 1 << 9,
 };
 
 /**
  * struct iommu_hw_queue_alloc - ioctl(IOMMU_HW_QUEUE_ALLOC)
  * @size: sizeof(struct iommu_hw_queue_alloc)
- * @flags: Must be 0
+ * @flags: HW queue flags based on enum iommu_hw_queue_type
  * @viommu_id: Virtual IOMMU ID to associate the HW queue with
  * @type: One of enum iommu_hw_queue_type
  * @index: The logical index to the HW queue per virtual IOMMU for a multi-queue
