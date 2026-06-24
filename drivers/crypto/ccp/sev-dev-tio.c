@@ -287,14 +287,17 @@ static void dobj_dump(struct sla_buffer_hdr *buf)
  */
 struct sev_data_tio_status {
 	u32 length;
-	u8 reserved[4];
+	u8 reserved[3];
+	u8 version;
 	u64 status_paddr;
 } __packed;
 
 /* TIO_INIT */
 struct sev_data_tio_init {
 	u32 length;
-	u8 reserved[12];
+	u8 reserved1[3];
+	u8 version;
+	u8 reserved2[8];
 } __packed;
 
 /*
@@ -308,7 +311,8 @@ struct sev_data_tio_init {
  */
 struct sev_data_tio_dev_create {
 	u32 length;
-	u8 reserved1[4];
+	u8 reserved1[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_sla;
 	u16 device_id;
 	u16 root_port_id;
@@ -331,7 +335,8 @@ struct sev_data_tio_dev_create {
  */
 struct sev_data_tio_dev_connect {
 	u32 length;
-	u8 reserved1[4];
+	u8 reserved1[3];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	u8 reserved2[8];
 	struct sla_addr_t dev_ctx_sla;
@@ -357,7 +362,9 @@ struct sev_data_tio_dev_connect {
 
 struct sev_data_tio_dev_disconnect {
 	u32 length;
-	u32 flags;
+	u8 flags;
+	u8 reserved[2];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 } __packed;
@@ -375,7 +382,9 @@ struct sev_data_tio_dev_disconnect {
 
 struct sev_data_tio_dev_meas {
 	u32 length;
-	u32 flags;
+	u8 flags;
+	u8 reserved[2];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 	u8 meas_nonce[32];
@@ -390,7 +399,8 @@ struct sev_data_tio_dev_meas {
  */
 struct sev_data_tio_dev_certs {
 	u32 length;
-	u8 reserved[4];
+	u8 reserved[3];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 } __packed;
@@ -405,7 +415,8 @@ struct sev_data_tio_dev_certs {
  */
 struct sev_data_tio_dev_reclaim {
 	u32 length;
-	u8 reserved[4];
+	u8 reserved[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_sla;
 } __packed;
 
@@ -489,7 +500,8 @@ struct sev_tio_dev_status {
  */
 struct sev_data_tio_dev_status {
 	u32 length;
-	u32 reserved1;
+	u8 reserved[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_paddr;
 	u64 status_paddr;
 	u64 reserved2;
@@ -505,7 +517,8 @@ struct sev_data_tio_dev_status {
  */
 struct sev_data_tio_tdi_create {
 	u32 length;
-	u32 reserved;
+	u8 reserved[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
 	struct tdisp_interface_id interface_id;
@@ -523,7 +536,8 @@ struct sev_data_tio_tdi_create {
  */
 struct sev_data_tio_tdi_reclaim {
 	u32 length;
-	u32 reserved;
+	u8 reserved[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
 	u64 reserved2;
@@ -586,7 +600,9 @@ struct sev_data_tio_tdi_bind {
 
 struct sev_data_tio_tdi_unbind {
 	u32 length;
-	u32 flags;
+	u8 flags;
+	u8 reserved[2];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
@@ -606,7 +622,8 @@ struct sev_data_tio_tdi_unbind {
  */
 struct sev_data_tio_tdi_report {
 	u32 length;
-	u32 reserved;
+	u8 reserved[3];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
@@ -624,7 +641,8 @@ struct sev_data_tio_tdi_report {
  */
 struct sev_data_tio_asid_fence_clear {
 	u32 length;
-	u32 reserved1;
+	u8 reserved1[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_paddr;
 	u64 gctx_paddr;
 	u8 reserved2[8];
@@ -656,7 +674,8 @@ struct sev_data_tio_asid_fence_clear {
 
 struct sev_data_tio_asid_fence_status {
 	u32 length;
-	u8 reserved1[4];
+	u8 reserved1[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_paddr;
 	u32 asid;
 	u64 status_pa;
@@ -678,7 +697,8 @@ struct sev_data_tio_asid_fence_status {
  */
 struct sev_data_tio_guest_request {
 	u32 length;
-	u32 reserved;
+	u8 reserved[3];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
@@ -1754,8 +1774,8 @@ struct sev_tio_tdi_info_data {
 
 struct sev_data_tio_tdi_info {
 	u32 length;
-	u8 version;
 	u8 reserved1[3];
+	u8 version;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
 	u64 status_paddr;
@@ -1855,7 +1875,8 @@ struct sev_tio_tdi_status_data {
  */
 struct sev_data_tio_tdi_status {
 	u32 length;
-	u32 reserved1;
+	u8 reserved[3];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;
 	struct sla_addr_t dev_ctx_sla;
 	struct sla_addr_t tdi_ctx_sla;
