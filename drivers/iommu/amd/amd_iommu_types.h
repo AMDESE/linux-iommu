@@ -191,14 +191,22 @@
 #define CONTROL_GAM_EN		25
 #define CONTROL_GALOG_EN	28
 #define CONTROL_GAINT_EN	29
+#define CONTROL_DUALPPRLOG_EN	30
+#define CONTROL_DUALEVTLOG_EN	32
+#define CONTROL_PPR_AUTO_RSP_EN	39
+#define CONTROL_BLKSTOPMRK_EN	41
 #define CONTROL_NUM_INT_REMAP_MODE	43
 #define CONTROL_NUM_INT_REMAP_MODE_MASK	0x03
 #define CONTROL_NUM_INT_REMAP_MODE_2K	0x01
 #define CONTROL_EPH_EN		45
+#define CONTROL_PPR_AUTO_RSP_AON 48
 #define CONTROL_XT_EN		50
 #define CONTROL_INTCAPXT_EN	51
+#define CONTROL_VCMD_EN		52
+#define CONTROL_VIOMMU_EN	53
 #define CONTROL_GCR3TRPMODE	58
 #define CONTROL_IRTCACHEDIS	59
+#define CONTROL_GSTBUFFERTRPMODE	60
 #define CONTROL_SNPAVIC_EN	61
 
 #define CTRL_INV_TO_MASK	7
@@ -218,6 +226,7 @@
 #define CMD_INV_IRT		0x05
 #define CMD_COMPLETE_PPR	0x07
 #define CMD_INV_ALL		0x08
+#define CMD_INSERT_GUEST_EVENT	0x09
 #define CMD_RESET_VMMIO		0x0A
 
 #define CMD_COMPL_WAIT_STORE_MASK	0x01
@@ -266,6 +275,7 @@
 #define MMIO_CMD_BUFFER_TAIL(x) FIELD_GET(MMIO_CMD_TAIL_MASK, (x))
 
 /* constants for event buffer handling */
+#define EVT_BUFFER_ENTRIES	512
 #define EVTLOG_ENTRY_SIZE	0x10
 #define EVTLOG_SIZE_SHIFT	56
 #define EVTLOG_SIZE_DEF		SZ_8K /* 512 entries */
@@ -506,6 +516,10 @@ extern bool amdr_ivrs_remap_support;
 
 #define VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId) \
 	(iommu->vfctrl_base + (guestId * VIOMMU_VFCTRL_MMIO_ENTRY_SIZE))
+
+#define VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET	0x20
+#define VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET	0x28
+#define VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET	0x30
 
 struct amd_iommu;
 struct iommu_domain;
@@ -1151,6 +1165,10 @@ struct amd_irte_ops {
 
 struct amd_iommu_vdevice {
 	struct iommufd_vdevice core;
+};
+
+struct amd_iommu_hw_queue {
+	struct iommufd_hw_queue core;
 };
 
 #ifdef CONFIG_IRQ_REMAP

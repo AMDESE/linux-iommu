@@ -4,6 +4,7 @@
  */
 
 #include <linux/iommu.h>
+#include <linux/amd-iommu.h>
 
 #include "iommufd.h"
 #include "amd_iommu.h"
@@ -185,6 +186,132 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	return 0;
 }
 
+static size_t _amd_viommu_get_hw_queue_size(struct iommufd_viommu *viommu,
+					    enum iommu_hw_queue_type queue_type)
+{
+	/* Currently do not support Eventlog B and PPRlog B */
+	if ((queue_type != IOMMU_HW_QUEUE_TYPE_AMD_CMD) &&
+	    (queue_type != IOMMU_HW_QUEUE_TYPE_AMD_EVT) &&
+	    (queue_type != IOMMU_HW_QUEUE_TYPE_AMD_PPR))
+		return 0;
+
+	return HW_QUEUE_STRUCT_SIZE(struct amd_iommu_hw_queue, core);
+}
+
+static void _amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	u8 __iomem *vfctrl, *vf;
+	u32 flags = hw_queue->flags;
+	u64 val;
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	int gid = aviommu->gid;
+
+	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	/* Clear fields in VFCTRL MMIO */
+	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
+	val &= ~(GENMASK_ULL(51, 12) | GENMASK_ULL(9, 8) | GENMASK_ULL(3, 0));
+
+	/* Set Command buffer base, length, enable, command wait enable */
+	val |= FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
+	val |= FIELD_PREP(GENMASK_ULL(51, 12), (hw_queue->base_addr >> 12));
+	val |= FIELD_PREP(BIT_ULL_MASK(8), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN));
+	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN));
+
+	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
+		 __func__, iommu->devid, gid, hw_queue->type,
+		 hw_queue->base_addr, hw_queue->length, flags, val);
+}
+
+static void _amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	u8 __iomem *vfctrl, *vf;
+	u32 flags = hw_queue->flags;
+	u64 val;
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	int gid = aviommu->gid;
+
+	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	/* Clear fields in VFCTRL MMIO */
+	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+	val &= ~GENMASK_ULL(51, 0);
+
+	/* Set Event buffer base and length */
+	val |= FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
+	val |= FIELD_PREP(GENMASK_ULL(51, 12), (hw_queue->base_addr >> 12));
+	val |= FIELD_PREP(BIT_ULL_MASK(8), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN));
+	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN));
+	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
+		 __func__, iommu->devid, gid, hw_queue->type,
+		 hw_queue->base_addr, hw_queue->length, flags, val);
+}
+
+static void _amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	u8 __iomem *vfctrl, *vf;
+	u32 flags = hw_queue->flags;
+	u64 val;
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	int gid = aviommu->gid;
+
+	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
+
+	/* Clear fields in VFCTRL MMIO */
+	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+	val &= ~GENMASK_ULL(55, 0);
+
+	/* Set PPR buffer base and length */
+	val |= FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
+	val |= FIELD_PREP(GENMASK_ULL(55, 16), (hw_queue->base_addr >> 12));
+	val |= FIELD_PREP(BIT_ULL_MASK(8), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN));
+	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN));
+	val |= FIELD_PREP(BIT_ULL_MASK(10), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN));
+	val |= FIELD_PREP(BIT_ULL_MASK(13), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN));
+	val |= FIELD_PREP(BIT_ULL_MASK(14), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN));
+	val |= FIELD_PREP(BIT_ULL_MASK(15), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON));
+	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
+		 __func__, iommu->devid, gid, hw_queue->type,
+		 hw_queue->base_addr, hw_queue->length, flags, val);
+}
+
+static int _amd_viommu_hw_queue_init(struct iommufd_hw_queue *hw_queue, u32 index)
+{
+	int ret = 0;
+
+	switch (hw_queue->type) {
+	case IOMMU_HW_QUEUE_TYPE_AMD_CMD:
+		_amd_viommu_set_cmdbuf_flags(hw_queue);
+		break;
+	case IOMMU_HW_QUEUE_TYPE_AMD_EVT:
+		_amd_viommu_set_evtbuf_flags(hw_queue);
+		break;
+	case IOMMU_HW_QUEUE_TYPE_AMD_PPR:
+		_amd_viommu_set_pprbuf_flags(hw_queue);
+		break;
+	default:
+		pr_err("%s: Invalid type (%#x)\n", __func__, hw_queue->type);
+		ret = -EINVAL;
+	}
+
+	return ret;
+}
+
 /*
  * See include/linux/iommufd.h
  * struct iommufd_viommu_ops - vIOMMU specific operations
@@ -194,4 +321,6 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.destroy = amd_iommufd_viommu_destroy,
 	.vdevice_size = VDEVICE_STRUCT_SIZE(struct amd_iommu_vdevice, core),
 	.vdevice_init = _amd_viommu_vdevice_init,
+	.get_hw_queue_size = _amd_viommu_get_hw_queue_size,
+	.hw_queue_init = _amd_viommu_hw_queue_init,
 };
