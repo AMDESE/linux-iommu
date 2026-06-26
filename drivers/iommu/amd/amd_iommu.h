@@ -214,6 +214,9 @@ void amd_iommu_set_dte_v1(struct iommu_dev_data *dev_data,
 void amd_iommu_update_dte(struct amd_iommu *iommu,
 			  struct iommu_dev_data *dev_data,
 			  struct dev_table_entry *new);
+void amd_iommu_update_dte_ir(struct amd_iommu *iommu,
+			     struct iommu_dev_data *dev_data,
+			     u64 irte_pa, u32 int_tablen);
 
 int amd_iommu_set_translate_dte(struct iommufd_viommu *viommu);
 void amd_iommu_clear_translate_dte(struct amd_iommu *iommu,
