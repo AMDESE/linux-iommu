@@ -3432,15 +3432,17 @@ out_err:
 	raw_spin_unlock_irqrestore(&iommu->lock, flags);
 }
 
-static inline u8 iommu_get_int_tablen(struct iommu_dev_data *dev_data)
+static inline u8 iommu_get_int_tablen(struct amd_iommu *iommu, u16 devid)
 {
+	struct iommu_dev_data *dev_data = search_dev_data(iommu, devid);
+
 	if (dev_data && dev_data->max_irqs == MAX_IRQS_PER_TABLE_2K)
 		return DTE_INTTABLEN_2K;
 	return DTE_INTTABLEN_512;
 }
 
 static void set_dte_irq_entry(struct amd_iommu *iommu, u16 devid,
-			      struct irq_remap_table *table)
+			      u64 irte_pa, u32 int_tablen)
 {
 	u64 new;
 	struct dev_table_entry *dte = &get_dev_table(iommu)[devid];
@@ -3451,14 +3453,22 @@ static void set_dte_irq_entry(struct amd_iommu *iommu, u16 devid,
 
 	new = READ_ONCE(dte->data[2]);
 	new &= ~DTE_IRQ_PHYS_ADDR_MASK;
-	new |= iommu_virt_to_phys(table->table);
+	new |= irte_pa;
 	new |= DTE_IRQ_REMAP_INTCTL;
-	new |= iommu_get_int_tablen(dev_data);
+	new |= int_tablen;
 	new |= DTE_IRQ_REMAP_ENABLE;
 	WRITE_ONCE(dte->data[2], new);
 
 	if (dev_data)
 		spin_unlock(&dev_data->dte_lock);
+}
+
+void amd_iommu_update_dte_ir(struct amd_iommu *iommu,
+			     struct iommu_dev_data *dev_data,
+			     u64 irte_pa, u32 int_tablen)
+{
+	set_dte_irq_entry(iommu, dev_data->devid, irte_pa, int_tablen);
+	iommu_flush_dte_sync(iommu, dev_data->devid);
 }
 
 static struct irq_remap_table *get_irq_table(struct amd_iommu *iommu, u16 devid)
@@ -3504,7 +3514,8 @@ static void set_remap_table_entry(struct amd_iommu *iommu, u16 devid,
 	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
 
 	pci_seg->irq_lookup_table[devid] = table;
-	set_dte_irq_entry(iommu, devid, table);
+	set_dte_irq_entry(iommu, devid, iommu_virt_to_phys(table->table),
+			  iommu_get_int_tablen(iommu, devid));
 	iommu_flush_dte(iommu, devid);
 }
 
@@ -3520,7 +3531,8 @@ static int set_remap_table_entry_alias(struct pci_dev *pdev, u16 alias,
 
 	pci_seg = iommu->pci_seg;
 	pci_seg->irq_lookup_table[alias] = table;
-	set_dte_irq_entry(iommu, alias, table);
+	set_dte_irq_entry(iommu, alias, iommu_virt_to_phys(table->table),
+			  iommu_get_int_tablen(iommu, alias));
 	iommu_flush_dte(pci_seg->rlookup_table[alias], alias);
 
 	return 0;
