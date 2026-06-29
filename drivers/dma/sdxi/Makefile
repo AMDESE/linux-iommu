@@ -9,8 +9,9 @@ sdxi-objs += \
 	device.o      \
 	dma.o         \
 	error.o       \
-	intr.o        \
 	keys.o        \
+	intr.o        \
+	ioctl.o       \
 	process.o     \
 	ring.o        \
 	sysfs.o       \
