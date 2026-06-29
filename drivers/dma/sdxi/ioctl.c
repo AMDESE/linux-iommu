@@ -201,3 +201,186 @@ static int sdxi_ioctl_get_dev_info(struct file *filep,
 
 	return 0;
 }
+
+/*
+ * Device attribute table backing SDXI_{GET,SET}_DEV_ATTR.
+ *
+ * Each row describes one attribute as a control-register field plus an
+ * optional capability-register cap. Attributes that don't fit this design
+ * provide a custom @get override (e.g. RKEY table size, which is fixed at
+ * driver init).
+ */
+enum {
+	SDXI_DEV_ATTR_F_RO = BIT(0),	/* attribute is read-only */
+};
+
+struct sdxi_dev_attr_desc {
+	u32 reg;			/* CTL register; 0 if @get is set */
+	u64 mask;			/* field mask within @reg */
+	u32 cap_reg;			/* CAP register; 0 if no cap check */
+	u64 cap_mask;			/* field mask within @cap_reg */
+	unsigned int flags;
+	int (*get)(struct sdxi_dev *sdxi, u64 *val);
+};
+
+static int sdxi_dev_attr_get_max_rkey_sz(struct sdxi_dev *sdxi, u64 *val)
+{
+	*val = sdxi->rkey_cap ? sdxi->rkey_entries : 0;
+	return 0;
+}
+
+static const struct sdxi_dev_attr_desc sdxi_dev_attr_table[] = {
+	[SDXI_DEV_ATTR_GSR] = {
+		.reg  = SDXI_MMIO_CTL0,
+		.mask = SDXI_MMIO_CTL0_FN_GSR,
+	},
+	[SDXI_DEV_ATTR_GRP_ID] = {
+		.reg  = SDXI_MMIO_CTL0,
+		.mask = SDXI_MMIO_CTL0_FN_GRP_ID,
+	},
+	[SDXI_DEV_ATTR_MAX_BUFFER] = {
+		.reg      = SDXI_MMIO_CTL2,
+		.mask     = SDXI_MMIO_CTL2_MAX_BUFFER,
+		.cap_reg  = SDXI_MMIO_CAP1,
+		.cap_mask = SDXI_MMIO_CAP1_MAX_BUFFER,
+	},
+	[SDXI_DEV_ATTR_MAX_AKEY_SZ] = {
+		.reg      = SDXI_MMIO_CTL2,
+		.mask     = SDXI_MMIO_CTL2_MAX_AKEY_SZ,
+		.cap_reg  = SDXI_MMIO_CAP1,
+		.cap_mask = SDXI_MMIO_CAP1_MAX_AKEY_SZ,
+	},
+	[SDXI_DEV_ATTR_MAX_RKEY_SZ] = {
+		.flags = SDXI_DEV_ATTR_F_RO,
+		.get   = sdxi_dev_attr_get_max_rkey_sz,
+	},
+	[SDXI_DEV_ATTR_MAX_CXT] = {
+		.reg      = SDXI_MMIO_CTL2,
+		.mask     = SDXI_MMIO_CTL2_MAX_CXT,
+		.cap_reg  = SDXI_MMIO_CAP1,
+		.cap_mask = SDXI_MMIO_CAP1_MAX_CXT,
+	},
+};
+
+static const struct sdxi_dev_attr_desc *sdxi_dev_attr_lookup(u64 attr)
+{
+	const struct sdxi_dev_attr_desc *d;
+
+	if (!attr || attr >= ARRAY_SIZE(sdxi_dev_attr_table))
+		return NULL;
+
+	d = &sdxi_dev_attr_table[attr];
+
+	if (!d->mask && !d->get)
+		return NULL;
+
+	return d;
+}
+
+static int sdxi_dev_attr_read(struct sdxi_dev *sdxi,
+			      const struct sdxi_dev_attr_desc *d, u64 *val)
+{
+	if (d->get)
+		return d->get(sdxi, val);
+
+	*val = (sdxi_read64(sdxi, d->reg) & d->mask) >> __ffs64(d->mask);
+
+	return 0;
+}
+
+static int sdxi_dev_attr_write(struct sdxi_dev *sdxi,
+			       const struct sdxi_dev_attr_desc *d, u64 val)
+{
+	u64 reg, shift, max_val;
+
+	if (d->flags & SDXI_DEV_ATTR_F_RO)
+		return -EOPNOTSUPP;
+
+	shift = __ffs64(d->mask);
+	max_val = d->mask >> shift;
+	if (val > max_val)
+		return -EINVAL;
+
+	if (d->cap_reg) {
+		u64 cap = (sdxi_read64(sdxi, d->cap_reg) & d->cap_mask) >>
+			  __ffs64(d->cap_mask);
+
+		if (val > cap)
+			return -EINVAL;
+	}
+
+	reg = sdxi_read64(sdxi, d->reg);
+	reg = (reg & ~d->mask) | ((val << shift) & d->mask);
+	sdxi_write64(sdxi, d->reg, reg);
+
+	return 0;
+}
+
+static bool sdxi_dev_attr_args_valid(const struct sdxi_dev_attr_args *args)
+{
+	size_t i;
+
+	if (args->flags)
+		return false;
+
+	if (args->argsz < sizeof(*args))
+		return false;
+
+	for (i = 0; i < ARRAY_SIZE(args->rsvd0); i++)
+		if (args->rsvd0[i])
+			return false;
+
+	return true;
+}
+
+static int sdxi_ioctl_get_dev_attr(struct file *filep,
+				   struct sdxi_file *sf, void *data)
+{
+	struct sdxi_dev_attr_args *args = data;
+	struct sdxi_process *p = sf->process;
+	struct sdxi_dev *sdxi = p->sdxi;
+	const struct sdxi_dev_attr_desc *d;
+
+	if (!sdxi)
+		return -ENODEV;
+
+	if (!sdxi_dev_attr_args_valid(args))
+		return -EINVAL;
+
+	d = sdxi_dev_attr_lookup(args->attr);
+	if (!d)
+		return -EOPNOTSUPP;
+
+	args->argsz = sizeof(*args);
+
+	return sdxi_dev_attr_read(sdxi, d, &args->val);
+}
+
+static int sdxi_ioctl_set_dev_attr(struct file *filep,
+				   struct sdxi_file *sf, void *data)
+{
+	struct sdxi_dev_attr_args *args = data;
+	struct sdxi_process *p = sf->process;
+	struct sdxi_dev *sdxi = p->sdxi;
+	const struct sdxi_dev_attr_desc *d;
+	int err;
+
+	if (!sdxi)
+		return -ENODEV;
+
+	if (!sdxi_dev_attr_args_valid(args))
+		return -EINVAL;
+
+	d = sdxi_dev_attr_lookup(args->attr);
+	if (!d)
+		return -EOPNOTSUPP;
+
+	err = sdxi_dev_attr_write(sdxi, d, args->val);
+	if (err)
+		return err;
+
+	args->argsz = sizeof(*args);
+	/* Reflect the value actually applied (the device may mask bits). */
+
+	return sdxi_dev_attr_read(sdxi, d, &args->val);
+}
