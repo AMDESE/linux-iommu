@@ -106,6 +106,9 @@ static int sdxi_cxt_doorbell_mmap(struct sdxi_process *process,
 	phys_addr_t address;
 	int ret;
 
+	if (sdxi->db_stride < PAGE_SIZE)
+		return -EOPNOTSUPP;
+
 	if (vma->vm_end - vma->vm_start != sdxi->db_stride)
 		return -EINVAL;
 
@@ -892,4 +895,119 @@ static int sdxi_ioctl_admin_disc(struct file *filep,
 out_free_disc:
 	dma_free_coherent(sdxi_to_dev(sdxi), required, buf, buf_dma);
 	return err;
+}
+
+static int sdxi_ioctl_admin_vendor(struct file *filep,
+				   struct sdxi_file *sf, void *data)
+{
+	struct sdxi_admin_vendor_args *args = data;
+	const struct sdxi_vendor_handler *handler;
+	struct sdxi_dev *sdxi;
+	u16 opcode_type;
+	unsigned int timeout_ms;
+	int err;
+
+	err = sdxi_admin_get_device(sf, &sdxi);
+	if (err)
+		return err;
+
+	if (args->argsz < sizeof(*args))
+		return -EINVAL;
+	args->argsz = sizeof(*args);
+
+	if (!sdxi_admin_vendor_reserved_zero(args))
+		return -EINVAL;
+
+	timeout_ms = sdxi_admin_timeout_ms(args->timeout_ms);
+	args->cst_flags = 0;
+
+	err = sdxi_vendor_get(args->guid, &handler);
+	if (err)
+		return err;
+
+	err = sdxi_vendor_find_opcode_type(sdxi, args->guid, timeout_ms,
+					   &opcode_type);
+	if (err)
+		goto out_put_handler;
+
+	if (args->op == SDXI_ADMIN_VENDOR_PROBE) {
+		if (args->in_size || args->in_uptr ||
+		    args->out_size || args->out_uptr)
+			err = -EINVAL;
+		else
+			err = 0;
+		goto out_put_handler;
+	}
+
+	err = handler->ops->exec(sdxi, opcode_type, args, timeout_ms);
+
+out_put_handler:
+	sdxi_vendor_put(handler);
+	return err;
+}
+
+/******************/
+/* FOPS FUNCTIONS */
+/******************/
+static int sdxi_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	struct sdxi_file *sf;
+	struct sdxi_process *process;
+	u64 token, allowed_mask;
+	u64 type;
+	struct sdxi_cxt *cxt;
+	u32 token_cxt_id, token_gen, cxt_gen;
+	int err;
+
+	sf = filp->private_data;
+	if (!sf || sf->type != SDXI_FILE_CONTEXT)
+		return -EINVAL;
+
+	process = sf->process;
+	if (!process)
+		return -EINVAL;
+
+	/*
+	 * Enforce cxt-fd ownership before touching any context-specific resources.
+	 */
+	err = sdxi_file_check_owner(process);
+	if (err)
+		return err;
+
+	cxt = sf->cxt;
+	if (!cxt)
+		return -EINVAL;
+	if (sdxi_cxt_is_fatal(cxt))
+		return -ENODEV;
+
+	/*
+	 * This is a defensive guard as the admin context's doorbell and ring memory
+	 * must never be mappable from userspace, even via a stale or hostile context fd.
+	 */
+	if (cxt->id == SDXI_ADMIN_CXT_ID)
+		return -EPERM;
+
+	token = (u64)vma->vm_pgoff << PAGE_SHIFT;
+	type = token & SDXI_MMAP_TYPE_MASK;
+	allowed_mask = SDXI_MMAP_TYPE_MASK | SDXI_MMAP_CXT_ID_MASK | SDXI_MMAP_GEN_MASK;
+
+	/* Strictly validate token encoding (type + cxt_id + gen only). */
+	if (token & ~allowed_mask)
+		return -EINVAL;
+
+	token_cxt_id = sdxi_mmap_token_cxt_id(token);
+	token_gen = sdxi_mmap_token_gen(token);
+	cxt_gen = cxt->mmap_gen & (SDXI_MMAP_GEN_MASK >> SDXI_MMAP_GEN_SHIFT);
+
+	if (token_cxt_id != cxt->id || token_gen != cxt_gen)
+		return -EINVAL;
+
+	switch (type) {
+	case SDXI_MMAP_TYPE_DOORBELL:
+		return sdxi_cxt_doorbell_mmap(process, cxt, vma);
+	default:
+		break;
+	}
+
+	return -EINVAL;
 }
