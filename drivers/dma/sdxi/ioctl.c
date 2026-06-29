@@ -171,3 +171,33 @@ static int sdxi_ioctl_get_uapi_info(struct file *filep,
 
 	return 0;
 }
+
+static int sdxi_ioctl_get_dev_info(struct file *filep,
+				   struct sdxi_file *sf, void *data)
+{
+	struct sdxi_dev_info_args *args = data;
+	struct sdxi_process *p = sf->process;
+	struct sdxi_dev *sdxi = p->sdxi;
+	u64 version;
+
+	if (!sdxi)
+		return -ENODEV;
+
+	if (args->flags)
+		return -EINVAL;
+
+	if (args->argsz < sizeof(*args))
+		return -EINVAL;
+
+	version = sdxi_read64(sdxi, SDXI_MMIO_VERSION);
+	args->hw_major = FIELD_GET(SDXI_MMIO_VERSION_MAJOR, version);
+	args->hw_minor = FIELD_GET(SDXI_MMIO_VERSION_MINOR, version);
+
+	args->cap0 = sdxi_read64(sdxi, SDXI_MMIO_CAP0);
+	args->cap1 = sdxi_read64(sdxi, SDXI_MMIO_CAP1);
+	args->sts0 = sdxi_read64(sdxi, SDXI_MMIO_STS0);
+
+	args->argsz = sizeof(*args);
+
+	return 0;
+}
