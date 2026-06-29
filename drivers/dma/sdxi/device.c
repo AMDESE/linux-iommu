@@ -521,39 +521,3 @@ out_unlock:
 	mutex_unlock(&sdxi->pm_lock);
 	return err;
 }
-
-int sdxi_register(struct device *dev, const struct sdxi_bus_ops *ops)
-{
-	struct sdxi_dev *sdxi;
-	int err;
-
-	sdxi = devm_kzalloc(dev, sizeof(*sdxi), GFP_KERNEL);
-	if (!sdxi)
-		return -ENOMEM;
-
-	sdxi->dev = dev;
-	sdxi->bus_ops = ops;
-	sdxi->minor = -1;
-	sdxi->pf_id = -1;
-	sdxi->vf_id = -1;
-	ida_init(&sdxi->vectors);
-	xa_init_flags(&sdxi->client_cxts, XA_FLAGS_ALLOC1);
-	mutex_init(&sdxi->cxt_lock);
-	mutex_init(&sdxi->pm_lock);
-	dev_set_drvdata(dev, sdxi);
-
-	err = sdxi->bus_ops->init(sdxi);
-	if (err)
-		return err;
-
-	return sdxi_device_init(sdxi, NULL);
-}
-
-void sdxi_unregister(struct device *dev)
-{
-	struct sdxi_dev *sdxi = dev_get_drvdata(dev);
-
-	sdxi_device_exit(sdxi);
-	xa_destroy(&sdxi->client_cxts);
-	ida_destroy(&sdxi->vectors);
-}
