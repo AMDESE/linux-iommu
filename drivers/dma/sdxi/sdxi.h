@@ -204,24 +204,11 @@ int sdxi_device_init(struct sdxi_dev *sdxi, const struct sdxi_dev_ops *ops);
 void sdxi_device_exit(struct sdxi_dev *sdxi);
 int sdxi_device_suspend(struct sdxi_dev *sdxi);
 int sdxi_device_resume(struct sdxi_dev *sdxi);
-/* Temporary chardev shims until the ioctl implementation is linked. */
-static inline int sdxi_chardev_init(void)
-{
-	return 0;
-}
-
-static inline void sdxi_chardev_exit(void)
-{
-}
-
-static inline int sdxi_chardev_register(struct sdxi_dev *sdxi)
-{
-	return 0;
-}
-
-static inline void sdxi_chardev_unregister(struct sdxi_dev *sdxi)
-{
-}
+/* Chardev (IOCTL) */
+int sdxi_chardev_init(void);
+void sdxi_chardev_exit(void);
+int sdxi_chardev_register(struct sdxi_dev *sdxi);
+void sdxi_chardev_unregister(struct sdxi_dev *sdxi);
 
 static inline u64 sdxi_read64(const struct sdxi_dev *sdxi, enum sdxi_reg reg)
 {

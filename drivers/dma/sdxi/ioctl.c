@@ -13,6 +13,7 @@
 #include <linux/fs.h>
 #include <linux/idr.h>
 #include <linux/minmax.h>
+#include <linux/poll.h>
 #include <linux/string.h>
 #include <linux/sizes.h>
 #include <linux/unaligned.h>
@@ -1010,4 +1011,633 @@ static int sdxi_mmap(struct file *filp, struct vm_area_struct *vma)
 	}
 
 	return -EINVAL;
+}
+
+static __poll_t sdxi_cxt_poll(struct file *filp, poll_table *wait)
+{
+	struct sdxi_file *sf;
+	struct sdxi_process *process;
+	struct sdxi_cxt *cxt;
+	__poll_t mask = 0;
+	int err;
+
+	sf = filp->private_data;
+	if (!sf || sf->type != SDXI_FILE_CONTEXT)
+		return EPOLLERR;
+
+	process = sf->process;
+	err = sdxi_file_check_owner(process);
+	if (err)
+		return EPOLLERR;
+
+	cxt = sf->cxt;
+	if (!cxt)
+		return EPOLLHUP | EPOLLERR;
+
+	poll_wait(filp, &cxt->poll_wq, wait);
+
+	if (sdxi_cxt_is_fatal(cxt))
+		mask |= EPOLLERR;
+	if (READ_ONCE(cxt->resources_released))
+		mask |= EPOLLHUP;
+
+	return mask;
+}
+
+#define SDXI_IOCTL_DEF_ACCESS(ioctl, _func, _flags, _access)		\
+	[_IOC_NR(ioctl)] = { .cmd = ioctl, .func = _func, \
+			     .file_flags = _flags, .access = _access, \
+			     .cmd_drv = 0, .name = #ioctl }
+
+static int sdxi_ioctl_vendor_permit(struct sdxi_dev *sdxi, void *data)
+{
+	struct sdxi_admin_vendor_args *args = data;
+	const struct sdxi_vendor_handler *handler;
+	int err;
+
+	if (!sdxi)
+		return -ENODEV;
+	if (!args)
+		return -EINVAL;
+	if (args->argsz < sizeof(*args))
+		return -EINVAL;
+	if (!sdxi_admin_vendor_reserved_zero(args))
+		return -EINVAL;
+
+	err = sdxi_vendor_get(args->guid, &handler);
+	if (err)
+		return err;
+
+	err = handler->ops->authorize(sdxi, args);
+	sdxi_vendor_put(handler);
+
+	return err;
+}
+
+static int sdxi_ioctl_permit(const struct sdxi_ioctl_desc *ioctl,
+			     struct sdxi_file *sf, void *data)
+{
+	switch (ioctl->access) {
+	case SDXI_IOCTL_A_PUBLIC_DEVICE:
+	case SDXI_IOCTL_A_CONTEXT_OWNER:
+		return 0;
+	case SDXI_IOCTL_A_ADMIN_DEVICE:
+		if (!capable(CAP_SYS_ADMIN))
+			return -EPERM;
+		return 0;
+	case SDXI_IOCTL_A_VENDOR_HANDLER:
+		return sdxi_ioctl_vendor_permit(sf->process->sdxi, data);
+	default:
+		return -EINVAL;
+	}
+}
+
+static struct sdxi_ioctl_desc sdxi_ioctls[] = {
+	/* Ioctl number 0 is intentionally unused. */
+	SDXI_IOCTL_DEF_ACCESS(SDXI_GET_UAPI_INFO,
+			      sdxi_ioctl_get_uapi_info,
+			      SDXI_IOCTL_F_DEVICE | SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_PUBLIC_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_GET_DEV_INFO,
+			      sdxi_ioctl_get_dev_info,
+			      SDXI_IOCTL_F_DEVICE | SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_PUBLIC_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_GET_DEV_ATTR,
+			      sdxi_ioctl_get_dev_attr,
+			      SDXI_IOCTL_F_DEVICE | SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_PUBLIC_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_SET_DEV_ATTR,
+			      sdxi_ioctl_set_dev_attr, SDXI_IOCTL_F_DEVICE,
+			      SDXI_IOCTL_A_ADMIN_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_GET_RKEY_LIST,
+			      sdxi_ioctl_get_rkey_list, SDXI_IOCTL_F_DEVICE,
+			      SDXI_IOCTL_A_ADMIN_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_GET_RKEYS,
+			      sdxi_ioctl_get_rkeys, SDXI_IOCTL_F_DEVICE,
+			      SDXI_IOCTL_A_ADMIN_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_SET_RKEYS,
+			      sdxi_ioctl_set_rkeys, SDXI_IOCTL_F_DEVICE,
+			      SDXI_IOCTL_A_ADMIN_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_CREATE_CXT,
+			      sdxi_ioctl_create_cxt, SDXI_IOCTL_F_DEVICE,
+			      SDXI_IOCTL_A_PUBLIC_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_GET_AKEY_LIST,
+			      sdxi_ioctl_get_akey_list, SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_CONTEXT_OWNER),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_GET_AKEYS,
+			      sdxi_ioctl_get_akeys, SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_CONTEXT_OWNER),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_SET_AKEYS,
+			      sdxi_ioctl_set_akeys, SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_CONTEXT_OWNER),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_ADMIN_DISC,
+			      sdxi_ioctl_admin_disc, SDXI_IOCTL_F_DEVICE,
+			      SDXI_IOCTL_A_PUBLIC_DEVICE),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_ADMIN_VENDOR,
+			      sdxi_ioctl_admin_vendor, SDXI_IOCTL_F_DEVICE,
+			      SDXI_IOCTL_A_VENDOR_HANDLER),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_QUIESCE_CXT,
+			      sdxi_ioctl_quiesce_cxt, SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_CONTEXT_OWNER),
+
+	SDXI_IOCTL_DEF_ACCESS(SDXI_CXT_EVENTFD,
+			      sdxi_ioctl_cxt_eventfd, SDXI_IOCTL_F_CONTEXT,
+			      SDXI_IOCTL_A_CONTEXT_OWNER),
+
+};
+#define SDXI_IOCTL_COUNT ARRAY_SIZE(sdxi_ioctls)
+
+static long sdxi_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
+{
+	struct sdxi_file *sf;
+	struct sdxi_process *process;
+	struct sdxi_dev *sdxi;
+	sdxi_ioctl_t *func;
+	struct device *dev = NULL;
+	const struct sdxi_ioctl_desc *ioctl = NULL;
+	unsigned int nr = _IOC_NR(cmd);
+	char stack_kdata[128];
+	char *kdata = NULL;
+	unsigned int usize, asize;
+	unsigned int copyin_size = 0;
+	unsigned int copyout_size = 0;
+	u32 sdxi_size;
+	int err;
+	int retcode = -EINVAL;
+	bool is_key_list = false;
+	bool is_key_entries = false;
+	u32 key_list_buf_size = 0;
+	u32 key_list_required = 0;
+	u32 key_list_bytes = 0;
+	u32 key_entries_bytes = 0;
+	unsigned int hdr_size = 0;
+	bool have_hdr = false;
+	bool allowed = false;
+
+	if (nr >= SDXI_IOCTL_COUNT)
+		goto err_out;
+
+	ioctl = &sdxi_ioctls[nr];
+	sdxi_size = _IOC_SIZE(ioctl->cmd);
+	usize = asize = _IOC_SIZE(cmd);
+	if (sdxi_size > asize)
+		asize = sdxi_size;
+
+	cmd = ioctl->cmd;
+
+	sf = filep->private_data;
+	if (!sf || !sf->process)
+		return -EINVAL;
+
+	process = sf->process;
+	sdxi = process->sdxi;
+	if (sdxi)
+		dev = sdxi_to_dev(sdxi);
+
+	dev_dbg(dev, "ioctl cmd 0x%x (#0x%x), arg 0x%lx\n", cmd, nr,
+		arg);
+
+	err = sdxi_file_check_owner(process);
+	if (err) {
+		dev_dbg(dev, "using SDXI IOCTL in wrong process\n");
+		retcode = err;
+		goto err_out;
+	}
+
+	func = ioctl->func;
+	if (unlikely(!func)) {
+		dev_dbg(dev, "no IOCTL function found\n");
+		retcode = -EINVAL;
+		goto err_out;
+	}
+
+	switch (sf->type) {
+	case SDXI_FILE_DEVICE:
+		allowed = ioctl->file_flags & SDXI_IOCTL_F_DEVICE;
+		break;
+	case SDXI_FILE_CONTEXT:
+		allowed = ioctl->file_flags & SDXI_IOCTL_F_CONTEXT;
+		/*
+		 * The admin context (id 0) is kernel-owned and must never be
+		 * controlled through a user-visible context fd. Block all
+		 * context-fd ioctls in case stale or forged file state ever
+		 * points at it.
+		 */
+		if (allowed && sf->cxt &&
+		    sf->cxt->id == SDXI_ADMIN_CXT_ID)
+			allowed = false;
+		break;
+	default:
+		allowed = false;
+		break;
+	}
+
+	if (!allowed) {
+		retcode = -ENOTTY;
+		goto err_out;
+	}
+
+	is_key_list = (cmd == SDXI_GET_RKEY_LIST ||
+		       cmd == SDXI_GET_AKEY_LIST);
+	is_key_entries = (cmd == SDXI_GET_RKEYS ||
+			  cmd == SDXI_SET_RKEYS ||
+			  cmd == SDXI_GET_AKEYS ||
+			  cmd == SDXI_SET_AKEYS);
+
+	copyin_size = (cmd & IOC_IN) ? usize : 0;
+	copyout_size = (cmd & IOC_OUT) ? usize : 0;
+
+	/*
+	 * Key list/key entry ioctls have variable-length payloads, sized by
+	 * buf_size/nkeys fields. Determine the required allocation and safe
+	 * copy sizes based on the fixed-size header.
+	 */
+	if (is_key_list || is_key_entries) {
+		hdr_size = sdxi_size;
+
+		if (!(cmd & IOC_IN)) {
+			retcode = -EINVAL;
+			goto err_out;
+		}
+
+		if (usize < hdr_size) {
+			retcode = -EINVAL;
+			goto err_out;
+		}
+
+		if (copy_from_user(stack_kdata, (void __user *)arg, hdr_size) != 0) {
+			retcode = -EFAULT;
+			goto err_out;
+		}
+
+		have_hdr = true;
+
+		if (is_key_list) {
+			switch (cmd) {
+			case SDXI_GET_RKEY_LIST: {
+				const struct sdxi_key_list_args *args =
+					(void *)stack_kdata;
+
+				key_list_buf_size = args->buf_size;
+				if (process->sdxi && process->sdxi->rkey_cap)
+					key_list_required =
+						(process->sdxi->rkey_entries + 7U) / 8U;
+				break;
+			}
+			case SDXI_GET_AKEY_LIST: {
+				const struct sdxi_key_list_args *args =
+					(void *)stack_kdata;
+				struct sdxi_cxt *cxt = sf->cxt;
+				u32 nentries = 0;
+
+				key_list_buf_size = args->buf_size;
+				if (cxt)
+					nentries = ARRAY_SIZE(cxt->akey_table->entry);
+				key_list_required = (nentries + 7U) / 8U;
+				break;
+			}
+			default:
+				retcode = -EINVAL;
+				goto err_out;
+			}
+
+			key_list_bytes = min(key_list_buf_size, key_list_required);
+
+			copyin_size = hdr_size;
+			copyout_size = hdr_size + key_list_bytes;
+			asize = copyout_size;
+		} else if (is_key_entries) {
+			u32 nkeys;
+			u32 max_nkeys = 4096;
+			u32 entry_size;
+
+			switch (cmd) {
+			case SDXI_GET_RKEYS: {
+				const struct sdxi_get_keys_args *args =
+					(void *)stack_kdata;
+
+				nkeys = args->nkeys;
+				entry_size = sizeof(struct sdxi_key_entry);
+				if (process->sdxi && process->sdxi->rkey_entries)
+					max_nkeys = min(max_nkeys,
+							process->sdxi->rkey_entries);
+				break;
+			}
+			case SDXI_SET_RKEYS: {
+				const struct sdxi_set_keys_args *args =
+					(void *)stack_kdata;
+
+				nkeys = args->nkeys;
+				entry_size = sizeof(struct sdxi_key_entry);
+				if (process->sdxi && process->sdxi->rkey_entries)
+					max_nkeys = min(max_nkeys,
+							process->sdxi->rkey_entries);
+				break;
+			}
+			case SDXI_GET_AKEYS: {
+				const struct sdxi_get_keys_args *args =
+					(void *)stack_kdata;
+				struct sdxi_cxt *cxt = sf->cxt;
+
+				nkeys = args->nkeys;
+				entry_size = sizeof(struct sdxi_key_entry);
+				if (cxt)
+					max_nkeys = min(max_nkeys,
+							(u32)ARRAY_SIZE(cxt->akey_table->entry));
+				else
+					max_nkeys = 0;
+				break;
+			}
+			case SDXI_SET_AKEYS: {
+				const struct sdxi_set_keys_args *args =
+					(void *)stack_kdata;
+				struct sdxi_cxt *cxt = sf->cxt;
+
+				nkeys = args->nkeys;
+				entry_size = sizeof(struct sdxi_key_entry);
+				if (cxt)
+					max_nkeys = min(max_nkeys,
+							(u32)ARRAY_SIZE(cxt->akey_table->entry));
+				else
+					max_nkeys = 0;
+				break;
+			}
+			default:
+				retcode = -EINVAL;
+				goto err_out;
+			}
+
+			if (nkeys > max_nkeys) {
+				retcode = -EINVAL;
+				goto err_out;
+			}
+
+			key_entries_bytes = nkeys * entry_size;
+
+			copyin_size = hdr_size + key_entries_bytes;
+			copyout_size = copyin_size;
+			asize = copyin_size;
+		}
+	}
+
+	if (cmd & (IOC_IN | IOC_OUT)) {
+		if (asize <= sizeof(stack_kdata)) {
+			kdata = stack_kdata;
+		} else {
+			kdata = kmalloc(asize, GFP_KERNEL);
+			if (!kdata) {
+				retcode = -ENOMEM;
+				goto err_out;
+			}
+		}
+
+		if (cmd & IOC_IN) {
+			if (have_hdr) {
+				memcpy(kdata, stack_kdata, hdr_size);
+				if (copyin_size > hdr_size) {
+					if (copy_from_user(kdata + hdr_size,
+							   (void __user *)(arg + hdr_size),
+							   copyin_size - hdr_size) != 0) {
+						retcode = -EFAULT;
+						goto err_out;
+					}
+				}
+			} else {
+				if (copy_from_user(kdata, (void __user *)arg, copyin_size) != 0) {
+					retcode = -EFAULT;
+					goto err_out;
+				}
+			}
+		} else {
+			memset(kdata, 0, asize);
+		}
+
+		if (asize > copyin_size)
+			memset(kdata + copyin_size, 0, asize - copyin_size);
+	}
+
+	retcode = sdxi_ioctl_permit(ioctl, sf, kdata);
+	if (retcode)
+		goto err_out;
+
+	retcode = func(filep, sf, kdata);
+
+	if (cmd & IOC_OUT)
+		if (copy_to_user((void __user *)arg, kdata, copyout_size) != 0)
+			retcode = -EFAULT;
+
+err_out:
+	if (!ioctl)
+		dev_dbg(dev, "invalid ioctl: pid=%d, cmd=0x%02x, nr=0x%02x\n",
+			task_pid_nr(current), cmd, nr);
+
+	if (kdata != stack_kdata)
+		kfree(kdata);
+
+	if (retcode)
+		dev_dbg(dev, "ioctl cmd (#0x%x), arg 0x%lx, ret = %d\n",
+			nr, arg, retcode);
+
+	return retcode;
+}
+
+static int sdxi_open(struct inode *inode, struct file *filep)
+{
+	struct sdxi_file *sf;
+	struct sdxi_dev *sdxi;
+	struct sdxi_process *process;
+
+	if (!inode->i_cdev)
+		return -ENODEV;
+
+	sdxi = container_of(inode->i_cdev, struct sdxi_dev, cdev);
+
+	/* just create sdxi_process, but no context assigned yet */
+	process = sdxi_create_process(filep, sdxi);
+	if (IS_ERR(process))
+		return PTR_ERR(process);
+
+	sf = kzalloc_obj(*sf, GFP_KERNEL);
+	if (!sf) {
+		sdxi_put_process(process);
+		return -ENOMEM;
+	}
+
+	sf->type = SDXI_FILE_DEVICE;
+	sf->process = process;
+	filep->private_data = sf;
+
+	dev_dbg(sdxi_to_dev(sdxi), "process %d opened\n", process->pasid);
+
+	return 0;
+}
+
+static int sdxi_release(struct inode *inode, struct file *filep)
+{
+	struct sdxi_file *sf = filep->private_data;
+
+	if (sf) {
+		if (sf->type == SDXI_FILE_CONTEXT && sf->cxt) {
+			sdxi_cxt_release_user_handle(sf->cxt);
+			sdxi_cxt_put(sf->cxt);
+			sf->cxt = NULL;
+		}
+		sdxi_put_process(sf->process);
+		kfree(sf);
+		filep->private_data = NULL;
+	}
+
+	return 0;
+}
+
+/*********************/
+/* CHARDEV INIT CODE */
+/*********************/
+static const struct file_operations sdxi_fops = {
+	.owner = THIS_MODULE,
+	.mmap = sdxi_mmap,
+	.unlocked_ioctl = sdxi_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
+	.open = sdxi_open,
+	.release = sdxi_release,
+};
+
+static const struct file_operations sdxi_cxt_fops = {
+	.owner = THIS_MODULE,
+	.mmap = sdxi_mmap,
+	.poll = sdxi_cxt_poll,
+	.unlocked_ioctl = sdxi_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
+	.release = sdxi_release,
+};
+
+/* Char device init for whole driver */
+int sdxi_chardev_init(void)
+{
+	int err;
+
+	err = alloc_chrdev_region(&sdxi_devt, 0, SDXI_MAX_MINORS,
+				  sdxi_dev_name);
+	if (err)
+		return err;
+
+	sdxi_char_dev_major = MAJOR(sdxi_devt);
+
+	sdxi_class = class_create(sdxi_dev_name);
+	if (IS_ERR(sdxi_class)) {
+		err = PTR_ERR(sdxi_class);
+		unregister_chrdev_region(sdxi_devt, SDXI_MAX_MINORS);
+		sdxi_char_dev_major = -1;
+		return err;
+	}
+
+	sdxi_class->dev_groups = sdxi_chardev_groups;
+
+	return 0;
+}
+
+/* Char device clean up for whole driver */
+void sdxi_chardev_exit(void)
+{
+	if (sdxi_class && !IS_ERR(sdxi_class))
+		class_destroy(sdxi_class);
+	sdxi_class = NULL;
+
+	if (sdxi_char_dev_major >= 0)
+		unregister_chrdev_region(sdxi_devt, SDXI_MAX_MINORS);
+	sdxi_char_dev_major = -1;
+
+	ida_destroy(&sdxi_minor_ida);
+}
+
+/* Char device registration for SDXI function */
+int sdxi_chardev_register(struct sdxi_dev *sdxi)
+{
+	dev_t devt;
+	int minor, err;
+
+	if (sdxi_char_dev_major < 0 || !sdxi_class)
+		return -ENODEV;
+
+	minor = ida_alloc_max(&sdxi_minor_ida, SDXI_MAX_MINORS - 1,
+			      GFP_KERNEL);
+	if (minor < 0) {
+		if (minor == -ENOSPC)
+			sdxi_err(sdxi, "no free SDXI minors (max %d)\n",
+				 SDXI_MAX_MINORS);
+		return minor;
+	}
+
+	sdxi->minor = minor;
+	if (!IS_VF_DEVICE(sdxi))
+		sdxi->pf_id = minor;
+
+	cdev_init(&sdxi->cdev, &sdxi_fops);
+	sdxi->cdev.owner = THIS_MODULE;
+
+	devt = MKDEV(sdxi_char_dev_major, minor);
+	err = cdev_add(&sdxi->cdev, devt, 1);
+	if (err)
+		goto err_ida;
+
+	if (IS_VF_DEVICE(sdxi)) {
+		if (sdxi->pf_id < 0 || sdxi->vf_id < 0) {
+			err = -EINVAL;
+			goto err_cdev;
+		}
+		sdxi->chardev = device_create(sdxi_class, sdxi_to_dev(sdxi), devt,
+					      sdxi, "%s%dv%d", sdxi_dev_name,
+					      sdxi->pf_id, sdxi->vf_id);
+	} else {
+		sdxi->chardev = device_create(sdxi_class, sdxi_to_dev(sdxi), devt,
+					      sdxi, "%s%d", sdxi_dev_name,
+					      sdxi->pf_id);
+	}
+
+	if (IS_ERR(sdxi->chardev)) {
+		err = PTR_ERR(sdxi->chardev);
+		sdxi->chardev = NULL;
+		goto err_cdev;
+	}
+
+	return 0;
+
+err_cdev:
+	cdev_del(&sdxi->cdev);
+err_ida:
+	ida_free(&sdxi_minor_ida, minor);
+	sdxi->minor = -1;
+	return err;
+}
+
+/* Char device unregistration for SDXI function */
+void sdxi_chardev_unregister(struct sdxi_dev *sdxi)
+{
+	dev_t devt;
+
+	if (!sdxi || sdxi->minor < 0)
+		return;
+
+	devt = MKDEV(sdxi_char_dev_major, sdxi->minor);
+	if (sdxi_class && sdxi->chardev)
+		device_destroy(sdxi_class, devt);
+
+	cdev_del(&sdxi->cdev);
+	ida_free(&sdxi_minor_ida, sdxi->minor);
+
+	sdxi->chardev = NULL;
+	sdxi->minor = -1;
 }
