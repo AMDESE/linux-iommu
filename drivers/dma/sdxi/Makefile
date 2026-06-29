@@ -10,6 +10,7 @@ sdxi-objs += \
 	dma.o         \
 	error.o       \
 	keys.o        \
+	process.o     \
 	ring.o        \
 	trace.o
 
