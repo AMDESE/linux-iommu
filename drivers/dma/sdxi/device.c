@@ -276,7 +276,7 @@ static int sdxi_fn_activate(struct sdxi_dev *sdxi)
 	 * The admin context will not consume descriptors until we
 	 * write its doorbell later.
 	 */
-	sdxi->admin_cxt = sdxi_working_cxt_init(sdxi, 0);
+	sdxi->admin_cxt = sdxi_working_cxt_init(sdxi, SDXI_ADMIN_CXT_ID);
 	if (!sdxi->admin_cxt) {
 		err = -ENOMEM;
 		goto keys_exit;
@@ -346,17 +346,15 @@ int sdxi_device_init(struct sdxi_dev *sdxi, const struct sdxi_dev_ops *ops)
 
 	sdxi->dev_ops = ops;
 
-	/*
-	 * Use page-sized write-index and context-status allocations until
-	 * user context mappings are converted to userspace-owned SVA pages.
-	 */
-	sdxi->write_index_pool = dmam_pool_create("Write_Index", sdxi_to_dev(sdxi),
-						  PAGE_SIZE, PAGE_SIZE, 0);
+	sdxi->write_index_pool = dmam_pool_create("WRITE_INDEX", sdxi_to_dev(sdxi),
+						  sizeof(__le64),
+						  BIT(WRT_INDEX_PTR_SHIFT), 0);
 	sdxi->cxt_sts_pool = dmam_pool_create("CXT_STS", sdxi_to_dev(sdxi),
-					      PAGE_SIZE, PAGE_SIZE, 0);
+					      sizeof(struct sdxi_cxt_sts),
+					      BIT(CXT_STATUS_PTR_SHIFT), 0);
 	sdxi->cxt_ctl_pool = dmam_pool_create("CXT_CTL", sdxi_to_dev(sdxi),
 					      sizeof(struct sdxi_cxt_ctl),
-					      sizeof(struct sdxi_cxt_ctl), 0);
+					      BIT(L1_CXT_CTRL_PTR_SHIFT), 0);
 	if (!sdxi->write_index_pool || !sdxi->cxt_sts_pool || !sdxi->cxt_ctl_pool)
 		return -ENOMEM;
 
@@ -365,7 +363,6 @@ int sdxi_device_init(struct sdxi_dev *sdxi, const struct sdxi_dev_ops *ops)
 		return err;
 
 	/* Set up DMA engine provider. */
-
 	if (dma_engine) {
 		err = sdxi_dma_register(sdxi);
 		if (err) {
@@ -469,6 +466,20 @@ static void sdxi_pm_restore_errlog(struct sdxi_dev *sdxi)
 	enable_irq(sdxi->error_irq);
 }
 
+static void sdxi_pm_restore_rkey(struct sdxi_dev *sdxi)
+{
+	u64 reg;
+
+	if (!sdxi || !sdxi->rkey_cap || !sdxi->rkey_table)
+		return;
+
+	reg = FIELD_PREP(SDXI_MMIO_RKEY_PTR,
+			 sdxi->rkey_table_dma >> ilog2(SZ_4K)) |
+	      FIELD_PREP(SDXI_MMIO_RKEY_SZ, sdxi->rkey_order) |
+	      FIELD_PREP(SDXI_MMIO_RKEY_EN, 1);
+	sdxi_write64(sdxi, SDXI_MMIO_RKEY, reg);
+}
+
 static void sdxi_pm_restore_admin_cxt(struct sdxi_dev *sdxi)
 {
 	struct sdxi_cxt *adm = sdxi->admin_cxt;
@@ -510,6 +521,8 @@ static int sdxi_pm_restart_contexts(struct sdxi_dev *sdxi)
 				continue;
 			if (sdxi_cxt_is_admin(cxt))
 				continue;
+			if (sdxi_cxt_is_fatal(cxt))
+				continue;
 			if (!READ_ONCE(cxt->started))
 				continue;
 
@@ -517,6 +530,8 @@ static int sdxi_pm_restart_contexts(struct sdxi_dev *sdxi)
 			if (ret) {
 				sdxi_err(sdxi, "failed to restart cxt %u: %d\n",
 					 cxt->id, ret);
+				WRITE_ONCE(cxt->started, false);
+				sdxi_cxt_kill(cxt);
 				err = ret;
 			}
 		}
@@ -599,27 +614,19 @@ int sdxi_device_resume(struct sdxi_dev *sdxi)
 	cxt_l2 = FIELD_PREP(SDXI_MMIO_CXT_L2_PTR, sdxi->l2_dma >> ilog2(SZ_4K));
 	sdxi_write64(sdxi, SDXI_MMIO_CXT_L2, cxt_l2);
 
-	if (sdxi->rkey_cap && sdxi->rkey_table) {
-		u64 reg;
-
-		reg = FIELD_PREP(SDXI_MMIO_RKEY_PTR,
-				 sdxi->rkey_table_dma >> ilog2(SZ_4K)) |
-		      FIELD_PREP(SDXI_MMIO_RKEY_SZ, sdxi->rkey_order) |
-		      FIELD_PREP(SDXI_MMIO_RKEY_EN, 1);
-		sdxi_write64(sdxi, SDXI_MMIO_RKEY, reg);
-	}
-
-	sdxi_pm_restore_errlog(sdxi);
+	sdxi_pm_restore_rkey(sdxi);
 
 	if (sdxi->pm_fn_was_active) {
 		err = sdxi_dev_start(sdxi);
 		if (err)
 			goto out_unlock;
 
+		sdxi_pm_restore_errlog(sdxi);
 		sdxi_pm_restore_admin_cxt(sdxi);
 		err = sdxi_pm_restart_contexts(sdxi);
+	} else {
+		sdxi_pm_restore_errlog(sdxi);
 	}
-
 	sdxi->pm_suspended = false;
 
 out_unlock:

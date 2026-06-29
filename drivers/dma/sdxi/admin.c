@@ -8,6 +8,7 @@
 #include <linux/cleanup.h>
 #include <linux/export.h>
 #include <linux/kernel.h>
+#include <linux/types.h>
 #include <linux/processor.h>
 #include <asm/rwonce.h>
 
@@ -20,50 +21,13 @@
 
 #define SDXI_ADMIN_WAIT_TIMEOUT_MS	5000U
 
-int sdxi_adm_submit_desc(struct sdxi_cxt *adm, struct sdxi_desc *desc,
-			 unsigned int timeout_ms, u32 *cst_flags)
-{
-	struct sdxi_ring_resv resv;
-	struct sdxi_desc *dst;
-	struct sdxi_completion *sc __free(sdxi_completion) =
-		sdxi_completion_alloc(adm->sdxi);
-	int err;
-
-	if (!sc)
-		return -ENOMEM;
-
-	err = sdxi_ring_reserve(adm->ring_state, 1, &resv);
-	if (err)
-		return err;
-
-	dst = sdxi_ring_resv_next(&resv);
-	*dst = *desc;
-
-	sdxi_completion_attach(dst, sc);
-	sdxi_desc_make_valid(dst);
-	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
-
-	err = sdxi_completion_wait_timeout(sc, timeout_ms);
-	if (err)
-		return err;
-
-	if (cst_flags)
-		*cst_flags = sdxi_completion_flags(sc);
-
-	sdxi_ring_wake_up(adm->ring_state);
-
-	if (sdxi_completion_errored(sc))
-		return -EIO;
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(sdxi_adm_submit_desc);
-
-int sdxi_adm_start_cxt(struct sdxi_cxt *cxt)
+int sdxi_adm_start_cxt_sync(struct sdxi_cxt *cxt, unsigned int timeout_ms,
+			   u32 *cst_flags, bool interruptible)
 {
 	struct sdxi_cxt *adm = to_admin_cxt(cxt);
 	struct sdxi_desc *start, *sync;
 	struct sdxi_ring_resv resv;
+	u32 flags;
 	int err;
 
 	might_sleep();
@@ -100,24 +64,22 @@ int sdxi_adm_start_cxt(struct sdxi_cxt *cxt)
 	sdxi_desc_make_valid(start);
 	sdxi_desc_make_valid(sync);
 	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
-	err = sdxi_completion_wait_timeout_nosignal(sc,
-						    SDXI_ADMIN_WAIT_TIMEOUT_MS);
+	if (interruptible)
+		err = sdxi_completion_wait_timeout(sc, timeout_ms);
+	else
+		err = sdxi_completion_wait_timeout_nosignal(sc, timeout_ms);
 	if (err)
 		return err;
 
 	sdxi_ring_wake_up(adm->ring_state);
+	if (cst_flags)
+		*cst_flags = flags;
 	if (sdxi_completion_errored(sc))
 		return -EIO;
 
 	WRITE_ONCE(cxt->started, true);
 
 	return 0;
-}
-
-void sdxi_adm_stop_cxt(struct sdxi_cxt *cxt)
-{
-	(void)sdxi_adm_stop_cxt_sync(cxt, SDXI_ADMIN_WAIT_TIMEOUT_MS, NULL,
-				     false);
 }
 
 int sdxi_adm_stop_cxt_sync(struct sdxi_cxt *cxt, unsigned int timeout_ms,
@@ -177,65 +139,6 @@ int sdxi_adm_stop_cxt_sync(struct sdxi_cxt *cxt, unsigned int timeout_ms,
 	return 0;
 }
 
-int sdxi_adm_disc(struct sdxi_dev *sdxi, u16 index_start, u16 index_end,
-		  dma_addr_t addr, unsigned int timeout_ms, u32 *cst_flags)
-{
-	struct sdxi_cxt *adm;
-	struct sdxi_ring_resv resv;
-	struct sdxi_desc *desc;
-	u32 flags;
-	int err;
-
-	might_sleep();
-
-	struct sdxi_completion *sc __free(sdxi_completion) =
-		sdxi_completion_alloc(sdxi);
-
-	if (!sdxi)
-		return -ENODEV;
-
-	adm = sdxi->admin_cxt;
-	if (!adm || !adm->ring_state)
-		return -ENODEV;
-	if (adm->id != 0)
-		return -ENODEV;
-
-	if (!sc)
-		return -ENOMEM;
-
-	err = sdxi_ring_reserve(adm->ring_state, 1, &resv);
-	if (err)
-		return err;
-
-	desc = sdxi_ring_resv_next(&resv);
-	err = sdxi_encode_disc(desc, &(const struct sdxi_disc) {
-			.index_start = index_start,
-			.index_end = index_end,
-			.addr = addr,
-		});
-	if (err)
-		return err;
-
-	sdxi_completion_attach(desc, sc);
-	sdxi_desc_make_valid(desc);
-	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
-
-	err = sdxi_completion_wait_timeout(sc, timeout_ms);
-	if (err)
-		return err;
-
-	flags = sdxi_completion_flags(sc);
-	if (cst_flags)
-		*cst_flags = flags;
-
-	sdxi_ring_wake_up(adm->ring_state);
-
-	if (sdxi_completion_errored(sc))
-		return -EIO;
-
-	return 0;
-}
-
 int sdxi_adm_rkey_update_sync(struct sdxi_dev *sdxi, u16 rkey_start, u16 rkey_end,
 			      unsigned int timeout_ms, u32 *cst_flags)
 {
@@ -256,7 +159,7 @@ int sdxi_adm_rkey_update_sync(struct sdxi_dev *sdxi, u16 rkey_start, u16 rkey_en
 	adm = sdxi->admin_cxt;
 	if (!adm || !adm->ring_state)
 		return -ENODEV;
-	if (adm->id != 0)
+	if (adm->id != SDXI_ADMIN_CXT_ID)
 		return -ENODEV;
 
 	if (!sc)
@@ -326,7 +229,7 @@ int sdxi_adm_akey_update_sync(struct sdxi_dev *sdxi, u16 cxt_start, u16 cxt_end,
 	adm = sdxi->admin_cxt;
 	if (!adm || !adm->ring_state)
 		return -ENODEV;
-	if (adm->id != 0)
+	if (adm->id != SDXI_ADMIN_CXT_ID)
 		return -ENODEV;
 
 	if (!sc)
@@ -381,4 +284,114 @@ int sdxi_adm_akey_update_sync(struct sdxi_dev *sdxi, u16 cxt_start, u16 cxt_end,
 		return -EIO;
 
 	return 0;
+}
+
+int sdxi_adm_disc(struct sdxi_dev *sdxi, u16 index_start, u16 index_end,
+		  dma_addr_t addr, unsigned int timeout_ms, u32 *cst_flags)
+{
+	struct sdxi_cxt *adm;
+	struct sdxi_ring_resv resv;
+	struct sdxi_desc *desc;
+	u32 flags;
+	int err;
+
+	might_sleep();
+
+	struct sdxi_completion *sc __free(sdxi_completion) =
+		sdxi_completion_alloc(sdxi);
+
+	if (!sdxi)
+		return -ENODEV;
+
+	adm = sdxi->admin_cxt;
+	if (!adm || !adm->ring_state)
+		return -ENODEV;
+	if (adm->id != SDXI_ADMIN_CXT_ID)
+		return -ENODEV;
+
+	if (!sc)
+		return -ENOMEM;
+
+	err = sdxi_ring_reserve(adm->ring_state, 1, &resv);
+	if (err)
+		return err;
+
+	desc = sdxi_ring_resv_next(&resv);
+	err = sdxi_encode_disc(desc, &(const struct sdxi_disc) {
+			.index_start = index_start,
+			.index_end = index_end,
+			.addr = addr,
+		});
+	if (err)
+		return err;
+
+	sdxi_completion_attach(desc, sc);
+	sdxi_desc_make_valid(desc);
+	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
+
+	err = sdxi_completion_wait_timeout(sc, timeout_ms);
+	if (err)
+		return err;
+
+	flags = sdxi_completion_flags(sc);
+	if (cst_flags)
+		*cst_flags = flags;
+
+	sdxi_ring_wake_up(adm->ring_state);
+
+	if (sdxi_completion_errored(sc))
+		return -EIO;
+
+	return 0;
+}
+
+int sdxi_adm_submit_desc(struct sdxi_cxt *adm, struct sdxi_desc *desc,
+			 unsigned int timeout_ms, u32 *cst_flags)
+{
+	struct sdxi_ring_resv resv;
+	struct sdxi_desc *dst;
+	struct sdxi_completion *sc __free(sdxi_completion) =
+		sdxi_completion_alloc(adm->sdxi);
+	int err;
+
+	if (!sc)
+		return -ENOMEM;
+
+	err = sdxi_ring_reserve(adm->ring_state, 1, &resv);
+	if (err)
+		return err;
+
+	dst = sdxi_ring_resv_next(&resv);
+	*dst = *desc;
+
+	sdxi_completion_attach(dst, sc);
+	sdxi_desc_make_valid(dst);
+	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
+
+	err = sdxi_completion_wait_timeout(sc, timeout_ms);
+	if (err)
+		return err;
+
+	if (cst_flags)
+		*cst_flags = sdxi_completion_flags(sc);
+
+	sdxi_ring_wake_up(adm->ring_state);
+
+	if (sdxi_completion_errored(sc))
+		return -EIO;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(sdxi_adm_submit_desc);
+
+int sdxi_adm_start_cxt(struct sdxi_cxt *cxt)
+{
+	return sdxi_adm_start_cxt_sync(cxt, SDXI_ADMIN_WAIT_TIMEOUT_MS, NULL,
+				       false);
+}
+
+int sdxi_adm_stop_cxt(struct sdxi_cxt *cxt)
+{
+	return sdxi_adm_stop_cxt_sync(cxt, SDXI_ADMIN_WAIT_TIMEOUT_MS, NULL,
+				      false);
 }

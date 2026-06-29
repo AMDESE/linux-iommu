@@ -67,6 +67,11 @@ struct sdxi_cxt {
 
 struct sdxi_desc;
 
+enum {
+	SDXI_ADMIN_CXT_ID = 0,
+	SDXI_ANY_CXT_ID,
+};
+
 /* Legacy context control until context.c is converted. */
 int sdxi_admin_cxt_init(struct sdxi_dev *sdxi);
 struct sdxi_cxt *sdxi_cxt_new(struct sdxi_dev *sdxi);

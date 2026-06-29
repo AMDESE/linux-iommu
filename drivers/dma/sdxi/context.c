@@ -33,11 +33,6 @@
 #define SDXI_CXT_CLEANUP_RETRY_MS	100U
 
 
-/* Legacy context constructor helpers until final constructor series lands. */
-#ifndef SDXI_ADMIN_CXT_ID
-#define SDXI_ADMIN_CXT_ID 0
-#endif
-
 static struct sdxi_sq *sdxi_sq_alloc_default(struct sdxi_cxt *cxt);
 static void sdxi_sq_free(struct sdxi_sq *sq);
 static int config_cxt_tables(struct sdxi_dev *sdxi, struct sdxi_cxt *cxt);
