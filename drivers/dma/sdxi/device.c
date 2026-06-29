@@ -26,6 +26,7 @@
 #include "error.h"
 #include "keys.h"
 #include "sdxi.h"
+#include "trace.h"
 
 enum sdxi_fn_gsv {
 	SDXI_GSV_STOP,

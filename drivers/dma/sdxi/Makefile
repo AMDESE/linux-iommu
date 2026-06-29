@@ -9,7 +9,8 @@ sdxi-objs += \
 	dma.o         \
 	error.o       \
 	keys.o        \
-	ring.o
+	ring.o        \
+	trace.o
 
 sdxi-$(CONFIG_PCI_MSI) += pci.o
 
