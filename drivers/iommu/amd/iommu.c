@@ -71,6 +71,10 @@ int amd_iommu_max_glx_val = -1;
  */
 DEFINE_IDA(pdom_ids);
 
+static int __iommu_queue_command_sync(struct amd_iommu *iommu,
+				      struct iommu_cmd *cmd,
+				      bool sync);
+
 static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 				   struct iommu_domain *old);
 
@@ -1622,6 +1626,53 @@ static void build_complete_ppr(struct iommu_cmd *cmd, u16 devid, u32 pasid,
 	CMD_SET_TYPE(cmd, CMD_COMPLETE_PPR);
 }
 
+static void build_insert_guest_event(struct iommu_cmd *cmd, u16 gid)
+{
+	memset(cmd, 0, sizeof(*cmd));
+	cmd->data[1]  = gid;
+	CMD_SET_TYPE(cmd, CMD_INSERT_GUEST_EVENT);
+}
+
+void amd_iommu_insert_guest_event(struct amd_iommu *iommu, u16 gid, u32 *event)
+{
+	struct iommu_cmd cmd;
+	unsigned long flags;
+
+	build_insert_guest_event(&cmd, gid);
+
+	raw_spin_lock_irqsave(&iommu->lock, flags);
+
+	pr_debug("%s: gid=%#x, event:%#08x_%#08x_%#08x_%#08x\n", __func__, gid,
+		event[0], event[1], event[2], event[3]);
+
+	__iommu_queue_command_sync(iommu, &cmd, false);
+	__iommu_queue_command_sync(iommu, (struct iommu_cmd *)event, true);
+
+	raw_spin_unlock_irqrestore(&iommu->lock, flags);
+
+	iommu_completion_wait(iommu);
+}
+
+#ifdef CONFIG_AMD_IOMMU_DEBUGFS
+/*
+ * Queue a caller-built command and the following 16-byte entry, then wait.
+ * debugfs uses this for an INSERT_GUEST_EVENT whose reserved bits are set;
+ * amd_iommu_insert_guest_event() stays the well-formed path.
+ */
+void amd_iommu_queue_cmd_pair(struct amd_iommu *iommu, struct iommu_cmd *cmd,
+			      struct iommu_cmd *next)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&iommu->lock, flags);
+	__iommu_queue_command_sync(iommu, cmd, false);
+	__iommu_queue_command_sync(iommu, next, true);
+	raw_spin_unlock_irqrestore(&iommu->lock, flags);
+
+	iommu_completion_wait(iommu);
+}
+#endif
+
 static void build_inv_all(struct iommu_cmd *cmd)
 {
 	memset(cmd, 0, sizeof(*cmd));
@@ -1656,6 +1707,9 @@ static int __iommu_queue_command_sync(struct amd_iommu *iommu,
 	next_tail = (iommu->cmd_buf_tail + sizeof(*cmd)) % CMD_BUFFER_SIZE;
 again:
 	left      = (iommu->cmd_buf_head - next_tail) % CMD_BUFFER_SIZE;
+
+	pr_debug("DEBUG: %s: iommu:%#x, cmd:%#08x_%#08x_%#08x_%#08x\n", __func__,
+		iommu->devid, cmd->data[0], cmd->data[1], cmd->data[2], cmd->data[3]);
 
 	if (left <= 0x20) {
 		/* Skip udelay() the first time around */

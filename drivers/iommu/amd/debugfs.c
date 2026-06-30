@@ -18,6 +18,8 @@ static struct dentry *amd_iommu_debugfs;
 #define	MAX_NAME_LEN	20
 #define	OFS_IN_SZ	8
 #define	DEVID_IN_SZ	16
+#define	GUEST_EVENT_IN_SZ	128
+#define	RESET_VMMIO_IN_SZ	16
 
 static int sbdf = -1;
 
@@ -131,6 +133,35 @@ static int iommu_cmdbuf_show(struct seq_file *m, void *unused)
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(iommu_cmdbuf);
+
+/*
+ * Write any value to restart a halted command buffer. cmdbuf stays
+ * read-only and still dumps the buffer.
+ */
+static ssize_t cmdbuf_reset_write(struct file *filp, const char __user *ubuf,
+				  size_t cnt, loff_t *ppos)
+{
+	int ret;
+	u32 input;
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+
+	if (cnt > OFS_IN_SZ)
+		return -EINVAL;
+
+	ret = kstrtou32_from_user(ubuf, cnt, 0, &input);
+	if (ret)
+		return ret;
+
+	amd_iommu_reset_cmd_buffer(iommu);
+	return cnt;
+}
+
+static int cmdbuf_reset_show(struct seq_file *m, void *unused)
+{
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(cmdbuf_reset);
 
 static ssize_t devid_write(struct file *filp, const char __user *ubuf,
 			   size_t cnt, loff_t *ppos)
@@ -355,6 +386,265 @@ static int iommu_irqtbl_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(iommu_irqtbl);
 
+/*
+ * INSERT GUEST EVENT
+ *
+ * Insert an IO_PAGE_FAULT event into the event log of guest <gid>.
+ * The event payload is 16 bytes:
+ *
+ *	word0[15:0]	device id
+ *	word0[19:16]	domain id, high nibble
+ *	word1[15:0]	domain id, low half
+ *	word1[27:16]	flags
+ *	word1[31:28]	event code (EVENT_TYPE_IO_FAULT)
+ *	word2/word3	faulting address
+ *
+ * Two input formats are accepted. The positional one covers the common case:
+ *
+ *	<gid>[:<address>[:<devid>]]
+ *
+ * and the keyword one reaches every field:
+ *
+ *	gid=<n> [addr=<a>] [devid=<d>] [domid=<d>] [flags=<f>] [cmd0=<v>]
+ *	        [cmd1=<v>] [cmd2=<v>] [cmd3=<v>]
+ *
+ * Hardware does not validate the payload: it is queued as its own
+ * command-buffer entry and copied into the guest log verbatim, so devid,
+ * domid, address and flags are round-trip checks rather than fault triggers.
+ *
+ * <flags> defaults to EVENT_FLAG_I so the event reads as an interrupt request.
+ * Clearing that bit makes the consumer treat it as a memory transaction and
+ * hand it to report_iommu_fault(), which may swallow the log line entirely.
+ *
+ * cmd0..cmd3 are the reserved fields of the INSERT_GUEST_EVENT command
+ * itself, which hardware does validate. cmd1 is masked to bits 27:16, the
+ * reserved part of the word that also carries the gid and the opcode.
+ * A well-formed command goes through amd_iommu_insert_guest_event().
+ *
+ * guest_event_fault takes the same input and calls the same helper with
+ * fault set. That fills cmd[0] of INSERT_GUEST_EVENT with 0xdeadbeef, so
+ * hardware logs GUEST_EVENT_FAULT instead of inserting the event.
+ *
+ * Unlike ILLEGAL_COMMAND_ERROR, nothing dereferences <address> on the way out,
+ * so it is safe to use as a sequence number even against a guest's log.
+ */
+/* data[1]: gid [15:0], reserved [27:16], opcode [31:28] */
+#define CMD_INSERT_GUEST_EVENT_RESV1_MASK	GENMASK(27, 16)
+struct guest_event_input {
+	u16 gid;
+	u64 address;
+	u32 devid;
+	u32 domid;
+	u32 flags;
+	u32 cmd_resv[4];
+};
+
+static int guest_event_parse_positional(char *p, struct guest_event_input *in)
+{
+	char *tok;
+	int ret;
+
+	tok = strsep(&p, ":");
+	ret = kstrtou16(tok, 0, &in->gid);
+	if (ret)
+		return ret;
+
+	tok = strsep(&p, ":");
+	if (tok && *tok) {
+		ret = kstrtou64(tok, 0, &in->address);
+		if (ret)
+			return ret;
+	}
+
+	tok = strsep(&p, ":");
+	if (tok && *tok) {
+		ret = kstrtou32(tok, 0, &in->devid);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int guest_event_parse_keywords(char *p, struct guest_event_input *in)
+{
+	bool have_gid = false;
+	char *tok;
+
+	while ((tok = strsep(&p, " \t,")) != NULL) {
+		char *val;
+		int ret;
+
+		if (!*tok)
+			continue;
+
+		val = strchr(tok, '=');
+		if (!val)
+			return -EINVAL;
+		*val++ = '\0';
+
+		if (!strcmp(tok, "gid")) {
+			ret = kstrtou16(val, 0, &in->gid);
+			have_gid = true;
+		} else if (!strcmp(tok, "addr")) {
+			ret = kstrtou64(val, 0, &in->address);
+		} else if (!strcmp(tok, "devid")) {
+			ret = kstrtou32(val, 0, &in->devid);
+		} else if (!strcmp(tok, "domid")) {
+			ret = kstrtou32(val, 0, &in->domid);
+		} else if (!strcmp(tok, "flags")) {
+			ret = kstrtou32(val, 0, &in->flags);
+		} else if (!strcmp(tok, "cmd0")) {
+			ret = kstrtou32(val, 0, &in->cmd_resv[0]);
+		} else if (!strcmp(tok, "cmd1")) {
+			ret = kstrtou32(val, 0, &in->cmd_resv[1]);
+		} else if (!strcmp(tok, "cmd2")) {
+			ret = kstrtou32(val, 0, &in->cmd_resv[2]);
+		} else if (!strcmp(tok, "cmd3")) {
+			ret = kstrtou32(val, 0, &in->cmd_resv[3]);
+		} else {
+			return -EINVAL;
+		}
+
+		if (ret)
+			return ret;
+	}
+
+	return have_gid ? 0 : -EINVAL;
+}
+
+static void guest_event_inject(struct amd_iommu *iommu,
+			       const struct guest_event_input *in, bool fault)
+{
+	u32 event[4];
+	u32 resv1 = in->cmd_resv[1] & CMD_INSERT_GUEST_EVENT_RESV1_MASK;
+	u32 cmd0 = fault ? 0xdeadbeef : in->cmd_resv[0];
+	struct iommu_cmd cmd;
+
+	event[0] = ((in->devid << EVENT_DEVID_SHIFT) & EVENT_DEVID_MASK) |
+		   (in->domid & EVENT_DOMID_MASK_HI);
+	event[1] = (in->domid & EVENT_DOMID_MASK_LO) |
+		   ((in->flags & EVENT_FLAGS_MASK) << EVENT_FLAGS_SHIFT) |
+		   (EVENT_TYPE_IO_FAULT << EVENT_TYPE_SHIFT);
+	event[2] = lower_32_bits(in->address);
+	event[3] = upper_32_bits(in->address);
+
+	if (!cmd0 && !resv1 && !in->cmd_resv[2] && !in->cmd_resv[3]) {
+		amd_iommu_insert_guest_event(iommu, in->gid, event);
+		return;
+	}
+
+	cmd.data[0] = cmd0;
+	cmd.data[1] = in->gid | resv1 | (CMD_INSERT_GUEST_EVENT << 28);
+	cmd.data[2] = in->cmd_resv[2];
+	cmd.data[3] = in->cmd_resv[3];
+
+	pr_debug("%s: gid=%#x, cmd:%#08x_%#08x_%#08x_%#08x, event:%#08x_%#08x_%#08x_%#08x\n",
+		 __func__, in->gid, cmd.data[0], cmd.data[1], cmd.data[2],
+		 cmd.data[3], event[0], event[1], event[2], event[3]);
+
+	amd_iommu_queue_cmd_pair(iommu, &cmd, (struct iommu_cmd *)event);
+}
+
+static ssize_t guest_event_write_common(struct file *filp,
+					const char __user *ubuf, size_t cnt,
+					bool fault)
+{
+	struct guest_event_input in = { .flags = EVENT_FLAG_I };
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+	char buf[GUEST_EVENT_IN_SZ], *p;
+	int ret;
+
+	if (cnt >= sizeof(buf))
+		return -EINVAL;
+
+	if (copy_from_user(buf, ubuf, cnt))
+		return -EFAULT;
+	buf[cnt] = '\0';
+	p = strim(buf);
+
+	ret = strchr(p, '=') ? guest_event_parse_keywords(p, &in)
+			     : guest_event_parse_positional(p, &in);
+	if (ret)
+		return ret;
+
+	guest_event_inject(iommu, &in, fault);
+	return cnt;
+}
+
+static ssize_t guest_event_write(struct file *filp, const char __user *ubuf,
+				 size_t cnt, loff_t *ppos)
+{
+	return guest_event_write_common(filp, ubuf, cnt, false);
+}
+
+static int guest_event_show(struct seq_file *m, void *unused)
+{
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(guest_event);
+
+static ssize_t guest_event_fault_write(struct file *filp,
+				       const char __user *ubuf, size_t cnt,
+				       loff_t *ppos)
+{
+	return guest_event_write_common(filp, ubuf, cnt, true);
+}
+
+static int guest_event_fault_show(struct seq_file *m, void *unused)
+{
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(guest_event_fault);
+
+/*
+ * RESET VMMIO
+ *
+ * Write "<gid>" to issue a RESET_VMMIO command for that guest. It resets the
+ * guest's MMIO registers, including the event log status word, so it clears a
+ * latched EventOverflow and lets a stopped guest event log run again.
+ *
+ * This is the only way to recover an overflowed guest event log short of
+ * tearing the vIOMMU down: neither amd_viommu_hw_queue_destroy() nor
+ * amd_viommu_set_hw_queue() touches the guest status register, so a queue
+ * re-allocation leaves EventOverflow latched and EventLogRun clear. The same
+ * command already runs once per vIOMMU from amd_iommufd_viommu_alloc(), which
+ * is why a fresh IOMMU_VIOMMU_ALLOC recovers and a fresh queue does not.
+ */
+static ssize_t reset_vmmio_write(struct file *filp, const char __user *ubuf,
+				 size_t cnt, loff_t *ppos)
+{
+	struct seq_file *m = filp->private_data;
+	struct amd_iommu *iommu = m->private;
+	char buf[RESET_VMMIO_IN_SZ];
+	u16 gid;
+	int ret;
+
+	if (cnt >= sizeof(buf))
+		return -EINVAL;
+
+	if (copy_from_user(buf, ubuf, cnt))
+		return -EFAULT;
+	buf[cnt] = '\0';
+
+	ret = kstrtou16(strim(buf), 0, &gid);
+	if (ret)
+		return ret;
+
+	ret = amd_iommu_reset_vmmio(iommu, gid);
+	if (ret)
+		return ret;
+
+	return cnt;
+}
+
+static int reset_vmmio_show(struct seq_file *m, void *unused)
+{
+	return 0;
+}
+DEFINE_SHOW_STORE_ATTRIBUTE(reset_vmmio);
+
 void amd_iommu_debugfs_setup(void)
 {
 	struct amd_iommu *iommu;
@@ -375,6 +665,14 @@ void amd_iommu_debugfs_setup(void)
 				    &iommu_capability_fops);
 		debugfs_create_file("cmdbuf", 0444, iommu->debugfs, iommu,
 				    &iommu_cmdbuf_fops);
+		debugfs_create_file("cmdbuf_reset", 0644, iommu->debugfs, iommu,
+				    &cmdbuf_reset_fops);
+		debugfs_create_file("guest_event", 0644, iommu->debugfs, iommu,
+				    &guest_event_fops);
+		debugfs_create_file("guest_event_fault", 0644, iommu->debugfs,
+				    iommu, &guest_event_fault_fops);
+		debugfs_create_file("reset_vmmio", 0644, iommu->debugfs, iommu,
+				    &reset_vmmio_fops);
 	}
 
 	debugfs_create_file("devid", 0644, amd_iommu_debugfs, NULL,
