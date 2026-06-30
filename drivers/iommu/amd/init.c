@@ -198,7 +198,7 @@ bool amdr_ivrs_remap_support __read_mostly;
 bool amd_iommu_force_isolation __read_mostly;
 
 /* VIOMMU enabling flag */
-bool amd_iommu_viommu;
+bool amd_iommu_viommu = true;
 
 unsigned long amd_iommu_pgsize_bitmap __ro_after_init = AMD_IOMMU_PGSIZES;
 
@@ -415,6 +415,16 @@ static void iommu_feature_set(struct amd_iommu *iommu, u64 val, u64 mask, u8 shi
 void iommu_feature_enable(struct amd_iommu *iommu, u8 bit)
 {
 	iommu_feature_set(iommu, 1ULL, 1ULL, bit);
+}
+
+bool iommu_feature_enable_and_check(struct amd_iommu *iommu, u8 bit)
+{
+	u64 ctrl;
+
+	iommu_feature_enable(iommu, bit);
+
+	ctrl = readq(iommu->mmio_base +  MMIO_CONTROL_OFFSET);
+	return (ctrl & (1ULL << bit));
 }
 
 static void iommu_feature_disable(struct amd_iommu *iommu, u8 bit)
