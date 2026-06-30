@@ -44,6 +44,12 @@ void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
 void amd_iommu_trans_devid_debugfs_show_pool(struct seq_file *m);
 void amd_iommu_trans_devid_debugfs_show_viommus(struct seq_file *m);
 #endif
+
+struct iommufd_hw_queue;
+
+void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue);
+void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue);
+void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue);
 #else
 
 /*
@@ -87,6 +93,18 @@ amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg)
 
 static inline void
 amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
+{
+}
+
+static inline void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+}
+
+static inline void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+}
+
+static inline void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 {
 }
 
