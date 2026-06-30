@@ -281,5 +281,8 @@ static inline int amd_iommu_reset_ext_irte(struct amd_iommu *iommu,
 	return 0;
 }
 #endif
+void amd_iommu_insert_guest_event(struct amd_iommu *iommu, u16 gid, u32 *event);
+void amd_iommu_inject_event(struct amd_iommu *iommu, u32 evtid);
 int amd_iommu_reset_vmmio(struct amd_iommu *iommu, u16 gid);
+void amd_iommu_reset_cmd_buffer(struct amd_iommu *iommu);
 #endif /* AMD_IOMMU_H */

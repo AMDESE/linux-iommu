@@ -214,6 +214,7 @@
 #define CMD_INV_IRT		0x05
 #define CMD_COMPLETE_PPR	0x07
 #define CMD_INV_ALL		0x08
+#define CMD_INSERT_GUEST_EVENT	0x09
 #define CMD_RESET_VMMIO		0x0A
 #define RESET_MMIO_ALL_FLAG	BIT(28)
 #define RESET_MMIO_VCMD_FLAG	BIT(31)
@@ -263,6 +264,7 @@
 #define MMIO_CMD_BUFFER_TAIL(x) FIELD_GET(MMIO_CMD_TAIL_MASK, (x))
 
 /* constants for event buffer handling */
+#define EVT_BUFFER_ENTRIES	512
 #define EVTLOG_ENTRY_SIZE	0x10
 #define EVTLOG_SIZE_SHIFT	56
 #define EVTLOG_SIZE_DEF		SZ_8K /* 512 entries */
