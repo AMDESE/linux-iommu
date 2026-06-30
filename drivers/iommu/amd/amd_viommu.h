@@ -23,6 +23,12 @@ int amd_viommu_domain_id_update(struct amd_iommu *iommu, u16 gid,
 
 void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
 				   u16 guestId, u16 gDevId);
+
+struct iommufd_hw_queue;
+
+void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue);
+void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue);
+void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue);
 #else
 
 static inline int amd_viommu_init(struct amd_iommu *iommu)
@@ -50,6 +56,18 @@ static inline void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iom
 
 static inline void amd_viommu_set_device_mapping(struct amd_iommu *iommu, u16 hDevId,
 						 u16 guestId, u16 gDevId)
+{
+}
+
+static inline void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+}
+
+static inline void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+}
+
+static inline void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 {
 }
 

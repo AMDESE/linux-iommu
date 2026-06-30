@@ -507,6 +507,10 @@ extern bool amdr_ivrs_remap_support;
 #define VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId) \
 	(iommu->vfctrl_base + (guestId * VIOMMU_VFCTRL_MMIO_ENTRY_SIZE))
 
+#define VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET	0x20
+#define VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET	0x28
+#define VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET	0x30
+
 struct amd_iommu;
 struct iommu_domain;
 struct irq_domain;
@@ -1151,6 +1155,10 @@ struct amd_irte_ops {
 
 struct amd_iommu_vdevice {
 	struct iommufd_vdevice core;
+};
+
+struct amd_iommu_hw_queue {
+	struct iommufd_hw_queue core;
 };
 
 #ifdef CONFIG_IRQ_REMAP
