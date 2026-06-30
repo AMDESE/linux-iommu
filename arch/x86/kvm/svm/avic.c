@@ -259,7 +259,7 @@ static void avic_deactivate_vmcb(struct vcpu_svm *svm)
 static int avic_ga_log_notifier(u32 ga_tag)
 {
 	unsigned long flags;
-	struct kvm_svm *kvm_svm;
+	struct kvm_svm *kvm_svm = NULL, *tmp;
 	struct kvm_vcpu *vcpu = NULL;
 	u32 vm_id = AVIC_GATAG_TO_VMID(ga_tag);
 	u32 vcpu_idx = AVIC_GATAG_TO_VCPUIDX(ga_tag);
@@ -268,13 +268,18 @@ static int avic_ga_log_notifier(u32 ga_tag)
 	trace_kvm_avic_ga_log(vm_id, vcpu_idx);
 
 	spin_lock_irqsave(&svm_vm_data_hash_lock, flags);
-	hash_for_each_possible(svm_vm_data_hash, kvm_svm, hnode, vm_id) {
-		if (kvm_svm->avic_vm_id != vm_id)
-			continue;
-		vcpu = kvm_get_vcpu(&kvm_svm->kvm, vcpu_idx);
-		break;
+	hash_for_each_possible(svm_vm_data_hash, tmp, hnode, vm_id) {
+		if (tmp->avic_vm_id == vm_id) {
+			kvm_svm = tmp;
+			break;
+		}
 	}
 	spin_unlock_irqrestore(&svm_vm_data_hash_lock, flags);
+
+	if (!kvm_svm)
+		return -EINVAL;
+
+	vcpu = kvm_get_vcpu_by_id(&kvm_svm->kvm, vcpu_idx);
 
 	/* Note:
 	 * At this point, the IOMMU should have already set the pending
