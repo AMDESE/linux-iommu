@@ -12,8 +12,12 @@
 
 struct amd_iommu;
 
+struct kvm;
+struct fd;
+
 struct amd_iommu_svm_ops {
 	int (*ga_log_notifier)(u32 ga_tag);
+	struct kvm *(*kvm_from_fd)(u32 kvmfd, struct fd *f);
 };
 
 #ifdef CONFIG_AMD_IOMMU
