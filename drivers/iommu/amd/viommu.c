@@ -75,6 +75,18 @@ static void amd_viommu_detach_ext_ir_kvm(struct amd_iommu_viommu *aviommu)
 
 LIST_HEAD(viommu_devid_map);
 
+static int viommu_enable(struct amd_iommu *iommu)
+{
+	/* The GstBufferTRPMode feature is checked by set and test */
+	if (!iommu_feature_enable_and_check(iommu, CONTROL_GSTBUFFERTRPMODE))
+		return -EINVAL;
+
+	iommu_feature_enable(iommu, CONTROL_VCMD_EN);
+	iommu_feature_enable(iommu, CONTROL_VIOMMU_EN);
+
+	return 0;
+}
+
 static int viommu_init_pci_vsc(struct amd_iommu *iommu)
 {
 	iommu->vsc_offset = pci_find_capability(iommu->dev, PCI_CAP_ID_VNDR);
@@ -443,6 +455,10 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 
 	hash_init(iommu->ext_irte_hlist);
 	spin_lock_init(&iommu->ext_irte_hlist_lock);
+
+	ret = viommu_enable(iommu);
+	if (ret)
+		goto err_private_space;
 
 	return 0;
 
