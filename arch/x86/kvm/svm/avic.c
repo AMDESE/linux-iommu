@@ -16,6 +16,8 @@
 
 #include <linux/kvm_types.h>
 #include <linux/hashtable.h>
+#include <linux/file.h>
+#include <linux/module.h>
 #include <linux/amd-iommu.h>
 #include <linux/kvm_host.h>
 #include <linux/kvm_irqfd.h>
@@ -1300,8 +1302,47 @@ static bool __init avic_want_avic_enabled(void)
 	return true;
 }
 
+static struct kvm *svm_kvm_from_fd(u32 kvmfd)
+{
+	struct fd f = fdget(kvmfd);
+	struct file *file;
+	struct kvm *kvm;
+
+	if (fd_empty(f))
+		return ERR_PTR(-EINVAL);
+
+	file = fd_file(f);
+	if (!file_is_kvm(file)) {
+		fdput(f);
+		return ERR_PTR(-EINVAL);
+	}
+
+	kvm = file->private_data;
+	if (!kvm || !kvm_get_kvm_safe(kvm)) {
+		fdput(f);
+		return ERR_PTR(-EINVAL);
+	}
+
+	if (!try_module_get(THIS_MODULE)) {
+		kvm_put_kvm(kvm);
+		fdput(f);
+		return ERR_PTR(-ENODEV);
+	}
+
+	fdput(f);
+	return kvm;
+}
+
+static void svm_put_kvm(struct kvm *kvm)
+{
+	kvm_put_kvm(kvm);
+	module_put(THIS_MODULE);
+}
+
 static const struct amd_iommu_svm_ops avic_svm_ops = {
 	.ga_log_notifier = avic_ga_log_notifier,
+	.kvm_from_fd = svm_kvm_from_fd,
+	.put_kvm = svm_put_kvm,
 };
 
 /*

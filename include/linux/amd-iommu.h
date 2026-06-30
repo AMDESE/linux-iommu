@@ -12,8 +12,13 @@
 
 struct amd_iommu;
 
+struct kvm;
+
 struct amd_iommu_svm_ops {
 	int (*ga_log_notifier)(u32 ga_tag);
+	/* Extra users_count and kvm_amd pin; caller must put_kvm(). */
+	struct kvm *(*kvm_from_fd)(u32 kvmfd);
+	void (*put_kvm)(struct kvm *kvm);
 };
 
 #ifdef CONFIG_AMD_IOMMU
