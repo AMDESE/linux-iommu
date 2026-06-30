@@ -255,6 +255,7 @@ static int avic_ga_log_notifier(u32 ga_tag)
 	struct kvm_vcpu *vcpu = NULL;
 	u32 vm_id = AVIC_GATAG_TO_VMID(ga_tag);
 	u32 vcpu_idx = AVIC_GATAG_TO_VCPUIDX(ga_tag);
+	bool found = false;
 
 	pr_debug("SVM: %s: vm_id=%#x, vcpu_idx=%#x\n", __func__, vm_id, vcpu_idx);
 	trace_kvm_avic_ga_log(vm_id, vcpu_idx);
@@ -264,9 +265,13 @@ static int avic_ga_log_notifier(u32 ga_tag)
 		if (kvm_svm->avic_vm_id != vm_id)
 			continue;
 		vcpu = kvm_get_vcpu(&kvm_svm->kvm, vcpu_idx);
+		found = true;
 		break;
 	}
 	spin_unlock_irqrestore(&svm_vm_data_hash_lock, flags);
+
+	if (!found)
+		return -EINVAL;
 
 	/* Note:
 	 * At this point, the IOMMU should have already set the pending
