@@ -392,6 +392,7 @@ static int _iommufd_hw_queue_init(struct iommufd_ucmd *ucmd,
 	refcount_inc(&viommu->obj.users);
 	hw_queue->access = access;
 	hw_queue->type = cmd->type;
+	hw_queue->flags = cmd->flags;
 	hw_queue->length = cmd->length;
 	hw_queue->base_addr = cmd->nesting_parent_iova;
 
@@ -417,7 +418,7 @@ int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	u64 last;
 	int rc;
 
-	if (cmd->flags || cmd->type == IOMMU_HW_QUEUE_TYPE_DEFAULT)
+	if (cmd->type == IOMMU_HW_QUEUE_TYPE_DEFAULT)
 		return -EOPNOTSUPP;
 	if (!cmd->length)
 		return -EINVAL;
