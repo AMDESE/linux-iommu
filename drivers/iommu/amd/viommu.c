@@ -92,6 +92,28 @@ static_assert(VIOMMU_DOMID_MAPPING_ENTRY_SIZE >=
 
 #define EXT_INT_REMAP_TBL_L1_SIZE (PAGE_SIZE * 2)
 
+static int viommu_enable(struct amd_iommu *iommu)
+{
+	/* The GstBufferTRPMode feature is checked by set and test */
+	if (!iommu_feature_enable_and_check(iommu, CONTROL_GSTBUFFERTRPMODE))
+		return -EINVAL;
+
+	iommu_feature_enable(iommu, CONTROL_VCMD_EN);
+	iommu_feature_enable(iommu, CONTROL_VIOMMU_EN);
+
+	return 0;
+}
+
+static void viommu_disable(struct amd_iommu *iommu)
+{
+	if (!iommu->mmio_base)
+		return;
+
+	iommu_feature_disable(iommu, CONTROL_VIOMMU_EN);
+	iommu_feature_disable(iommu, CONTROL_VCMD_EN);
+	iommu_feature_disable(iommu, CONTROL_GSTBUFFERTRPMODE);
+}
+
 static void __init amd_viommu_vf_vfcntl_unmap(struct amd_iommu *iommu)
 {
 	if (iommu->vfctrl_base) {
@@ -173,6 +195,7 @@ static void free_ext_int_remap_tbl(struct amd_iommu *iommu);
 
 void __init amd_viommu_uninit(struct amd_iommu *iommu)
 {
+	viommu_disable(iommu);
 	iommu->flags &= ~AMD_IOMMU_FLAG_VIOMMU_EN;
 	viommu_free_self_dev_data(iommu);
 	free_ext_int_remap_tbl(iommu);
@@ -512,6 +535,9 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 				iommu_virt_to_phys(iommu->ext_ir_table),
 				DTE_EXT_INTTABLEN_L1);
 
+	ret = viommu_enable(iommu);
+	if (ret)
+		goto err;
 	iommu->flags |= AMD_IOMMU_FLAG_VIOMMU_EN;
 	return 0;
 err:
@@ -1281,4 +1307,12 @@ void amd_viommu_clear_ext_int_remap(struct kvm *kvm, struct amd_iommu *iommu,
 			svm_ops->clear_ext_ir_affinity(kvm, &eirte->ir_data);
 		remove_ext_irte(iommu, eirte);
 	}
+}
+
+int amd_viommu_resume(struct amd_iommu *iommu)
+{
+	if (!(iommu->flags & AMD_IOMMU_FLAG_VIOMMU_EN))
+		return 0;
+
+	return viommu_enable(iommu);
 }
