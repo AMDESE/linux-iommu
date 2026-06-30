@@ -276,6 +276,7 @@ TEST_F(sdxi_context, akey_iv_requires_matching_intr_num)
 	struct sdxi_cxt_eventfd_args args = {};
 	uint32_t data[4];
 	uint32_t wrong_intr;
+	uint16_t test_akey;
 	int efd;
 	int rc;
 
@@ -294,12 +295,17 @@ TEST_F(sdxi_context, akey_iv_requires_matching_intr_num)
 		ASSERT_EQ(rc, 0);
 	}
 
+	ASSERT_GE(args.intr_akey, 2U);
+	ASSERT_LT(args.intr_akey, 255U);
+	test_akey = args.intr_akey + 1;
+
 	wrong_intr = (args.intr_num == 1U) ? 2U : 1U;
 	akey_pack_intr(data, wrong_intr, true);
-	EXPECT_EQ(set_single_akey(self->context.cxt_fd, 2, data), -EINVAL);
+	EXPECT_EQ(set_single_akey(self->context.cxt_fd, test_akey, data),
+		  -EINVAL);
 
 	akey_pack_intr(data, args.intr_num, true);
-	EXPECT_EQ(set_single_akey(self->context.cxt_fd, 2, data), 0);
+	EXPECT_EQ(set_single_akey(self->context.cxt_fd, test_akey, data), 0);
 
 	args.eventfd = -1;
 	args.argsz = sizeof(args);
