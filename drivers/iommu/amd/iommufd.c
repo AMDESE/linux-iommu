@@ -4,6 +4,7 @@
  */
 
 #include <linux/iommu.h>
+#include <linux/amd-iommu.h>
 
 #include "iommufd.h"
 #include "amd_iommu.h"
@@ -255,6 +256,35 @@ static int _amd_viommu_vdevice_init(struct iommufd_vdevice *vdev)
 	return 0;
 }
 
+static size_t amd_iommufd_get_hw_queue_size(struct iommufd_viommu *viommu,
+					    enum iommu_hw_queue_type queue_type)
+{
+	/* Currently do not support Eventlog B and PPRlog B */
+	if ((queue_type != IOMMU_HW_QUEUE_TYPE_AMD_CMD) &&
+	    (queue_type != IOMMU_HW_QUEUE_TYPE_AMD_EVT) &&
+	    (queue_type != IOMMU_HW_QUEUE_TYPE_AMD_PPR))
+		return 0;
+
+	return HW_QUEUE_STRUCT_SIZE(struct amd_iommu_hw_queue, core);
+}
+
+static u32 amd_iommufd_get_hw_queue_flags(struct iommufd_viommu *viommu,
+					   enum iommu_hw_queue_type queue_type)
+{
+	const struct amd_viommu_ring_desc *desc =
+		amd_viommu_ring_for_type(queue_type);
+
+	return desc ? amd_viommu_ring_queue_flags(desc) : 0;
+}
+
+static int amd_iommufd_hw_queue_init(struct iommufd_hw_queue *hw_queue, u32 index)
+{
+	if (index)
+		return -EINVAL;
+
+	return amd_viommu_set_hw_queue_flags(hw_queue);
+}
+
 /*
  * See include/linux/iommufd.h
  * struct iommufd_viommu_ops - vIOMMU specific operations
@@ -264,4 +294,7 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.destroy = amd_iommufd_viommu_destroy,
 	.vdevice_size = VDEVICE_STRUCT_SIZE(struct amd_iommu_vdevice, core),
 	.vdevice_init = _amd_viommu_vdevice_init,
+	.get_hw_queue_size = amd_iommufd_get_hw_queue_size,
+	.get_hw_queue_flags = amd_iommufd_get_hw_queue_flags,
+	.hw_queue_init = amd_iommufd_hw_queue_init,
 };

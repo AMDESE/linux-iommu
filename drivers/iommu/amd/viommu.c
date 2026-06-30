@@ -693,3 +693,180 @@ err_out:
 	amd_viommu_uninit_one(iommu, viommu);
 	return ret;
 }
+
+static const struct amd_viommu_reg_flag amd_viommu_cmd_flags[] = {
+	{ VIOMMU_VFCTRL_CMD_EN, IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN },
+	{ VIOMMU_VFCTRL_CMD_COMWAIT_EN, IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN },
+};
+
+static const struct amd_viommu_reg_flag amd_viommu_evt_flags[] = {
+	{ VIOMMU_VFCTRL_EVT_LOG_EN, IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN },
+	{ VIOMMU_VFCTRL_EVT_INT_EN, IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN },
+};
+
+static const struct amd_viommu_reg_flag amd_viommu_ppr_flags[] = {
+	{ VIOMMU_VFCTRL_PPRLOG_EN, IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN },
+	{ VIOMMU_VFCTRL_PPRINT_EN, IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN },
+	{ VIOMMU_VFCTRL_PPR_EN, IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN },
+	{ VIOMMU_VFCTRL_PPR_AUTO_RSP_EN, IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN },
+	{ VIOMMU_VFCTRL_PPR_BLKSTOPMRK_EN, IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN },
+	{ VIOMMU_VFCTRL_PPR_AUTO_RSP_AON, IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON },
+};
+
+/*
+ * The one table describing the three guest ring control registers. The queue
+ * allocation path programs them from it and migration saves, checks and arms
+ * them from it.
+ */
+const struct amd_viommu_ring_desc amd_viommu_rings[AMD_VIOMMU_GUEST_RINGS] = {
+	[AMD_VIOMMU_RING_CMD] = {
+		.type = IOMMU_HW_QUEUE_TYPE_AMD_CMD,
+		.ctrl_off = VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET,
+		.len_mask = VIOMMU_VFCTRL_CMD_LEN,
+		.base_mask = VIOMMU_VFCTRL_CMD_BASE,
+		.flags = amd_viommu_cmd_flags,
+		.nr_flags = ARRAY_SIZE(amd_viommu_cmd_flags),
+	},
+	[AMD_VIOMMU_RING_EVT] = {
+		.type = IOMMU_HW_QUEUE_TYPE_AMD_EVT,
+		.ctrl_off = VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET,
+		.len_mask = VIOMMU_VFCTRL_EVT_LEN,
+		.base_mask = VIOMMU_VFCTRL_EVT_BASE,
+		.flags = amd_viommu_evt_flags,
+		.nr_flags = ARRAY_SIZE(amd_viommu_evt_flags),
+	},
+	[AMD_VIOMMU_RING_PPR] = {
+		.type = IOMMU_HW_QUEUE_TYPE_AMD_PPR,
+		.ctrl_off = VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET,
+		.len_mask = VIOMMU_VFCTRL_PPR_LEN,
+		.base_mask = VIOMMU_VFCTRL_PPR_BASE,
+		.flags = amd_viommu_ppr_flags,
+		.nr_flags = ARRAY_SIZE(amd_viommu_ppr_flags),
+	},
+};
+
+const struct amd_viommu_ring_desc *amd_viommu_ring_for_type(u32 type)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(amd_viommu_rings); i++)
+		if (amd_viommu_rings[i].type == type)
+			return &amd_viommu_rings[i];
+
+	return NULL;
+}
+
+static void amd_viommu_hw_queue_disable_wait(struct amd_iommu_viommu *aviommu,
+					     const struct amd_viommu_ring_desc *desc,
+					     u8 __iomem *vfctrl)
+{
+	u64 enable_mask = amd_viommu_ring_enable_mask(desc);
+	u64 val;
+	int i;
+
+	lockdep_assert_held(&aviommu->vfctrl_lock);
+
+	val = readq(vfctrl + desc->ctrl_off);
+	val &= ~enable_mask;
+	writeq(val, vfctrl + desc->ctrl_off);
+
+	for (i = 0; i < LOOP_TIMEOUT; i++) {
+		val = readq(vfctrl + desc->ctrl_off);
+		if (!(val & enable_mask))
+			return;
+		udelay(1);
+	}
+	pr_debug("%s: disable timeout gid=%#x offset=%#x val=%#llx\n",
+	       __func__, aviommu->gid, desc->ctrl_off, val);
+}
+
+static void amd_viommu_hw_queue_destroy(struct iommufd_hw_queue *hw_queue)
+{
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	const struct amd_viommu_ring_desc *desc;
+	u8 __iomem *vfctrl;
+	u64 val;
+
+	desc = amd_viommu_ring_for_type(hw_queue->type);
+	if (WARN_ON_ONCE(!desc))
+		return;
+
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	if (aviommu->hw_queues[desc - amd_viommu_rings] == hw_queue) {
+		amd_viommu_hw_queue_disable_wait(aviommu, desc, vfctrl);
+		val = readq(vfctrl + desc->ctrl_off);
+		val &= ~(desc->base_mask | desc->len_mask |
+			 amd_viommu_ring_enable_mask(desc));
+		writeq(val, vfctrl + desc->ctrl_off);
+		aviommu->hw_queues[desc - amd_viommu_rings] = NULL;
+	}
+	mutex_unlock(&aviommu->vfctrl_lock);
+}
+
+int amd_viommu_set_hw_queue_flags(struct iommufd_hw_queue *hw_queue)
+{
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu =
+		container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	const struct amd_viommu_ring_desc *desc;
+	u8 __iomem *vfctrl;
+	unsigned int slot;
+	u64 enable_bits;
+	u64 val;
+	int ret = 0;
+
+	desc = amd_viommu_ring_for_type(hw_queue->type);
+	if (!desc)
+		return -EINVAL;
+	slot = desc - amd_viommu_rings;
+
+	if (hw_queue->flags & ~amd_viommu_ring_queue_flags(desc))
+		return -EINVAL;
+	enable_bits = amd_viommu_ring_reg_bits(desc, hw_queue->flags);
+	if (!enable_bits)
+		return -EINVAL;
+	if (!IS_ALIGNED(hw_queue->base_addr, SZ_4K))
+		return -EINVAL;
+	if (hw_queue->base_addr & ~VIOMMU_HWQ_GPA_MASK)
+		return -EINVAL;
+	if (!is_power_of_2(hw_queue->length) ||
+	    hw_queue->length < SZ_4K || hw_queue->length > SZ_512K)
+		return -EINVAL;
+
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	if (aviommu->hw_queues[slot]) {
+		ret = -EEXIST;
+		goto out_unlock;
+	}
+
+	val = readq(vfctrl + desc->ctrl_off);
+	val &= ~(desc->base_mask | desc->len_mask |
+		 amd_viommu_ring_enable_mask(desc));
+	val |= field_prep(desc->len_mask, ilog2(hw_queue->length) - 4);
+	/* The base field holds GPA bit 12 up, wherever the ring puts it */
+	val |= field_prep(desc->base_mask, hw_queue->base_addr >> PAGE_SHIFT);
+	val |= enable_bits;
+	writeq(val, vfctrl + desc->ctrl_off);
+
+	aviommu->hw_queues[slot] = hw_queue;
+	hw_queue->destroy = amd_viommu_hw_queue_destroy;
+out_unlock:
+	mutex_unlock(&aviommu->vfctrl_lock);
+
+	if (!ret)
+		pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
+			 __func__, iommu->devid, aviommu->gid, hw_queue->type,
+			 hw_queue->base_addr, hw_queue->length,
+			 hw_queue->flags, val);
+
+	return ret;
+}
+

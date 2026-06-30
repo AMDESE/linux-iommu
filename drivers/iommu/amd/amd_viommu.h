@@ -38,6 +38,10 @@ int amd_iommu_trans_devid_alloc(struct amd_iommu_pci_seg *pci_seg,
 				struct amd_iommu_viommu *aviommu);
 void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
 				struct amd_iommu_viommu *aviommu);
+
+struct iommufd_hw_queue;
+
+int amd_viommu_set_hw_queue_flags(struct iommufd_hw_queue *hw_queue);
 #else
 
 /*
@@ -82,6 +86,11 @@ amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id)
 static inline void
 amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
 {
+}
+
+static inline int amd_viommu_set_hw_queue_flags(struct iommufd_hw_queue *hw_queue)
+{
+	return 0;
 }
 
 #endif /* CONFIG_AMD_IOMMU_IOMMUFD */

@@ -508,6 +508,139 @@ extern bool amdr_ivrs_remap_support;
 #define VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId) \
 	(iommu->vfctrl_base + (guestId * VIOMMU_VFCTRL_MMIO_ENTRY_SIZE))
 
+#define VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET	0x20
+#define VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET	0x28
+#define VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET	0x30
+
+/*
+ * Fields of the three guest ring control registers. The enable bits are not
+ * named as a mask: a ring's enable mask is the OR of the bits in its
+ * amd_viommu_ring_desc flag table, so there is one place that lists them.
+ */
+
+/* Ring base address field of a control register is GPA bits 51:12 */
+#define VIOMMU_HWQ_GPA_MASK		GENMASK_ULL(51, 12)
+
+/* Fields of the guest command control register */
+#define VIOMMU_VFCTRL_CMD_LEN		GENMASK_ULL(3, 0)
+#define VIOMMU_VFCTRL_CMD_EN		BIT_ULL(8)
+#define VIOMMU_VFCTRL_CMD_COMWAIT_EN	BIT_ULL(9)
+#define VIOMMU_VFCTRL_CMD_BASE		VIOMMU_HWQ_GPA_MASK
+
+/* Fields of the guest event control register */
+#define VIOMMU_VFCTRL_EVT_LEN		GENMASK_ULL(3, 0)
+#define VIOMMU_VFCTRL_EVT_LOG_EN	BIT_ULL(8)
+#define VIOMMU_VFCTRL_EVT_INT_EN	BIT_ULL(9)
+#define VIOMMU_VFCTRL_EVT_BASE		VIOMMU_HWQ_GPA_MASK
+
+/* Fields of the guest PPR control register */
+#define VIOMMU_VFCTRL_PPR_LEN		GENMASK_ULL(3, 0)
+#define VIOMMU_VFCTRL_PPRLOG_EN		BIT_ULL(8)
+#define VIOMMU_VFCTRL_PPRINT_EN		BIT_ULL(9)
+#define VIOMMU_VFCTRL_PPR_EN		BIT_ULL(10)
+#define VIOMMU_VFCTRL_PPR_AUTO_RSP_EN	BIT_ULL(13)
+#define VIOMMU_VFCTRL_PPR_BLKSTOPMRK_EN	BIT_ULL(14)
+#define VIOMMU_VFCTRL_PPR_AUTO_RSP_AON	BIT_ULL(15)
+#define VIOMMU_VFCTRL_PPR_BASE		GENMASK_ULL(55, 16)
+
+/* The three rings a vIOMMU presents its guest: command, event log, PPR log */
+#define AMD_VIOMMU_GUEST_RINGS		3
+
+/* Indices into amd_viommu_rings[] */
+enum amd_viommu_ring {
+	AMD_VIOMMU_RING_CMD,
+	AMD_VIOMMU_RING_EVT,
+	AMD_VIOMMU_RING_PPR,
+};
+
+/**
+ * struct amd_viommu_reg_flag - One enable bit's two spellings
+ * @reg: The bit as it appears in the VFCTRL control register
+ * @queue: The same bit in enum iommu_hw_queue_flags_amd
+ */
+struct amd_viommu_reg_flag {
+	u64 reg;
+	u32 queue;
+};
+
+/**
+ * struct amd_viommu_ring_desc - Where one guest ring keeps its state
+ * @type: enum iommu_hw_queue_type value for this ring
+ * @ctrl_off: Control register, within the vIOMMU's VFCTRL block
+ * @len_mask: Size field of the control register
+ * @base_mask: Base address field of the control register
+ * @flags: Enable bits this ring has
+ * @nr_flags: Entries in @flags
+ *
+ * The one description of a ring's control register, shared by the queue
+ * allocation path and by migration. Nothing else spells out these fields.
+ */
+struct amd_viommu_ring_desc {
+	u32 type;
+	unsigned int ctrl_off;
+	u64 len_mask;
+	u64 base_mask;
+	const struct amd_viommu_reg_flag *flags;
+	unsigned int nr_flags;
+};
+
+extern const struct amd_viommu_ring_desc amd_viommu_rings[AMD_VIOMMU_GUEST_RINGS];
+
+/* The ring of this enum iommu_hw_queue_type, or NULL if it has none */
+const struct amd_viommu_ring_desc *amd_viommu_ring_for_type(u32 type);
+
+/* Every enable bit the ring's control register has */
+static inline u64 amd_viommu_ring_enable_mask(const struct amd_viommu_ring_desc *desc)
+{
+	u64 mask = 0;
+	unsigned int i;
+
+	for (i = 0; i < desc->nr_flags; i++)
+		mask |= desc->flags[i].reg;
+
+	return mask;
+}
+
+/* Every enum iommu_hw_queue_flags_amd bit the ring accepts */
+static inline u32 amd_viommu_ring_queue_flags(const struct amd_viommu_ring_desc *desc)
+{
+	u32 mask = 0;
+	unsigned int i;
+
+	for (i = 0; i < desc->nr_flags; i++)
+		mask |= desc->flags[i].queue;
+
+	return mask;
+}
+
+/* The register bits for these enum iommu_hw_queue_flags_amd bits */
+static inline u64 amd_viommu_ring_reg_bits(const struct amd_viommu_ring_desc *desc,
+					   u32 queue_flags)
+{
+	u64 bits = 0;
+	unsigned int i;
+
+	for (i = 0; i < desc->nr_flags; i++)
+		if (queue_flags & desc->flags[i].queue)
+			bits |= desc->flags[i].reg;
+
+	return bits;
+}
+
+/* The enum iommu_hw_queue_flags_amd bits for these register bits */
+static inline u32 amd_viommu_ring_flags_from_reg(const struct amd_viommu_ring_desc *desc,
+						 u64 reg)
+{
+	u32 flags = 0;
+	unsigned int i;
+
+	for (i = 0; i < desc->nr_flags; i++)
+		if (reg & desc->flags[i].reg)
+			flags |= desc->flags[i].queue;
+
+	return flags;
+}
+
 struct amd_iommu;
 struct iommu_domain;
 struct irq_domain;
@@ -578,10 +711,10 @@ struct amd_iommu_viommu {
 	struct mutex trans_devid_lock;
 
 	/*
-	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells
-	 * (DevID and DomID table updates) for this gid. Those registers
-	 * are shared by every vDevice on this vIOMMU; igroup locks are
-	 * not. Do not nest with trans_devid_lock.
+	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells and
+	 * guest HW queue control registers for this gid. Those registers
+	 * are shared by every vDevice and HW queue on this vIOMMU; igroup
+	 * locks are not. Do not nest with trans_devid_lock.
 	 *
 	 * nested_domain_free() last-ref takes this before
 	 * gdomid_array's xa_lock so CONTROL1 idle restore cannot race
@@ -589,6 +722,9 @@ struct amd_iommu_viommu {
 	 * and the DTE commit.
 	 */
 	struct mutex vfctrl_lock;
+
+	/* One command, event, and PPR queue per vIOMMU. */
+	struct iommufd_hw_queue *hw_queues[3];
 
 	/* Offset for mmap() of guest VF MMIO; set after iommufd_viommu_alloc_mmap(). */
 	unsigned long vfmmio_mmap_offset;
@@ -1172,6 +1308,10 @@ struct amd_irte_ops {
 
 struct amd_iommu_vdevice {
 	struct iommufd_vdevice core;
+};
+
+struct amd_iommu_hw_queue {
+	struct iommufd_hw_queue core;
 };
 
 #ifdef CONFIG_IRQ_REMAP
