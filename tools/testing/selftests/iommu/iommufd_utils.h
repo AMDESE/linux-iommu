@@ -1028,12 +1028,14 @@ static int _test_cmd_vdevice_alloc(int fd, __u32 viommu_id, __u32 idev_id,
 		     _test_cmd_vdevice_alloc(self->fd, viommu_id, idev_id,   \
 					     virt_id, vdev_id))
 
-static int _test_cmd_hw_queue_alloc(int fd, __u32 viommu_id, __u32 type,
-				    __u32 idx, __u64 base_addr, __u64 length,
-				    __u32 *hw_queue_id)
+static int _test_cmd_hw_queue_alloc_flags(int fd, __u32 viommu_id, __u32 type,
+					  __u32 idx, __u64 base_addr,
+					  __u64 length, __u32 flags,
+					  __u32 *hw_queue_id)
 {
 	struct iommu_hw_queue_alloc cmd = {
 		.size = sizeof(cmd),
+		.flags = flags,
 		.viommu_id = viommu_id,
 		.type = type,
 		.index = idx,
@@ -1050,6 +1052,15 @@ static int _test_cmd_hw_queue_alloc(int fd, __u32 viommu_id, __u32 type,
 	return 0;
 }
 
+static int _test_cmd_hw_queue_alloc(int fd, __u32 viommu_id, __u32 type,
+				    __u32 idx, __u64 base_addr, __u64 length,
+				    __u32 *hw_queue_id)
+{
+	return _test_cmd_hw_queue_alloc_flags(fd, viommu_id, type, idx,
+					      base_addr, length, 0,
+					      hw_queue_id);
+}
+
 #define test_cmd_hw_queue_alloc(viommu_id, type, idx, base_addr, len, out_qid) \
 	ASSERT_EQ(0, _test_cmd_hw_queue_alloc(self->fd, viommu_id, type, idx,  \
 					      base_addr, len, out_qid))
@@ -1058,6 +1069,12 @@ static int _test_cmd_hw_queue_alloc(int fd, __u32 viommu_id, __u32 type,
 	EXPECT_ERRNO(_errno,                                                  \
 		     _test_cmd_hw_queue_alloc(self->fd, viommu_id, type, idx, \
 					      base_addr, len, out_qid))
+#define test_err_hw_queue_alloc_flags(_errno, viommu_id, type, idx, base_addr, \
+				      len, flags, out_qid)                    \
+	EXPECT_ERRNO(_errno,                                                  \
+		     _test_cmd_hw_queue_alloc_flags(                          \
+			     self->fd, viommu_id, type, idx, base_addr, len,  \
+			     flags, out_qid))
 
 static int _test_cmd_veventq_alloc(int fd, __u32 viommu_id, __u32 type,
 				   __u32 depth, __u32 *veventq_id,

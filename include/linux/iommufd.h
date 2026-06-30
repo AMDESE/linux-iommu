@@ -170,6 +170,9 @@ struct iommufd_hw_queue {
  *                     required for driver to use the HW_QUEUE_STRUCT_SIZE macro
  *                     to sanitize the driver-level HW queue structure related
  *                     to the core one
+ * @get_hw_queue_flags: Return the flags supported for a given @viommu and
+ *                      @queue_type. Drivers that do not support HW queue flags
+ *                      should leave this unset
  * @hw_queue_init_phys: Initialize the driver-level structure of a HW queue that
  *                      is initialized with its core-level structure that holds
  *                      all the info about a guest queue memory.
@@ -180,6 +183,9 @@ struct iommufd_hw_queue {
  *                      the physical location of the guest queue
  *                      If driver has a deinit function to revert what this op
  *                      does, it should set it to the @hw_queue->destroy pointer
+ * @hw_queue_init: Similar to hw_queue_init_phys, but driver providing this op
+ *                 indicates that HW accesses the guest queue memory via
+ *                 @hw_queue->base_addr.
  */
 struct iommufd_viommu_ops {
 	void (*destroy)(struct iommufd_viommu *viommu);
@@ -192,9 +198,11 @@ struct iommufd_viommu_ops {
 	int (*vdevice_init)(struct iommufd_vdevice *vdev);
 	size_t (*get_hw_queue_size)(struct iommufd_viommu *viommu,
 				    enum iommu_hw_queue_type queue_type);
-	/* AMD's HW will add hw_queue_init simply using @hw_queue->base_addr */
+	u32 (*get_hw_queue_flags)(struct iommufd_viommu *viommu,
+				  enum iommu_hw_queue_type queue_type);
 	int (*hw_queue_init_phys)(struct iommufd_hw_queue *hw_queue, u32 index,
 				  phys_addr_t base_addr_pa);
+	int (*hw_queue_init)(struct iommufd_hw_queue *hw_queue, u32 index);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
