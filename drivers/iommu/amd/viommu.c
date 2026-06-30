@@ -686,3 +686,219 @@ err_out:
 	amd_viommu_uninit_one(iommu, viommu);
 	return ret;
 }
+
+enum amd_viommu_hw_queue_slot {
+	AMD_VIOMMU_HW_QUEUE_CMD,
+	AMD_VIOMMU_HW_QUEUE_EVT,
+	AMD_VIOMMU_HW_QUEUE_PPR,
+};
+
+struct amd_viommu_hw_queue_cfg {
+	u64 offset;
+	u64 base_mask;
+	u64 enable_mask;
+	u32 flags_mask;
+	u8 base_shift;
+};
+
+static const struct amd_viommu_hw_queue_cfg amd_viommu_hw_queue_cfg[] = {
+	[AMD_VIOMMU_HW_QUEUE_CMD] = {
+		.offset = VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET,
+		.base_mask = VIOMMU_VFCTRL_CMD_BASE_MASK,
+		.enable_mask = VIOMMU_VFCTRL_CMD_EN_MASK,
+		.flags_mask = AMD_HW_QUEUE_FLAGS_CMD,
+		.base_shift = 12,
+	},
+	[AMD_VIOMMU_HW_QUEUE_EVT] = {
+		.offset = VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET,
+		.base_mask = VIOMMU_VFCTRL_EVT_BASE_MASK,
+		.enable_mask = VIOMMU_VFCTRL_EVT_EN_MASK,
+		.flags_mask = AMD_HW_QUEUE_FLAGS_EVT,
+		.base_shift = 12,
+	},
+	[AMD_VIOMMU_HW_QUEUE_PPR] = {
+		.offset = VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET,
+		.base_mask = VIOMMU_VFCTRL_PPR_BASE_MASK,
+		.enable_mask = VIOMMU_VFCTRL_PPR_EN_MASK,
+		.flags_mask = AMD_HW_QUEUE_FLAGS_PPR,
+		.base_shift = 16,
+	},
+};
+
+static int amd_viommu_hw_queue_slot(enum iommu_hw_queue_type type)
+{
+	switch (type) {
+	case IOMMU_HW_QUEUE_TYPE_AMD_CMD:
+		return AMD_VIOMMU_HW_QUEUE_CMD;
+	case IOMMU_HW_QUEUE_TYPE_AMD_EVT:
+		return AMD_VIOMMU_HW_QUEUE_EVT;
+	case IOMMU_HW_QUEUE_TYPE_AMD_PPR:
+		return AMD_VIOMMU_HW_QUEUE_PPR;
+	default:
+		return -EINVAL;
+	}
+}
+
+static void amd_viommu_hw_queue_disable_wait(struct amd_iommu_viommu *aviommu,
+					     const struct amd_viommu_hw_queue_cfg *cfg,
+					     u8 __iomem *vfctrl)
+{
+	u64 val;
+	int i;
+
+	lockdep_assert_held(&aviommu->vfctrl_lock);
+
+	val = readq(vfctrl + cfg->offset);
+	val &= ~cfg->enable_mask;
+	writeq(val, vfctrl + cfg->offset);
+
+	for (i = 0; i < LOOP_TIMEOUT; i++) {
+		val = readq(vfctrl + cfg->offset);
+		if (!(val & cfg->enable_mask))
+			return;
+		udelay(1);
+	}
+	pr_err("%s: disable timeout gid=%#x offset=%#llx val=%#llx\n",
+	       __func__, aviommu->gid, cfg->offset, val);
+}
+
+static void amd_viommu_hw_queue_destroy(struct iommufd_hw_queue *hw_queue)
+{
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	const struct amd_viommu_hw_queue_cfg *cfg;
+	u8 __iomem *vfctrl;
+	int slot;
+	u64 val;
+
+	slot = amd_viommu_hw_queue_slot(hw_queue->type);
+	if (WARN_ON_ONCE(slot < 0))
+		return;
+
+	cfg = &amd_viommu_hw_queue_cfg[slot];
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	if (aviommu->hw_queues[slot] == hw_queue) {
+		amd_viommu_hw_queue_disable_wait(aviommu, cfg, vfctrl);
+		val = readq(vfctrl + cfg->offset);
+		val &= ~(cfg->base_mask | cfg->enable_mask | VIOMMU_VFCTRL_HWQ_LEN_MASK);
+		writeq(val, vfctrl + cfg->offset);
+		aviommu->hw_queues[slot] = NULL;
+	}
+	mutex_unlock(&aviommu->vfctrl_lock);
+}
+
+static int
+amd_viommu_set_hw_queue(struct iommufd_hw_queue *hw_queue,
+			enum amd_viommu_hw_queue_slot slot, u64 enable_bits)
+{
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu =
+		container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	const struct amd_viommu_hw_queue_cfg *cfg =
+		&amd_viommu_hw_queue_cfg[slot];
+	u8 __iomem *vfctrl;
+	u8 length;
+	u64 val;
+	int ret = 0;
+
+	if (hw_queue->flags & ~cfg->flags_mask)
+		return -EINVAL;
+	if (!enable_bits)
+		return -EINVAL;
+	if (!IS_ALIGNED(hw_queue->base_addr, SZ_4K))
+		return -EINVAL;
+	if (hw_queue->base_addr & ~GENMASK_ULL(51, 12))
+		return -EINVAL;
+	if (!is_power_of_2(hw_queue->length) ||
+	    hw_queue->length < SZ_4K || hw_queue->length > SZ_512K)
+		return -EINVAL;
+
+	length = ilog2(hw_queue->length) - 4;
+	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	if (aviommu->hw_queues[slot]) {
+		ret = -EEXIST;
+		goto out_unlock;
+	}
+
+	val = readq(vfctrl + cfg->offset);
+	val &= ~(cfg->base_mask | cfg->enable_mask | VIOMMU_VFCTRL_HWQ_LEN_MASK);
+	val |= FIELD_PREP(VIOMMU_VFCTRL_HWQ_LEN_MASK, length);
+	/*
+	 * base_shift is the VFCTRL bit position that represents GPA bit 12.
+	 * PPR starts at bit 16 because its enable fields occupy bits 8-15.
+	 */
+	val |= (hw_queue->base_addr << (cfg->base_shift - 12)) & cfg->base_mask;
+	val |= enable_bits;
+	writeq(val, vfctrl + cfg->offset);
+
+	aviommu->hw_queues[slot] = hw_queue;
+	hw_queue->destroy = amd_viommu_hw_queue_destroy;
+out_unlock:
+	mutex_unlock(&aviommu->vfctrl_lock);
+
+	if (!ret)
+		pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
+			 __func__, iommu->devid, aviommu->gid, hw_queue->type,
+			 hw_queue->base_addr, hw_queue->length,
+			 hw_queue->flags, val);
+
+	return ret;
+}
+
+int amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	u32 flags = hw_queue->flags;
+	u64 enable_bits = 0;
+
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN)
+		enable_bits |= BIT_ULL(8);
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN)
+		enable_bits |= BIT_ULL(9);
+
+	return amd_viommu_set_hw_queue(hw_queue, AMD_VIOMMU_HW_QUEUE_CMD,
+				       enable_bits);
+}
+
+int amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	u32 flags = hw_queue->flags;
+	u64 enable_bits = 0;
+
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN)
+		enable_bits |= BIT_ULL(8);
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN)
+		enable_bits |= BIT_ULL(9);
+
+	return amd_viommu_set_hw_queue(hw_queue, AMD_VIOMMU_HW_QUEUE_EVT,
+				       enable_bits);
+}
+
+int amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	u32 flags = hw_queue->flags;
+	u64 enable_bits = 0;
+
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN)
+		enable_bits |= BIT_ULL(8);
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN)
+		enable_bits |= BIT_ULL(9);
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN)
+		enable_bits |= BIT_ULL(10);
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN)
+		enable_bits |= BIT_ULL(13);
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN)
+		enable_bits |= BIT_ULL(14);
+	if (flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON)
+		enable_bits |= BIT_ULL(15);
+
+	return amd_viommu_set_hw_queue(hw_queue, AMD_VIOMMU_HW_QUEUE_PPR,
+				       enable_bits);
+}
+

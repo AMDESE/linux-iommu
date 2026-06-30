@@ -40,6 +40,28 @@ int amd_iommu_trans_devid_alloc(struct amd_iommu_pci_seg *pci_seg,
 				struct amd_iommu_viommu *aviommu);
 void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
 				struct amd_iommu_viommu *aviommu);
+
+struct iommufd_hw_queue;
+
+#define AMD_HW_QUEUE_FLAGS_CMD						\
+	(IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN |				\
+	 IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN)
+
+#define AMD_HW_QUEUE_FLAGS_EVT						\
+	(IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN |				\
+	 IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN)
+
+#define AMD_HW_QUEUE_FLAGS_PPR						\
+	(IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN |				\
+	 IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN |				\
+	 IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN |				\
+	 IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN |			\
+	 IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN |			\
+	 IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON)
+
+int amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue);
+int amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue);
+int amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue);
 #else
 
 /*
@@ -84,6 +106,21 @@ amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg)
 static inline void
 amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
 {
+}
+
+static inline int amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	return 0;
+}
+
+static inline int amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	return 0;
+}
+
+static inline int amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+	return 0;
 }
 
 #endif /* CONFIG_AMD_IOMMU_IOMMUFD */

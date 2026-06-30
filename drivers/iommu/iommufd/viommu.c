@@ -448,6 +448,7 @@ int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	refcount_inc(&viommu->obj.users);
 	hw_queue->access = access;
 	hw_queue->type = cmd->type;
+	hw_queue->flags = cmd->flags;
 	hw_queue->length = cmd->length;
 	hw_queue->base_addr = cmd->nesting_parent_iova;
 

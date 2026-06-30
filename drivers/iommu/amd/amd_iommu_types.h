@@ -501,6 +501,19 @@ extern bool amdr_ivrs_remap_support;
 #define VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId) \
 	(iommu->vfctrl_base + (guestId * VIOMMU_VFCTRL_MMIO_ENTRY_SIZE))
 
+#define VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET	0x20
+#define VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET	0x28
+#define VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET	0x30
+
+#define VIOMMU_VFCTRL_HWQ_LEN_MASK	GENMASK_ULL(3, 0)
+#define VIOMMU_VFCTRL_CMD_EN_MASK	GENMASK_ULL(9, 8)
+#define VIOMMU_VFCTRL_CMD_BASE_MASK	GENMASK_ULL(51, 12)
+#define VIOMMU_VFCTRL_EVT_EN_MASK	GENMASK_ULL(9, 8)
+#define VIOMMU_VFCTRL_EVT_BASE_MASK	GENMASK_ULL(51, 12)
+#define VIOMMU_VFCTRL_PPR_EN_MASK	(GENMASK_ULL(10, 8) | \
+					 GENMASK_ULL(15, 13))
+#define VIOMMU_VFCTRL_PPR_BASE_MASK	GENMASK_ULL(55, 16)
+
 struct amd_iommu;
 struct iommu_domain;
 struct irq_domain;
@@ -571,10 +584,10 @@ struct amd_iommu_viommu {
 	struct mutex trans_devid_lock;
 
 	/*
-	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells
-	 * (DevID and DomID table updates) for this gid. Those registers
-	 * are shared by every vDevice on this vIOMMU; igroup locks are
-	 * not. Do not nest with trans_devid_lock.
+	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells and
+	 * guest HW queue control registers for this gid. Those registers
+	 * are shared by every vDevice and HW queue on this vIOMMU; igroup
+	 * locks are not. Do not nest with trans_devid_lock.
 	 *
 	 * nested_domain_free() last-ref takes this before
 	 * gdomid_array's xa_lock so CONTROL1 idle restore cannot race
@@ -582,6 +595,9 @@ struct amd_iommu_viommu {
 	 * and the DTE commit.
 	 */
 	struct mutex vfctrl_lock;
+
+	/* One command, event, and PPR queue per vIOMMU. */
+	struct iommufd_hw_queue *hw_queues[3];
 
 	/* Offset for mmap() of guest VF MMIO; set after iommufd_viommu_alloc_mmap(). */
 	unsigned long vfmmio_mmap_offset;
@@ -1161,6 +1177,10 @@ struct amd_irte_ops {
 
 struct amd_iommu_vdevice {
 	struct iommufd_vdevice core;
+};
+
+struct amd_iommu_hw_queue {
+	struct iommufd_hw_queue core;
 };
 
 #ifdef CONFIG_IRQ_REMAP
