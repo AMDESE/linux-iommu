@@ -84,6 +84,7 @@ void amd_viommu_remove_ext_int_remap_hw(struct amd_iommu *iommu,
 					struct amd_iommu_viommu *aviommu);
 void amd_viommu_clear_ext_int_remap(struct kvm *kvm, struct amd_iommu *iommu,
 				    struct amd_iommu_viommu *aviommu);
+int amd_viommu_resume(struct amd_iommu *iommu);
 #else
 
 /*
@@ -98,6 +99,11 @@ static inline int amd_viommu_init(struct amd_iommu *iommu)
 
 static inline void amd_viommu_uninit(struct amd_iommu *iommu)
 {
+}
+
+static inline int amd_viommu_resume(struct amd_iommu *iommu)
+{
+	return 0;
 }
 
 static inline u64 amd_viommu_get_vfmmio_addr(struct amd_iommu *iommu, u16 gid)
