@@ -297,16 +297,14 @@ void iommufd_hw_queue_destroy(struct iommufd_object *obj)
 }
 
 /*
- * When the HW accesses the guest queue via physical addresses, the underlying
- * physical pages of the guest queue must be contiguous. Also, for the security
- * concern that IOMMUFD_CMD_IOAS_UNMAP could potentially remove the mappings of
- * the guest queue from the nesting parent iopt while the HW is still accessing
- * the guest queue memory physically, such a HW queue must require an access to
- * pin the underlying pages and prevent that from happening.
+ * Pin the guest queue so IOMMUFD_CMD_IOAS_UNMAP cannot remove its mappings
+ * while HW can access it. When HW accesses the queue using a physical address,
+ * also require the underlying physical pages to be contiguous.
  */
 static struct iommufd_access *
-iommufd_hw_queue_alloc_phys(struct iommu_hw_queue_alloc *cmd,
-			    struct iommufd_viommu *viommu, phys_addr_t *base_pa)
+iommufd_hw_queue_alloc_access(struct iommu_hw_queue_alloc *cmd,
+			      struct iommufd_viommu *viommu,
+			      bool require_contiguous, phys_addr_t *base_pa)
 {
 	u64 aligned_iova = PAGE_ALIGN_DOWN(cmd->nesting_parent_iova);
 	u64 offset = cmd->nesting_parent_iova - aligned_iova;
@@ -348,15 +346,18 @@ iommufd_hw_queue_alloc_phys(struct iommu_hw_queue_alloc *cmd,
 	if (rc)
 		goto out_detach;
 
-	/* Validate if the underlying physical pages are contiguous */
-	for (i = 1; i < max_npages; i++) {
-		if (page_to_pfn(pages[i]) == page_to_pfn(pages[i - 1]) + 1)
-			continue;
-		rc = -EFAULT;
-		goto out_unpin;
+	if (require_contiguous) {
+		/* Validate if the underlying physical pages are contiguous */
+		for (i = 1; i < max_npages; i++) {
+			if (page_to_pfn(pages[i]) == page_to_pfn(pages[i - 1]) + 1)
+				continue;
+			rc = -EFAULT;
+			goto out_unpin;
+		}
+
+		*base_pa = (page_to_pfn(pages[0]) << PAGE_SHIFT) + offset;
 	}
 
-	*base_pa = (page_to_pfn(pages[0]) << PAGE_SHIFT) + offset;
 	kvfree(pages);
 	return access;
 
@@ -376,13 +377,14 @@ int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	struct iommu_hw_queue_alloc *cmd = ucmd->cmd;
 	struct iommufd_hw_queue *hw_queue;
 	struct iommufd_viommu *viommu;
-	struct iommufd_access *access;
+	struct iommufd_access *access = NULL;
 	size_t hw_queue_size;
-	phys_addr_t base_pa;
+	phys_addr_t base_pa = 0;
+	u32 supported_flags;
 	u64 last;
 	int rc;
 
-	if (cmd->flags || cmd->type == IOMMU_HW_QUEUE_TYPE_DEFAULT)
+	if (cmd->type == IOMMU_HW_QUEUE_TYPE_DEFAULT)
 		return -EOPNOTSUPP;
 	if (!cmd->length)
 		return -EINVAL;
@@ -395,7 +397,7 @@ int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		return PTR_ERR(viommu);
 
 	if (!viommu->ops || !viommu->ops->get_hw_queue_size ||
-	    !viommu->ops->hw_queue_init_phys) {
+	    (!viommu->ops->hw_queue_init_phys && !viommu->ops->hw_queue_init)) {
 		rc = -EOPNOTSUPP;
 		goto out_put_viommu;
 	}
@@ -404,6 +406,19 @@ int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	if (!hw_queue_size) {
 		rc = -EOPNOTSUPP;
 		goto out_put_viommu;
+	}
+
+	if (cmd->flags) {
+		if (!viommu->ops->get_hw_queue_flags) {
+			rc = -EOPNOTSUPP;
+			goto out_put_viommu;
+		}
+
+		supported_flags = viommu->ops->get_hw_queue_flags(viommu, cmd->type);
+		if (cmd->flags & ~supported_flags) {
+			rc = -EINVAL;
+			goto out_put_viommu;
+		}
 	}
 
 	/*
@@ -422,7 +437,8 @@ int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd)
 		goto out_put_viommu;
 	}
 
-	access = iommufd_hw_queue_alloc_phys(cmd, viommu, &base_pa);
+	access = iommufd_hw_queue_alloc_access(
+		cmd, viommu, !!viommu->ops->hw_queue_init_phys, &base_pa);
 	if (IS_ERR(access)) {
 		rc = PTR_ERR(access);
 		goto out_put_viommu;
@@ -435,7 +451,11 @@ int iommufd_hw_queue_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	hw_queue->length = cmd->length;
 	hw_queue->base_addr = cmd->nesting_parent_iova;
 
-	rc = viommu->ops->hw_queue_init_phys(hw_queue, cmd->index, base_pa);
+	if (viommu->ops->hw_queue_init_phys)
+		rc = viommu->ops->hw_queue_init_phys(hw_queue, cmd->index,
+						     base_pa);
+	else
+		rc = viommu->ops->hw_queue_init(hw_queue, cmd->index);
 	if (rc)
 		goto out_put_viommu;
 

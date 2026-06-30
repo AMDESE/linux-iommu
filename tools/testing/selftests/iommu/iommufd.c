@@ -3253,6 +3253,10 @@ TEST_F(iommufd_viommu, hw_queue)
 	test_err_hw_queue_alloc(EOVERFLOW, viommu_id,
 				IOMMU_HW_QUEUE_TYPE_SELFTEST, 0, ~(uint64_t)0,
 				PAGE_SIZE, &hw_queue_id[0]);
+	/* Flags require an explicit driver opt-in */
+	test_err_hw_queue_alloc_flags(EOPNOTSUPP, viommu_id,
+				      IOMMU_HW_QUEUE_TYPE_SELFTEST, 0, iova,
+				      PAGE_SIZE, 1, &hw_queue_id[0]);
 	/* Fail missing iova */
 	test_err_hw_queue_alloc(ENOENT, viommu_id, IOMMU_HW_QUEUE_TYPE_SELFTEST,
 				0, iova, PAGE_SIZE, &hw_queue_id[0]);
