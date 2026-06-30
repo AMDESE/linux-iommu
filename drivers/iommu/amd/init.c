@@ -417,7 +417,17 @@ void iommu_feature_enable(struct amd_iommu *iommu, u8 bit)
 	iommu_feature_set(iommu, 1ULL, 1ULL, bit);
 }
 
-static void iommu_feature_disable(struct amd_iommu *iommu, u8 bit)
+bool iommu_feature_enable_and_check(struct amd_iommu *iommu, u8 bit)
+{
+	u64 ctrl;
+
+	iommu_feature_enable(iommu, bit);
+
+	ctrl = readq(iommu->mmio_base +  MMIO_CONTROL_OFFSET);
+	return (ctrl & (1ULL << bit));
+}
+
+void iommu_feature_disable(struct amd_iommu *iommu, u8 bit)
 {
 	iommu_feature_set(iommu, 0ULL, 1ULL, bit);
 }
@@ -2951,6 +2961,9 @@ static void early_enable_iommu(struct amd_iommu *iommu)
 	iommu_enable_irtcachedis(iommu);
 	iommu_enable_2k_int(iommu);
 	iommu_enable(iommu);
+	if (amd_viommu_resume(iommu))
+		pr_err("Failed to re-enable vIOMMU on %s\n",
+		       pci_name(iommu->dev));
 	amd_iommu_flush_all_caches(iommu);
 }
 
