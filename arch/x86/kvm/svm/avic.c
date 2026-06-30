@@ -1273,6 +1273,10 @@ static bool __init avic_want_avic_enabled(void)
 	return true;
 }
 
+const struct amd_iommu_svm_ops svm_ops = {
+	.ga_log_notifier = avic_ga_log_notifier,
+};
+
 /*
  * Note:
  * - The module param avic enable both xAPIC and x2APIC mode.
@@ -1309,7 +1313,7 @@ bool __init avic_hardware_setup(void)
 	if (boot_cpu_data.x86 == 0x17 || boot_cpu_data.x86 == 0x18)
 		enable_ipiv = false;
 
-	amd_iommu_register_ga_log_notifier(&avic_ga_log_notifier);
+	amd_iommu_register_svm_ops(&svm_ops);
 
 	return true;
 }
@@ -1317,5 +1321,5 @@ bool __init avic_hardware_setup(void)
 void avic_hardware_unsetup(void)
 {
 	if (avic)
-		amd_iommu_register_ga_log_notifier(NULL);
+		amd_iommu_register_svm_ops(NULL);
 }
