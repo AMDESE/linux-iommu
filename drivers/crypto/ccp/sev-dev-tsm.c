@@ -169,9 +169,9 @@ static void stream_setup(struct pci_ide *ide)
 {
 	struct pci_dev *rp = pcie_find_root_port(ide->pdev);
 
-	ide->partner[PCI_IDE_EP].rid_start = 0;
+	ide->partner[PCI_IDE_EP].rid_start = pci_dev_id(rp);
 	ide->partner[PCI_IDE_EP].rid_end = 0xffff;
-	ide->partner[PCI_IDE_RP].rid_start = 0;
+	ide->partner[PCI_IDE_RP].rid_start = pci_dev_id(ide->pdev);
 	ide->partner[PCI_IDE_RP].rid_end = 0xffff;
 
 	ide->pdev->ide_cfg = 0;
