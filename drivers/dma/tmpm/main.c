@@ -556,7 +556,7 @@ static int __maybe_unused psmash_io(void *snp_context,
 				    struct iommu_domain *domain,
 				    unsigned long paddr)
 {
-	struct page * __free(__free_pages) smash_entry, *src_hpte_page;
+	struct page * __free(__free_pages) smash_entry = NULL, *src_hpte_page = NULL;
 	struct tmpm *tmpm = platform_get_drvdata(tmpm_platform_dev);
 	phys_addr_t src_pte_paddr, gpa = 0ULL;
 	struct psmash_io *psio_cmd;
