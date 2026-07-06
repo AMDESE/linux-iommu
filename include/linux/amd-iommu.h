@@ -11,6 +11,8 @@
 #include <linux/types.h>
 #include <linux/kvm_host.h>
 
+#include <asm/irq_remapping.h>
+
 struct amd_iommu;
 
 struct kvm;
@@ -20,6 +22,7 @@ struct amd_iommu_svm_ops {
 	int (*ga_log_notifier)(u32 ga_tag);
 	u32 (*get_ga_tag)(struct kvm *kvm, u32 vcpu_id);
 	u64 (*get_apic_backing_page)(struct kvm *kvm, u32 vcpu_id);
+	int (*set_ext_ir_affinity)(struct kvm *kvm, u32 vcpu_id, struct amd_iommu_pi_data *pi);
 	struct kvm *(*kvm_from_fd)(u32 kvmfd, struct fd *f);
 };
 
