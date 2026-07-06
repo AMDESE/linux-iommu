@@ -1404,6 +1404,7 @@ static void svm_vcpu_free(struct kvm_vcpu *vcpu)
 	struct vcpu_svm *svm = to_svm(vcpu);
 
 	WARN_ON_ONCE(!list_empty(&svm->ir_list));
+	WARN_ON_ONCE(!list_empty(&svm->ext_ir_list));
 
 	avic_vcpu_free(vcpu);
 
