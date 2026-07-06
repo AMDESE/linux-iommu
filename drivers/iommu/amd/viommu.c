@@ -774,3 +774,67 @@ out:
 	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
 	return eirte;
 }
+
+int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
+				       struct kvm *kvm,
+				       enum ext_intremap_type type, u32 vcpu_id,
+				       u8 vector)
+{
+	struct ext_irte *eirte;
+	struct amd_ir_data *ir_data;
+	struct amd_iommu_pi_data pi;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	u64 pa;
+	u32 ga_tag;
+	u32 ext_id = EXT_IR_ID(type, aviommu->gid);
+
+	if (!svm_ops)
+		return -ENODEV;
+
+	if (svm_ops->prepare_ext_ir_rebind)
+		svm_ops->prepare_ext_ir_rebind(kvm);
+
+	ga_tag = svm_ops->get_ga_tag(kvm, vcpu_id);
+	pa = svm_ops->get_apic_backing_page(kvm, vcpu_id);
+	if (!ga_tag || !pa)
+		return -EINVAL;
+
+	eirte = get_ext_intremap_entry(iommu, ext_id);
+	if (!eirte)
+		return -ENOMEM;
+
+	ir_data = &eirte->ir_data;
+	ir_data->iommu = iommu;
+	ir_data->is_ext = true;
+	ir_data->ext_id = ext_id;
+	ir_data->entry = &eirte->entry;
+
+	/*
+	 * Drop stale hardware programming left in the table when teardown did
+	 * not fully clear the entry (e.g. after a prior QEMU session).
+	 */
+	if (eirte->entry_ptr->lo.fields_vapic.guest_mode)
+		amd_iommu_reset_ext_irte(iommu, eirte);
+
+	pr_debug("%s: type=%#x, vcpu_id=%#x, vector=%#x, backing_page=%#llx, ga_tag=%#x\n",
+		 __func__, type, vcpu_id, vector, pa, ga_tag);
+
+	/* This is normally setup during prepare */
+	eirte->entry.lo.fields_vapic.valid = 1;
+
+	/*
+	 * Initialize ir_data, which will be used in
+	 * amd_iommu_activate_guest_mode()
+	 */
+	ir_data->ga_root_ptr = (pa & 0xFFFFFFFFFFFFFULL) >> 12;
+	ir_data->ga_tag = ga_tag;
+	ir_data->ga_vector = vector;
+
+	pi.ir_data = ir_data;
+	pi.ga_tag = ga_tag;
+
+	svm_ops->set_ext_ir_affinity(kvm, vcpu_id, &pi);
+
+	return 0;
+}
