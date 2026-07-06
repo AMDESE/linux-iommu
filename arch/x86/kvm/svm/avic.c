@@ -855,6 +855,7 @@ int avic_init_vcpu(struct vcpu_svm *svm)
 	struct kvm_vcpu *vcpu = &svm->vcpu;
 
 	INIT_LIST_HEAD(&svm->ir_list);
+	INIT_LIST_HEAD(&svm->ext_ir_list);
 	raw_spin_lock_init(&svm->ir_list_lock);
 
 	if (!enable_apicv || !irqchip_in_kernel(vcpu->kvm))
@@ -959,6 +960,34 @@ int avic_pi_update_irte(struct kvm_kernel_irqfd *irqfd, struct kvm *kvm,
 	return irq_set_vcpu_affinity(host_irq, NULL);
 }
 
+struct svm_ext_ir_entry {
+	struct list_head node;
+	void *ir_data;
+};
+
+static void svm_ext_ir_list_del(struct kvm *kvm, void *ir_data)
+{
+	struct kvm_vcpu *vcpu;
+	unsigned long idx;
+
+	kvm_for_each_vcpu(idx, vcpu, kvm) {
+		struct vcpu_svm *svm = to_svm(vcpu);
+		struct svm_ext_ir_entry *entry, *tmp;
+		unsigned long flags;
+
+		raw_spin_lock_irqsave(&svm->ir_list_lock, flags);
+		list_for_each_entry_safe(entry, tmp, &svm->ext_ir_list, node) {
+			if (entry->ir_data == ir_data) {
+				list_del(&entry->node);
+				raw_spin_unlock_irqrestore(&svm->ir_list_lock, flags);
+				kfree(entry);
+				return;
+			}
+		}
+		raw_spin_unlock_irqrestore(&svm->ir_list_lock, flags);
+	}
+}
+
 enum avic_vcpu_action {
 	/*
 	 * There is no need to differentiate between activate and deactivate,
@@ -987,32 +1016,37 @@ enum avic_vcpu_action {
 	AVIC_START_BLOCKING	= BIT(1),
 };
 
+static void avic_update_one_ir_data(void *data, int cpu,
+				    enum avic_vcpu_action action,
+				    bool ga_log_intr)
+{
+	if (!(action & AVIC_TOGGLE_ON_OFF))
+		WARN_ON_ONCE(amd_iommu_update_ga(data, cpu, ga_log_intr));
+	else if (cpu >= 0)
+		WARN_ON_ONCE(amd_iommu_activate_guest_mode(data, cpu, ga_log_intr));
+	else
+		WARN_ON_ONCE(amd_iommu_deactivate_guest_mode(data));
+}
+
 static void avic_update_iommu_vcpu_affinity(struct kvm_vcpu *vcpu, int cpu,
 					    enum avic_vcpu_action action)
 {
 	bool ga_log_intr = (action & AVIC_START_BLOCKING);
 	struct vcpu_svm *svm = to_svm(vcpu);
 	struct kvm_kernel_irqfd *irqfd;
+	struct svm_ext_ir_entry *ext_ir;
 
 	lockdep_assert_held(&svm->ir_list_lock);
 
-	/*
-	 * Here, we go through the per-vcpu ir_list to update all existing
-	 * interrupt remapping table entry targeting this vcpu.
-	 */
-	if (list_empty(&svm->ir_list))
-		return;
+	/* Assigned-device IRQs posted via irqfd bypass. */
+	list_for_each_entry(irqfd, &svm->ir_list, vcpu_list)
+		avic_update_one_ir_data(irqfd->irq_bypass_data, cpu, action,
+					ga_log_intr);
 
-	list_for_each_entry(irqfd, &svm->ir_list, vcpu_list) {
-		void *data = irqfd->irq_bypass_data;
-
-		if (!(action & AVIC_TOGGLE_ON_OFF))
-			WARN_ON_ONCE(amd_iommu_update_ga(data, cpu, ga_log_intr));
-		else if (cpu >= 0)
-			WARN_ON_ONCE(amd_iommu_activate_guest_mode(data, cpu, ga_log_intr));
-		else
-			WARN_ON_ONCE(amd_iommu_deactivate_guest_mode(data));
-	}
+	/* vIOMMU extended IRTEs (event-log / PPR-log), no host IRQ. */
+	list_for_each_entry(ext_ir, &svm->ext_ir_list, node)
+		avic_update_one_ir_data(ext_ir->ir_data, cpu, action,
+					ga_log_intr);
 }
 
 static void __avic_vcpu_load(struct kvm_vcpu *vcpu, int cpu,
@@ -1036,9 +1070,9 @@ static void __avic_vcpu_load(struct kvm_vcpu *vcpu, int cpu,
 	/*
 	 * Grab the per-vCPU interrupt remapping lock even if the VM doesn't
 	 * _currently_ have assigned devices, as that can change.  Holding
-	 * ir_list_lock ensures that either svm_ir_list_add() will consume
-	 * up-to-date entry information, or that this task will wait until
-	 * svm_ir_list_add() completes to set the new target pCPU.
+	 * ir_list_lock ensures that either an IRTE affinity update will consume
+	 * up-to-date entry information, or that this task will wait until the
+	 * update completes to set the new target pCPU.
 	 */
 	raw_spin_lock_irqsave(&svm->ir_list_lock, flags);
 
@@ -1100,9 +1134,9 @@ static void __avic_vcpu_put(struct kvm_vcpu *vcpu, enum avic_vcpu_action action)
 	 * Take and hold the per-vCPU interrupt remapping lock while updating
 	 * the Physical ID entry even though the lock doesn't protect against
 	 * multiple writers (see above).  Holding ir_list_lock ensures that
-	 * either svm_ir_list_add() will consume up-to-date entry information,
-	 * or that this task will wait until svm_ir_list_add() completes to
-	 * mark the vCPU as not running.
+	 * either an IRTE affinity update will consume up-to-date entry
+	 * information, or that this task will wait until the update completes
+	 * to mark the vCPU as not running.
 	 */
 	raw_spin_lock_irqsave(&svm->ir_list_lock, flags);
 
@@ -1349,10 +1383,57 @@ static u64 avic_get_apic_backing_page(struct kvm *kvm, u32 vcpu_id)
 	return avic_get_backing_page_address(svm);
 }
 
+static int avic_set_ext_ir_affinity(struct kvm *kvm, u32 vcpu_id,
+				    struct amd_iommu_pi_data *pi)
+{
+	struct vcpu_svm *svm = get_vcpu_svm(kvm, vcpu_id);
+	struct svm_ext_ir_entry *ext_ir;
+	u64 entry;
+	int cpu, ret;
+	bool ga_log_intr = false;
+
+	if (IS_ERR(svm))
+		return PTR_ERR(svm);
+
+	/*
+	 * If the IRTE was affined to a different vCPU, remove it from the
+	 * previous vCPU's list before taking the target vCPU's lock, matching
+	 * avic_pi_update_irte().
+	 */
+	svm_ext_ir_list_del(kvm, pi->ir_data);
+
+	ext_ir = kmalloc(sizeof(*ext_ir), GFP_KERNEL_ACCOUNT);
+	if (!ext_ir)
+		return -ENOMEM;
+
+	ext_ir->ir_data = pi->ir_data;
+
+	guard(raw_spinlock_irqsave)(&svm->ir_list_lock);
+
+	entry = svm->avic_physical_id_entry;
+	if (entry & AVIC_PHYSICAL_ID_ENTRY_IS_RUNNING_MASK) {
+		cpu = entry & AVIC_PHYSICAL_ID_ENTRY_HOST_PHYSICAL_ID_MASK;
+	} else {
+		cpu = -1;
+		ga_log_intr = entry & AVIC_PHYSICAL_ID_ENTRY_GA_LOG_INTR;
+	}
+
+	ret = amd_iommu_activate_guest_mode(pi->ir_data, cpu, ga_log_intr);
+	if (ret) {
+		kfree(ext_ir);
+		return ret;
+	}
+
+	list_add(&ext_ir->node, &svm->ext_ir_list);
+	to_kvm_svm(kvm)->ext_ir_active = true;
+	return 0;
+}
+
 const struct amd_iommu_svm_ops svm_ops = {
 	.ga_log_notifier = avic_ga_log_notifier,
 	.get_ga_tag = avic_get_ga_tag,
 	.get_apic_backing_page = avic_get_apic_backing_page,
+	.set_ext_ir_affinity = avic_set_ext_ir_affinity,
 	.kvm_from_fd = svm_kvm_from_fd,
 };
 

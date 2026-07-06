@@ -128,6 +128,7 @@ struct kvm_svm {
 	u32 *avic_logical_id_table;
 	u64 *avic_physical_id_table;
 	struct hlist_node hnode;
+	bool ext_ir_active;
 
 #ifdef CONFIG_KVM_AMD_SEV
 	struct kvm_sev_info sev_info;
@@ -348,6 +349,13 @@ struct vcpu_svm {
 	 */
 	struct list_head ir_list;
 	raw_spinlock_t ir_list_lock;
+
+	/*
+	 * Per-vCPU list of extended IRTE ir_data pointers (vIOMMU log IRQs).
+	 * Like ir_list, used to update IRTEs on vCPU load/put/block and when
+	 * AVIC is toggled.
+	 */
+	struct list_head ext_ir_list;
 
 	struct vcpu_sev_es_state sev_es;
 
