@@ -868,3 +868,55 @@ int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
 
 	return 0;
 }
+
+static struct ext_irte *find_ext_irte(struct amd_iommu *iommu, u32 ext_id)
+{
+	unsigned long flags;
+	struct ext_irte *tmp, *eirte = NULL;
+
+	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+	hash_for_each_possible(iommu->ext_irte_hlist, tmp, hnode, ext_id) {
+		if (tmp->ext_id == ext_id) {
+			eirte = tmp;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+
+	return eirte;
+}
+
+static void remove_ext_irte(struct amd_iommu *iommu,
+				       struct ext_irte *eirte)
+{
+	unsigned long flags;
+
+	amd_iommu_reset_ext_irte(iommu, eirte);
+
+	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+	hash_del(&eirte->hnode);
+	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+
+	kfree(eirte);
+}
+
+void amd_viommu_remove_ext_int_remap_hw(struct amd_iommu *iommu,
+					struct amd_iommu_viommu *aviommu)
+{
+	static const enum ext_intremap_type types[] = {
+		EXT_INTREMAP_EVENT,
+		EXT_INTREMAP_PPR,
+	};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(types); i++) {
+		struct ext_irte *eirte;
+		u32 ext_id = EXT_IR_ID(types[i], aviommu->gid);
+
+		eirte = find_ext_irte(iommu, ext_id);
+		if (!eirte)
+			continue;
+
+		remove_ext_irte(iommu, eirte);
+	}
+}
