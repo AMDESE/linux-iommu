@@ -66,6 +66,10 @@
 
 static_assert(__AVIC_GATAG(AVIC_VM_ID_MASK, AVIC_VCPU_IDX_MASK) == -1u);
 
+struct svm_ext_ir_entry;
+
+static void avic_flush_all_ext_ir_affinity(struct kvm *kvm);
+
 #define AVIC_AUTO_MODE -1
 
 static int avic_param_set(const char *val, const struct kernel_param *kp)
@@ -317,6 +321,18 @@ int avic_alloc_physical_id_table(struct kvm *kvm)
 	return 0;
 }
 
+void avic_vm_pre_destroy(struct kvm *kvm)
+{
+	struct kvm_svm *kvm_svm = to_kvm_svm(kvm);
+
+	if (!enable_apicv)
+		return;
+
+	avic_flush_all_ext_ir_affinity(kvm);
+	kvm_svm->ext_ir_active = false;
+	kvm_svm->ext_ir_rebind_pending = false;
+}
+
 void avic_vm_destroy(struct kvm *kvm)
 {
 	unsigned long flags;
@@ -324,6 +340,8 @@ void avic_vm_destroy(struct kvm *kvm)
 
 	if (!enable_apicv)
 		return;
+
+	avic_vm_pre_destroy(kvm);
 
 	free_page((unsigned long)kvm_svm->avic_logical_id_table);
 	free_pages((unsigned long)kvm_svm->avic_physical_id_table,
@@ -965,6 +983,39 @@ struct svm_ext_ir_entry {
 	void *ir_data;
 };
 
+static void avic_flush_all_ext_ir_affinity(struct kvm *kvm)
+{
+	struct kvm_vcpu *vcpu;
+	unsigned long idx;
+
+	kvm_for_each_vcpu(idx, vcpu, kvm) {
+		struct vcpu_svm *svm = to_svm(vcpu);
+		struct svm_ext_ir_entry *entry, *tmp;
+		unsigned long flags;
+
+		raw_spin_lock_irqsave(&svm->ir_list_lock, flags);
+		list_for_each_entry_safe(entry, tmp, &svm->ext_ir_list, node) {
+			list_del(&entry->node);
+			raw_spin_unlock_irqrestore(&svm->ir_list_lock, flags);
+			WARN_ON_ONCE(amd_iommu_deactivate_guest_mode(entry->ir_data));
+			kfree(entry);
+			raw_spin_lock_irqsave(&svm->ir_list_lock, flags);
+		}
+		raw_spin_unlock_irqrestore(&svm->ir_list_lock, flags);
+	}
+}
+
+static void avic_prepare_ext_ir_rebind(struct kvm *kvm)
+{
+	struct kvm_svm *kvm_svm = to_kvm_svm(kvm);
+
+	if (!kvm_svm->ext_ir_rebind_pending)
+		return;
+
+	kvm_svm->ext_ir_rebind_pending = false;
+	avic_flush_all_ext_ir_affinity(kvm);
+}
+
 static void svm_ext_ir_list_del(struct kvm *kvm, void *ir_data)
 {
 	struct kvm_vcpu *vcpu;
@@ -1434,6 +1485,7 @@ const struct amd_iommu_svm_ops svm_ops = {
 	.get_ga_tag = avic_get_ga_tag,
 	.get_apic_backing_page = avic_get_apic_backing_page,
 	.set_ext_ir_affinity = avic_set_ext_ir_affinity,
+	.prepare_ext_ir_rebind = avic_prepare_ext_ir_rebind,
 	.kvm_from_fd = svm_kvm_from_fd,
 };
 
