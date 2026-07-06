@@ -129,6 +129,7 @@ struct kvm_svm {
 	u64 *avic_physical_id_table;
 	struct hlist_node hnode;
 	bool ext_ir_active;
+	bool ext_ir_rebind_pending;
 
 #ifdef CONFIG_KVM_AMD_SEV
 	struct kvm_sev_info sev_info;
@@ -908,6 +909,7 @@ extern struct kvm_x86_nested_ops svm_nested_ops;
 bool __init avic_hardware_setup(void);
 void avic_hardware_unsetup(void);
 int avic_alloc_physical_id_table(struct kvm *kvm);
+void avic_vm_pre_destroy(struct kvm *kvm);
 void avic_vm_destroy(struct kvm *kvm);
 int avic_vm_init(struct kvm *kvm);
 void avic_init_vmcb(struct vcpu_svm *svm, struct vmcb *vmcb);

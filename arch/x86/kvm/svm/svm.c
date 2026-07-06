@@ -1282,11 +1282,15 @@ static void __svm_vcpu_reset(struct kvm_vcpu *vcpu)
 static void svm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
+	struct kvm_svm *kvm_svm = to_kvm_svm(vcpu->kvm);
 
 	svm->spec_ctrl = 0;
 	svm->virt_spec_ctrl = 0;
 
 	init_vmcb(vcpu, init_event);
+
+	if (init_event && kvm_svm->ext_ir_active)
+		kvm_svm->ext_ir_rebind_pending = true;
 
 	if (!init_event)
 		__svm_vcpu_reset(vcpu);
@@ -5233,6 +5237,11 @@ static void svm_vcpu_deliver_sipi_vector(struct kvm_vcpu *vcpu, u8 vector)
 	sev_vcpu_deliver_sipi_vector(vcpu, vector);
 }
 
+static void svm_vm_pre_destroy(struct kvm *kvm)
+{
+	avic_vm_pre_destroy(kvm);
+}
+
 static void svm_vm_destroy(struct kvm *kvm)
 {
 	avic_vm_destroy(kvm);
@@ -5286,6 +5295,7 @@ struct kvm_x86_ops svm_x86_ops __initdata = {
 
 	.vm_size = sizeof(struct kvm_svm),
 	.vm_init = svm_vm_init,
+	.vm_pre_destroy = svm_vm_pre_destroy,
 	.vm_destroy = svm_vm_destroy,
 
 	.prepare_switch_to_guest = svm_prepare_switch_to_guest,
