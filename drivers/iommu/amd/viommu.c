@@ -411,8 +411,28 @@ static int alloc_ext_int_remap_tbl(struct amd_iommu *iommu)
 
 static void free_ext_int_remap_tbl(struct amd_iommu *iommu)
 {
+	unsigned long flags;
+	struct ext_irte *eirte;
+	struct hlist_node *tmp;
+	int bkt, i;
+
 	if (!iommu->ext_ir_table)
 		return;
+
+	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+	hash_for_each_safe(iommu->ext_irte_hlist, bkt, tmp, eirte, hnode) {
+		hash_del(&eirte->hnode);
+		kfree(eirte);
+	}
+	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+
+	for (i = 0; i < EXT_INT_REMAP_TBL_L1_SIZE / sizeof(u64); i++) {
+		u64 l1 = iommu->ext_ir_table[i];
+
+		if (l1 & 1ULL)
+			iommu_free_pages(iommu_phys_to_virt(
+				l1 & 0x000FFFFFFFFFFFC0));
+	}
 
 	free_pages((unsigned long)iommu->ext_ir_table,
 		   get_order(EXT_INT_REMAP_TBL_L1_SIZE));
@@ -430,6 +450,9 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 	ret = viommu_private_space_init(iommu);
 	if (ret)
 		goto err;
+
+	hash_init(iommu->ext_irte_hlist);
+	spin_lock_init(&iommu->ext_irte_hlist_lock);
 
 	ret = alloc_ext_int_remap_tbl(iommu);
 	if (ret)
@@ -951,3 +974,123 @@ int amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 				       enable_bits);
 }
 
+/*****************************************************
+ * Extended interrupt remapping support
+ */
+#define EXT_IR_ID(x, y)		(((x & 0x3) << 16) | (y & 0xFFFF))
+#define EXT_IR_ID_2_TYPE(x)	((x >> 16) & 0x3)
+#define EXT_IR_ID_2_L1(x)	((x >> 8) & 0x3FF)
+#define EXT_IR_ID_2_L2(x)	(x & 0xFF)
+
+static struct ext_irte *lookup_ext_irte(struct amd_iommu *iommu, u32 ext_id)
+{
+	struct ext_irte *tmp;
+
+	hash_for_each_possible(iommu->ext_irte_hlist, tmp, hnode, ext_id) {
+		if (tmp->ext_id == ext_id)
+			return tmp;
+	}
+	return NULL;
+}
+
+static struct irte_ga *ext_ir_l2_table(struct amd_iommu *iommu, u32 l1_index)
+{
+	u64 l1 = iommu->ext_ir_table[l1_index];
+
+	if (!(l1 & 1ULL))
+		return NULL;
+
+	return iommu_phys_to_virt(l1 & 0x000FFFFFFFFFFFC0);
+}
+
+/*
+ * This information needs to be programmed into the L1 table.
+ *  - L1 table[L1_index] = 2K-aligned address
+ *  - L1 table[L1_index] = 256 entries (value b'1000)
+ */
+static void ext_ir_install_l2(struct amd_iommu *iommu, u32 l1_index,
+			      struct irte_ga *l2_table)
+{
+	u64 *l1_entry = &iommu->ext_ir_table[l1_index];
+
+	*l1_entry = iommu_virt_to_phys(l2_table) & 0x000FFFFFFFFFFFC0;
+	*l1_entry |= (EXT_INTTABLEN_L2_VALUE << 2);
+	*l1_entry |= 1ULL;
+}
+
+/*
+ * L2 IRT is indexed by 8-bit value (256 entries),
+ * each entry is 16 bytes (128-bit). So, the L2 table is 4K bytes.
+ */
+static struct irte_ga *alloc_ext_ir_l2(struct amd_iommu *iommu)
+{
+	return iommu_alloc_pages_node_sz(dev_to_node(&iommu->dev->dev),
+					 GFP_KERNEL,
+					 get_irq_table_size(MAX_EXT_IRQS_PER_L2));
+}
+
+static struct ext_irte *__maybe_unused get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_id)
+{
+	unsigned long flags;
+	struct ext_irte *eirte, *new_eirte = NULL;
+	struct irte_ga *l2_table, *new_l2 = NULL;
+	u32 l1_index = EXT_IR_ID_2_L1(ext_id);
+	u32 l2_index = EXT_IR_ID_2_L2(ext_id);
+	u64 *l1_entry, *l2_entry;
+
+	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+	eirte = lookup_ext_irte(iommu, ext_id);
+	if (eirte)
+		goto out;
+	l2_table = ext_ir_l2_table(iommu, l1_index);
+	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+
+	new_eirte = kzalloc(sizeof(*new_eirte), GFP_KERNEL);
+	if (!new_eirte)
+		return NULL;
+
+	if (!l2_table) {
+		new_l2 = alloc_ext_ir_l2(iommu);
+		if (!new_l2) {
+			kfree(new_eirte);
+			return NULL;
+		}
+	}
+
+	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+	eirte = lookup_ext_irte(iommu, ext_id);
+	if (eirte)
+		goto out;
+
+	l2_table = ext_ir_l2_table(iommu, l1_index);
+	if (!l2_table) {
+		if (!new_l2) {
+			eirte = NULL;
+			goto out;
+		}
+		ext_ir_install_l2(iommu, l1_index, new_l2);
+		l2_table = new_l2;
+		new_l2 = NULL;
+	}
+
+	new_eirte->entry_ptr = &l2_table[l2_index];
+	new_eirte->ext_id = ext_id;
+	hash_add(iommu->ext_irte_hlist, &new_eirte->hnode, ext_id);
+	eirte = new_eirte;
+	new_eirte = NULL;
+
+	l1_entry = &iommu->ext_ir_table[l1_index];
+	l2_entry = (u64 *)&l2_table[l2_index];
+	pr_debug("%s: type=%#x, ext_intremap_tbl=%#llx, l1_entry=%#llx(%#llx, %u), l2_entry=%#llx(%#llx, %u)\n",
+		 __func__, EXT_IR_ID_2_TYPE(ext_id),
+		 iommu_virt_to_phys(iommu->ext_ir_table),
+		 iommu_virt_to_phys(l1_entry), *l1_entry, l1_index,
+		 iommu_virt_to_phys(l2_entry), *l2_entry, l2_index);
+
+out:
+	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+	kfree(new_eirte);
+	if (new_l2)
+		iommu_free_pages(new_l2);
+	return eirte;
+}
