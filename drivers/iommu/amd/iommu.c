@@ -3682,16 +3682,70 @@ static int __modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
 	return 0;
 }
 
+static struct ext_irte *amd_ir_data_to_ext_irte(struct amd_ir_data *ir_data)
+{
+	if (!ir_data || !ir_data->is_ext)
+		return NULL;
+
+	return container_of(ir_data, struct ext_irte, ir_data);
+}
+
+static int __modify_ext_irte_ga(struct ext_irte *eirte, struct irte_ga *irte)
+{
+	u128 old, new;
+
+	if (!eirte || !eirte->entry_ptr)
+		return -EINVAL;
+
+	new = irte->irte;
+	do {
+		old = eirte->entry_ptr->irte;
+	} while (!try_cmpxchg128(&eirte->entry_ptr->irte, &old, new));
+
+	eirte->entry.irte = new;
+
+	return 0;
+}
+
+int amd_iommu_reset_ext_irte(struct amd_iommu *iommu, struct ext_irte *eirte)
+{
+	struct irte_ga entry = {};
+	u64 valid;
+
+	if (!eirte || !eirte->entry_ptr)
+		return -EINVAL;
+
+	valid = eirte->entry_ptr->lo.fields_vapic.valid;
+	if (!valid)
+		valid = eirte->entry.lo.fields_vapic.valid;
+
+	entry.lo.fields_vapic.valid = valid;
+
+	return __modify_ext_irte_ga(eirte, &entry);
+}
+
 static int modify_irte_ga(struct amd_iommu *iommu, u16 devid, int index,
-			  struct irte_ga *irte)
+			  struct irte_ga *irte,
+			  struct amd_ir_data *ir_data)
 {
 	int ret;
 
-	ret = __modify_irte_ga(iommu, devid, index, irte);
-	if (ret)
-		return ret;
+	if (ir_data && ir_data->is_ext) {
+		struct ext_irte *eirte = amd_ir_data_to_ext_irte(ir_data);
 
-	iommu_flush_irt_and_complete(iommu, devid);
+		if (!eirte)
+			return -EINVAL;
+
+		ret = __modify_ext_irte_ga(eirte, irte);
+		if (ret)
+			return ret;
+		iommu_flush_irt_and_complete(iommu, iommu->devid);
+	} else {
+		ret = __modify_irte_ga(iommu, devid, index, irte);
+		if (ret)
+			return ret;
+		iommu_flush_irt_and_complete(iommu, devid);
+	}
 
 	return 0;
 }
@@ -3774,7 +3828,7 @@ static void irte_ga_activate(struct amd_iommu *iommu, void *entry, u16 devid, u1
 	struct irte_ga *irte = (struct irte_ga *) entry;
 
 	irte->lo.fields_remap.valid = 1;
-	modify_irte_ga(iommu, devid, index, irte);
+	modify_irte_ga(iommu, devid, index, irte, NULL);
 }
 
 static void irte_deactivate(struct amd_iommu *iommu, void *entry, u16 devid, u16 index)
@@ -3790,7 +3844,7 @@ static void irte_ga_deactivate(struct amd_iommu *iommu, void *entry, u16 devid, 
 	struct irte_ga *irte = (struct irte_ga *) entry;
 
 	irte->lo.fields_remap.valid = 0;
-	modify_irte_ga(iommu, devid, index, irte);
+	modify_irte_ga(iommu, devid, index, irte, NULL);
 }
 
 static void irte_set_affinity(struct amd_iommu *iommu, void *entry, u16 devid, u16 index,
@@ -3814,7 +3868,7 @@ static void irte_ga_set_affinity(struct amd_iommu *iommu, void *entry, u16 devid
 					APICID_TO_IRTE_DEST_LO(dest_apicid);
 		irte->hi.fields.destination =
 					APICID_TO_IRTE_DEST_HI(dest_apicid);
-		modify_irte_ga(iommu, devid, index, irte);
+		modify_irte_ga(iommu, devid, index, irte, NULL);
 	}
 }
 
@@ -4172,6 +4226,36 @@ static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
 }
 
 /*
+ * Fast update of IsRun, GALogIntr, and (conditionally) Destination for an
+ * extended IRTE.  Read the live entry, apply the running-field changes, and
+ * publish with cmpxchg so the shadow copy cannot drift from entry_ptr.
+ */
+static int __update_ext_irte_ga(struct amd_ir_data *ir_data, int cpu,
+				bool ga_log_intr)
+{
+	struct ext_irte *eirte = amd_ir_data_to_ext_irte(ir_data);
+	struct irte_ga entry;
+	u128 old, new;
+
+	if (!eirte || !eirte->entry_ptr)
+		return -EINVAL;
+
+	if (!eirte->entry_ptr->lo.fields_vapic.guest_mode)
+		return 0;
+
+	do {
+		old = eirte->entry_ptr->irte;
+		entry.irte = old;
+		__amd_iommu_update_ga(&entry, cpu, ga_log_intr);
+		new = entry.irte;
+	} while (!try_cmpxchg128(&eirte->entry_ptr->irte, &old, new));
+
+	eirte->entry.irte = new;
+
+	return 0;
+}
+
+/*
  * Update the pCPU information for an IRTE that is configured to post IRQs to
  * a vCPU, without issuing an IOMMU invalidation for the IRTE.
  *
@@ -4191,16 +4275,24 @@ static void __amd_iommu_update_ga(struct irte_ga *entry, int cpu,
 int amd_iommu_update_ga(void *data, int cpu, bool ga_log_intr)
 {
 	struct amd_ir_data *ir_data = (struct amd_ir_data *)data;
-	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
+	struct irte_ga *entry;
+
+	if (!ir_data || !ir_data->entry)
+		return 0;
+
+	entry = (struct irte_ga *) ir_data->entry;
 
 	if (WARN_ON_ONCE(!AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir)))
 		return -EINVAL;
 
-	if (!entry || !entry->lo.fields_vapic.guest_mode)
-		return 0;
-
 	if (!ir_data->iommu)
 		return -ENODEV;
+
+	if (ir_data->is_ext)
+		return __update_ext_irte_ga(ir_data, cpu, ga_log_intr);
+
+	if (!entry->lo.fields_vapic.guest_mode)
+		return 0;
 
 	__amd_iommu_update_ga(entry, cpu, ga_log_intr);
 
@@ -4235,7 +4327,7 @@ int amd_iommu_activate_guest_mode(void *data, int cpu, bool ga_log_intr)
 	__amd_iommu_update_ga(entry, cpu, ga_log_intr);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
-			      ir_data->irq_2_irte.index, entry);
+			      ir_data->irq_2_irte.index, entry, ir_data);
 }
 EXPORT_SYMBOL(amd_iommu_activate_guest_mode);
 
@@ -4245,17 +4337,46 @@ int amd_iommu_deactivate_guest_mode(void *data)
 	struct irte_ga *entry = (struct irte_ga *) ir_data->entry;
 	struct irq_cfg *cfg = ir_data->cfg;
 	u64 valid;
+	bool hw_guest_mode = false;
 
 	if (WARN_ON_ONCE(!AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir)))
 		return -EINVAL;
 
-	if (!entry || !entry->lo.fields_vapic.guest_mode)
+	if (!entry)
 		return 0;
 
-	valid = entry->lo.fields_remap.valid;
+	if (ir_data->is_ext) {
+		struct ext_irte *eirte = amd_ir_data_to_ext_irte(ir_data);
+
+		if (!eirte || !eirte->entry_ptr)
+			return -EINVAL;
+
+		hw_guest_mode = eirte->entry_ptr->lo.fields_vapic.guest_mode;
+		if (!entry->lo.fields_vapic.guest_mode && !hw_guest_mode)
+			return 0;
+
+		valid = eirte->entry_ptr->lo.fields_vapic.valid;
+		if (!valid)
+			valid = entry->lo.fields_vapic.valid;
+	} else {
+		if (!entry->lo.fields_vapic.guest_mode)
+			return 0;
+
+		valid = entry->lo.fields_vapic.valid;
+	}
 
 	entry->lo.val = 0;
 	entry->hi.val = 0;
+
+	if (ir_data->is_ext) {
+		struct ext_irte *eirte = amd_ir_data_to_ext_irte(ir_data);
+
+		if (!eirte)
+			return -EINVAL;
+
+		entry->lo.fields_vapic.valid = valid;
+		return __modify_ext_irte_ga(eirte, entry);
+	}
 
 	entry->lo.fields_remap.valid       = valid;
 	entry->lo.fields_remap.dm          = apic->dest_mode_logical;
@@ -4267,7 +4388,7 @@ int amd_iommu_deactivate_guest_mode(void *data)
 				APICID_TO_IRTE_DEST_HI(cfg->dest_apicid);
 
 	return modify_irte_ga(ir_data->iommu, ir_data->irq_2_irte.devid,
-			      ir_data->irq_2_irte.index, entry);
+			      ir_data->irq_2_irte.index, entry, ir_data);
 }
 EXPORT_SYMBOL(amd_iommu_deactivate_guest_mode);
 
