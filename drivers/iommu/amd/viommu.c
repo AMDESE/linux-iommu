@@ -405,6 +405,9 @@ int __init amd_viommu_init(struct amd_iommu *iommu)
 				DTE_EXT_INTTABLEN_L1);
 	dte_set = true;
 
+	hash_init(iommu->ext_irte_hlist);
+	spin_lock_init(&iommu->ext_irte_hlist_lock);
+
 	return 0;
 
 err_private_space:
@@ -679,4 +682,86 @@ void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
 		 __func__, iommu->devid, gid, hw_queue->type,
 		 hw_queue->base_addr, hw_queue->length, flags, val);
+}
+
+/*****************************************************
+ * Extended interrupt remapping support
+ */
+#define EXT_IR_ID(x, y)		(((x & 0x3) << 16) | (y & 0xFFFF))
+#define EXT_IR_ID_2_TYPE(x)	((x >> 16) & 0x3)
+#define EXT_IR_ID_2_L1(x)	((x >> 8) & 0x3FF)
+#define EXT_IR_ID_2_L2(x)	(x & 0xFF)
+
+static struct irte_ga *_get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_id)
+{
+	u64 *l1_entry, *l2_entry;
+	struct irte_ga *l2_table;
+	u32 l1_index = EXT_IR_ID_2_L1(ext_id);
+	u32 l2_index = EXT_IR_ID_2_L2(ext_id);
+
+	l1_entry = &iommu->ext_ir_table[l1_index];
+
+	/* Check if the l1_entry is valid */
+	if (*l1_entry & 1ULL) {
+		l2_table = iommu_phys_to_virt(*l1_entry & 0x000FFFFFFFFFFFC0);
+	} else {
+		int size = get_irq_table_size(MAX_IRQS_PER_TABLE_512);
+
+		l2_table = iommu_alloc_pages_node_sz(dev_to_node(&iommu->dev->dev),
+						     GFP_KERNEL, size);
+		if (!l2_table)
+			return NULL;
+
+		/* Setup the L1 entry */
+		*l1_entry = iommu_virt_to_phys(l2_table) & 0x000FFFFFFFFFFFC0;
+		*l1_entry |= (EXT_INTTABLEN_L2_VALUE << 2);
+		*l1_entry |= 1ULL; /* Valid */
+	}
+	l2_entry = (u64*) &l2_table[l2_index];
+
+	pr_debug("%s: type=%#x, ext_intremap_tbl=%#llx, l1_entry=%#llx(%#llx, %u), l2_entry=%#llx(%#llx, %u)\n",
+		__func__, EXT_IR_ID_2_TYPE(ext_id),
+		iommu_virt_to_phys(iommu->ext_ir_table),
+		iommu_virt_to_phys(l1_entry), *l1_entry, l1_index,
+		iommu_virt_to_phys(l2_entry), *l2_entry, l2_index);
+
+	return &l2_table[l2_index];
+}
+
+static struct ext_irte *get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_id)
+{
+	unsigned long flags;
+	struct ext_irte *tmp, *eirte = NULL;
+
+	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+
+	hash_for_each_possible(iommu->ext_irte_hlist, tmp, hnode, ext_id) {
+		if (tmp->ext_id == ext_id) {
+			eirte = tmp;
+			break;
+		}
+	}
+
+	if (eirte)
+		goto out;
+
+	/* Allocate new ext-irte */
+	eirte = kzalloc(sizeof(*eirte), GFP_KERNEL);
+	if (!eirte)
+		goto out;
+
+	eirte->entry_ptr = _get_ext_intremap_entry(iommu, ext_id);
+	if (!eirte->entry_ptr)
+		goto out_free_eirte;
+
+	eirte->ext_id = ext_id;
+	hash_add(iommu->ext_irte_hlist, &eirte->hnode, ext_id);
+	goto out;
+
+out_free_eirte:
+	kfree(eirte);
+	eirte = NULL;
+out:
+	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+	return eirte;
 }

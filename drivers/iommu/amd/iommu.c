@@ -3536,14 +3536,6 @@ static int set_remap_table_entry_alias(struct pci_dev *pdev, u16 alias,
 	return 0;
 }
 
-static inline size_t get_irq_table_size(unsigned int max_irqs)
-{
-	if (!AMD_IOMMU_GUEST_IR_GA(amd_iommu_guest_ir))
-		return max_irqs * sizeof(u32);
-
-	return max_irqs * (sizeof(u64) * 2);
-}
-
 static struct irq_remap_table *alloc_irq_table(struct amd_iommu *iommu,
 					       u16 devid, struct pci_dev *pdev,
 					       unsigned int max_irqs)
