@@ -270,5 +270,14 @@ amd_iommu_make_clear_dte(struct amd_iommu *iommu, u16 devid,
 struct iommu_domain *
 amd_iommu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 			      const struct iommu_user_data *user_data);
+#ifdef CONFIG_IRQ_REMAP
+int amd_iommu_reset_ext_irte(struct amd_iommu *iommu, struct ext_irte *eirte);
+#else
+static inline int amd_iommu_reset_ext_irte(struct amd_iommu *iommu,
+					   struct ext_irte *eirte)
+{
+	return 0;
+}
+#endif
 int amd_iommu_reset_vmmio(struct amd_iommu *iommu, u16 gid);
 #endif /* AMD_IOMMU_H */
