@@ -262,5 +262,6 @@ amd_iommu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 /* Guest ID for vIOMMU */
 int amd_iommu_gid_alloc(struct amd_iommu *iommu);
 void amd_iommu_gid_free(struct amd_iommu *iommu, int gid);
+int amd_iommu_reset_ext_irte(struct amd_iommu *iommu, struct ext_irte *eirte);
 int amd_iommu_reset_vmmio(struct amd_iommu *iommu, u16 gid);
 #endif /* AMD_IOMMU_H */
