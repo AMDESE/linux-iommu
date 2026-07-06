@@ -43,6 +43,7 @@ struct kvm_svm {
 	u32 *avic_logical_id_table;
 	u64 *avic_physical_id_table;
 	struct hlist_node hnode;
+	bool ext_ir_active;
 
 	struct kvm_sev_info sev_info;
 };

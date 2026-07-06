@@ -292,6 +292,13 @@ struct vcpu_svm {
 	struct list_head ir_list;
 	raw_spinlock_t ir_list_lock;
 
+	/*
+	 * Per-vCPU list of extended IRTE ir_data pointers (vIOMMU log IRQs).
+	 * Like ir_list, used to update IRTEs on vCPU load/put/block and when
+	 * AVIC is toggled.
+	 */
+	struct list_head ext_ir_list;
+
 	struct vcpu_sev_es_state sev_es;
 
 	bool guest_state_loaded;
