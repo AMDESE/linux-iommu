@@ -11,6 +11,15 @@ struct amd_iommu;
 /* 16-bit guest DevID index; not VIOMMU_MAX_GID. */
 #define VIOMMU_MAX_GDEVID	0xFFFF
 
+struct kvm;
+struct amd_iommu_svm_ops;
+
+/* Extended Interrupt Remapping */
+enum ext_intremap_type {
+	EXT_INTREMAP_EVENT = 0,
+	EXT_INTREMAP_PPR,
+};
+
 #if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
 
 int amd_viommu_init(struct amd_iommu *iommu);
@@ -60,6 +69,17 @@ struct iommufd_hw_queue;
 int amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue);
 int amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue);
 int amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue);
+
+int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
+				       const struct amd_iommu_svm_ops *ops,
+				       struct kvm *kvm,
+				       enum ext_intremap_type type, u32 vcpu_id,
+				       u8 vector);
+/* Caller must hold aviommu->vfctrl_lock. */
+bool amd_viommu_attach_ext_ir_kvm(struct amd_iommu_viommu *aviommu,
+				  struct kvm *kvm,
+				  void (*put_kvm)(struct kvm *kvm));
+void amd_viommu_detach_ext_ir_kvm(struct amd_iommu_viommu *aviommu);
 #else
 
 /*
