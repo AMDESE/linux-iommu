@@ -10,6 +10,7 @@
 #include <linux/sched.h>
 #include <linux/iommu.h>
 #include <linux/iommufd.h>
+#include <linux/amd-iommu.h>
 #include <uapi/linux/iommufd.h>
 
 #include <asm/iommu.h>
@@ -20,6 +21,46 @@
 #include "amd_iommu_types.h"
 #include "amd_viommu.h"
 #include "../iommu-pages.h"
+
+bool amd_viommu_attach_ext_ir_kvm(struct amd_iommu_viommu *aviommu,
+				  struct kvm *kvm,
+				  void (*put_kvm)(struct kvm *kvm))
+{
+	lockdep_assert_held(&aviommu->vfctrl_lock);
+
+	if (aviommu->ext_ir_kvm)
+		return false;
+
+	aviommu->ext_ir_kvm = kvm;
+	aviommu->ext_ir_put_kvm = put_kvm;
+	return true;
+}
+
+static void amd_viommu_put_kvm(struct kvm *kvm, void (*put_kvm)(struct kvm *kvm))
+{
+	if (!kvm)
+		return;
+
+	if (WARN_ON_ONCE(!put_kvm))
+		return;
+
+	put_kvm(kvm);
+}
+
+void amd_viommu_detach_ext_ir_kvm(struct amd_iommu_viommu *aviommu)
+{
+	void (*put_kvm)(struct kvm *kvm);
+	struct kvm *kvm;
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	kvm = aviommu->ext_ir_kvm;
+	put_kvm = aviommu->ext_ir_put_kvm;
+	aviommu->ext_ir_kvm = NULL;
+	aviommu->ext_ir_put_kvm = NULL;
+	mutex_unlock(&aviommu->vfctrl_lock);
+
+	amd_viommu_put_kvm(kvm, put_kvm);
+}
 
 /*
  * Per-vIOMMU DevID / DomID tables share iommu->viommu_pdom:
@@ -1093,4 +1134,81 @@ out:
 	if (new_l2)
 		iommu_free_pages(new_l2);
 	return eirte;
+}
+
+int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
+				       const struct amd_iommu_svm_ops *ops,
+				       struct kvm *kvm,
+				       enum ext_intremap_type type, u32 vcpu_id,
+				       u8 vector)
+{
+	struct ext_irte *eirte;
+	struct amd_ir_data *ir_data;
+	struct amd_iommu_pi_data pi = {};
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	u64 pa;
+	u32 ga_tag;
+	u32 ext_id = EXT_IR_ID(type, aviommu->gid);
+	int ret;
+
+	lockdep_assert_held(&aviommu->vfctrl_lock);
+
+	if (!ops || !ops->get_ga_tag || !ops->get_apic_backing_page ||
+	    !ops->set_ext_ir_affinity)
+		return -ENODEV;
+
+	ga_tag = ops->get_ga_tag(kvm, vcpu_id);
+	pa = ops->get_apic_backing_page(kvm, vcpu_id);
+	if (!ga_tag || !pa)
+		return -EINVAL;
+
+	if (ops->prepare_ext_ir_rebind)
+		ops->prepare_ext_ir_rebind(kvm);
+
+	eirte = get_ext_intremap_entry(iommu, ext_id);
+	if (!eirte)
+		return -ENOMEM;
+
+	ir_data = &eirte->ir_data;
+	ir_data->iommu = iommu;
+	ir_data->is_ext = true;
+	ir_data->ext_id = ext_id;
+	ir_data->entry = &eirte->entry;
+
+	/*
+	 * Drop leftover hardware programming (e.g. after a prior QEMU
+	 * session) before installing the new GA entry.
+	 */
+	ret = amd_iommu_reset_ext_irte(iommu, eirte);
+	if (ret)
+		return ret;
+
+	pr_debug("%s: type=%#x, vcpu_id=%#x, vector=%#x, backing_page=%#llx, ga_tag=%#x\n",
+		 __func__, type, vcpu_id, vector, pa, ga_tag);
+
+	/* This is normally setup during prepare */
+	eirte->entry.lo.fields_vapic.valid = 1;
+
+	/*
+	 * Initialize ir_data, which will be used in
+	 * amd_iommu_activate_guest_mode()
+	 */
+	ir_data->ga_root_ptr = (pa & 0xFFFFFFFFFFFFFULL) >> 12;
+	ir_data->ga_tag = ga_tag;
+	ir_data->ga_vector = vector;
+
+	pi.ir_data = ir_data;
+	pi.ga_tag = ga_tag;
+
+	ret = ops->set_ext_ir_affinity(kvm, vcpu_id, &pi);
+	if (ret) {
+		int reset_ret;
+
+		eirte->entry.lo.fields_vapic.valid = 0;
+		reset_ret = amd_iommu_reset_ext_irte(iommu, eirte);
+		return reset_ret ? reset_ret : ret;
+	}
+
+	return 0;
 }
