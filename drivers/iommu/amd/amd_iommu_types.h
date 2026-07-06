@@ -562,6 +562,8 @@ struct amd_iommu_viommu {
 	struct protection_domain *parent; /* nest parent domain for this viommu */
 	struct list_head pdom_list;	  /* For protection_domain->viommu_list */
 	u16 gid;			  /* Guest ID for the vIOMMU */
+	struct kvm *ext_ir_kvm;		  /* KVM VM from first ext-IR ioctl */
+	void (*ext_ir_put_kvm)(struct kvm *kvm);
 
 	/*
 	 * Per-vIOMMU guest domain ID to host domain ID mapping.
@@ -593,7 +595,8 @@ struct amd_iommu_viommu {
 	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells and
 	 * guest HW queue control registers for this gid. Those registers
 	 * are shared by every vDevice and HW queue on this vIOMMU; igroup
-	 * locks are not. Do not nest with trans_devid_lock.
+	 * locks are not. Also serializes EXT_INT_REMAP IRTE updates and
+	 * ext_ir_kvm attach. Do not nest with trans_devid_lock.
 	 *
 	 * nested_domain_free() last-ref takes this before
 	 * gdomid_array's xa_lock so CONTROL1 idle restore cannot race

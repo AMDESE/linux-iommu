@@ -5,6 +5,7 @@
 
 #include <linux/iommu.h>
 #include <linux/amd-iommu.h>
+#include <linux/rcupdate.h>
 
 #include "iommufd.h"
 #include "amd_iommu.h"
@@ -46,6 +47,66 @@ size_t amd_iommufd_get_viommu_size(struct device *dev, enum iommu_viommu_type vi
 		return 0;
 
 	return VIOMMU_STRUCT_SIZE(struct amd_iommu_viommu, core);
+}
+
+static int amd_iommufd_set_ext_int_remap(struct iommufd_viommu *viommu,
+					 const struct iommu_viommu_ext_int_remap *arg)
+{
+	const struct amd_iommu_svm_ops *ops;
+	struct kvm *kvm;
+	enum ext_intremap_type type;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	int ret;
+
+	switch (arg->type) {
+	case IOMMU_VIOMMU_EXT_INT_EVENT:
+		type = EXT_INTREMAP_EVENT;
+		break;
+	case IOMMU_VIOMMU_EXT_INT_PPR:
+		type = EXT_INTREMAP_PPR;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	/*
+	 * kvm_from_fd() must run in this RCU section: it is the
+	 * try_module_get() that pins kvm-amd. synchronize_rcu() in
+	 * amd_iommu_register_svm_ops(NULL) only waits for RCU readers.
+	 * kvm_from_fd() must not sleep.
+	 */
+	rcu_read_lock();
+	ops = svm_ops;
+	if (!ops || !ops->kvm_from_fd || !ops->put_kvm) {
+		rcu_read_unlock();
+		return -ENODEV;
+	}
+	kvm = ops->kvm_from_fd(arg->kvmfd);
+	rcu_read_unlock();
+	if (IS_ERR(kvm))
+		return PTR_ERR(kvm);
+
+	mutex_lock(&aviommu->vfctrl_lock);
+	if (aviommu->ext_ir_kvm && aviommu->ext_ir_kvm != kvm) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	ret = amd_viommu_set_ext_int_remap_entry(viommu, ops, kvm, type,
+						 arg->vcpu_id, (u8)arg->vector);
+	if (ret)
+		goto out_unlock;
+
+	if (!amd_viommu_attach_ext_ir_kvm(aviommu, kvm, ops->put_kvm))
+		ops->put_kvm(kvm);
+
+	mutex_unlock(&aviommu->vfctrl_lock);
+	return 0;
+
+out_unlock:
+	mutex_unlock(&aviommu->vfctrl_lock);
+	ops->put_kvm(kvm);
+	return ret;
 }
 
 int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
@@ -176,6 +237,9 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	spin_lock_irqsave(&pdom->lock, flags);
 	list_del(&aviommu->pdom_list);
 	spin_unlock_irqrestore(&pdom->lock, flags);
+
+	amd_viommu_detach_ext_ir_kvm(aviommu);
+
 	xa_destroy(&aviommu->gdomid_array);
 	iommufd_viommu_destroy_mmap(&aviommu->core, aviommu->vfmmio_mmap_offset);
 
@@ -305,4 +369,5 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.get_hw_queue_size = amd_iommufd_get_hw_queue_size,
 	.get_hw_queue_flags = amd_iommufd_get_hw_queue_flags,
 	.hw_queue_init = amd_iommufd_hw_queue_init,
+	.set_ext_int_remap = amd_iommufd_set_ext_int_remap,
 };
