@@ -692,12 +692,33 @@ void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 #define EXT_IR_ID_2_L1(x)	((x >> 8) & 0x3FF)
 #define EXT_IR_ID_2_L2(x)	(x & 0xFF)
 
-static struct irte_ga *_get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_id)
+/* Caller must hold @iommu->ext_irte_hlist_lock */
+static struct ext_irte *__find_ext_irte(struct amd_iommu *iommu, u32 ext_id)
+{
+	struct ext_irte *tmp;
+
+	hash_for_each_possible(iommu->ext_irte_hlist, tmp, hnode, ext_id) {
+		if (tmp->ext_id == ext_id)
+			return tmp;
+	}
+
+	return NULL;
+}
+
+/*
+ * Return the L2 entry for @ext_id, taking *@spare_l2 as the L2 table if the L1
+ * entry is still empty.  *@spare_l2 is cleared once taken, so the caller can
+ * free whatever is left over.  Caller must hold @iommu->ext_irte_hlist_lock.
+ */
+static struct irte_ga *_get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_id,
+					       struct irte_ga **spare_l2)
 {
 	u64 *l1_entry, *l2_entry;
 	struct irte_ga *l2_table;
 	u32 l1_index = EXT_IR_ID_2_L1(ext_id);
 	u32 l2_index = EXT_IR_ID_2_L2(ext_id);
+
+	lockdep_assert_held(&iommu->ext_irte_hlist_lock);
 
 	l1_entry = &iommu->ext_ir_table[l1_index];
 
@@ -705,12 +726,10 @@ static struct irte_ga *_get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_
 	if (*l1_entry & 1ULL) {
 		l2_table = iommu_phys_to_virt(*l1_entry & 0x000FFFFFFFFFFFC0);
 	} else {
-		int size = get_irq_table_size(MAX_IRQS_PER_TABLE_512);
-
-		l2_table = iommu_alloc_pages_node_sz(dev_to_node(&iommu->dev->dev),
-						     GFP_KERNEL, size);
+		l2_table = *spare_l2;
 		if (!l2_table)
 			return NULL;
+		*spare_l2 = NULL;
 
 		/* Setup the L1 entry */
 		*l1_entry = iommu_virt_to_phys(l2_table) & 0x000FFFFFFFFFFFC0;
@@ -730,38 +749,119 @@ static struct irte_ga *_get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_
 
 static struct ext_irte *get_ext_intremap_entry(struct amd_iommu *iommu, u32 ext_id)
 {
+	struct irte_ga *spare_l2 = NULL;
+	struct ext_irte *eirte, *new;
 	unsigned long flags;
-	struct ext_irte *tmp, *eirte = NULL;
 
 	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+	eirte = __find_ext_irte(iommu, ext_id);
+	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+	if (eirte)
+		return eirte;
 
-	hash_for_each_possible(iommu->ext_irte_hlist, tmp, hnode, ext_id) {
-		if (tmp->ext_id == ext_id) {
-			eirte = tmp;
-			break;
+	/*
+	 * Both allocations belong outside the lock, which is taken with
+	 * interrupts disabled while GFP_KERNEL may sleep.  Whether the L2 table
+	 * is needed can only be decided under the lock, so allocate one
+	 * speculatively when the L1 entry looks empty and free it below if the
+	 * answer changed in the meantime.
+	 */
+	new = kzalloc_obj(*new, GFP_KERNEL);
+	if (!new)
+		return NULL;
+
+	if (!(iommu->ext_ir_table[EXT_IR_ID_2_L1(ext_id)] & 1ULL)) {
+		int size = get_irq_table_size(MAX_IRQS_PER_TABLE_512);
+
+		spare_l2 = iommu_alloc_pages_node_sz(dev_to_node(&iommu->dev->dev),
+						     GFP_KERNEL, size);
+		if (!spare_l2) {
+			kfree(new);
+			return NULL;
 		}
 	}
 
-	if (eirte)
-		goto out;
-
-	/* Allocate new ext-irte */
-	eirte = kzalloc(sizeof(*eirte), GFP_KERNEL);
-	if (!eirte)
-		goto out;
-
-	eirte->entry_ptr = _get_ext_intremap_entry(iommu, ext_id);
-	if (!eirte->entry_ptr)
-		goto out_free_eirte;
-
-	eirte->ext_id = ext_id;
-	hash_add(iommu->ext_irte_hlist, &eirte->hnode, ext_id);
-	goto out;
-
-out_free_eirte:
-	kfree(eirte);
-	eirte = NULL;
-out:
+	spin_lock_irqsave(&iommu->ext_irte_hlist_lock, flags);
+	/* Another caller may have installed this ext_id in the meantime */
+	eirte = __find_ext_irte(iommu, ext_id);
+	if (!eirte) {
+		new->entry_ptr = _get_ext_intremap_entry(iommu, ext_id, &spare_l2);
+		if (new->entry_ptr) {
+			new->ext_id = ext_id;
+			hash_add(iommu->ext_irte_hlist, &new->hnode, ext_id);
+			eirte = new;
+			new = NULL;
+		}
+	}
 	spin_unlock_irqrestore(&iommu->ext_irte_hlist_lock, flags);
+
+	kfree(new);
+	if (spare_l2)
+		iommu_free_pages(spare_l2);
+
 	return eirte;
+}
+
+int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
+				       struct kvm *kvm,
+				       enum ext_intremap_type type, u32 vcpu_id,
+				       u8 vector)
+{
+	struct ext_irte *eirte;
+	struct amd_ir_data *ir_data;
+	struct amd_iommu_pi_data pi;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	u64 pa;
+	u32 ga_tag;
+	u32 ext_id = EXT_IR_ID(type, aviommu->gid);
+
+	if (!svm_ops)
+		return -ENODEV;
+
+	if (svm_ops->prepare_ext_ir_rebind)
+		svm_ops->prepare_ext_ir_rebind(kvm);
+
+	ga_tag = svm_ops->get_ga_tag(kvm, vcpu_id);
+	pa = svm_ops->get_apic_backing_page(kvm, vcpu_id);
+	if (!ga_tag || !pa)
+		return -EINVAL;
+
+	eirte = get_ext_intremap_entry(iommu, ext_id);
+	if (!eirte)
+		return -ENOMEM;
+
+	ir_data = &eirte->ir_data;
+	ir_data->iommu = iommu;
+	ir_data->is_ext = true;
+	ir_data->ext_id = ext_id;
+	ir_data->entry = &eirte->entry;
+
+	/*
+	 * Drop stale hardware programming left in the table when teardown did
+	 * not fully clear the entry (e.g. after a prior QEMU session).
+	 */
+	if (eirte->entry_ptr->lo.fields_vapic.guest_mode)
+		amd_iommu_reset_ext_irte(iommu, eirte);
+
+	pr_debug("%s: type=%#x, vcpu_id=%#x, vector=%#x, backing_page=%#llx, ga_tag=%#x\n",
+		 __func__, type, vcpu_id, vector, pa, ga_tag);
+
+	/* This is normally setup during prepare */
+	eirte->entry.lo.fields_vapic.valid = 1;
+
+	/*
+	 * Initialize ir_data, which will be used in
+	 * amd_iommu_activate_guest_mode()
+	 */
+	ir_data->ga_root_ptr = (pa & 0xFFFFFFFFFFFFFULL) >> 12;
+	ir_data->ga_tag = ga_tag;
+	ir_data->ga_vector = vector;
+
+	pi.ir_data = ir_data;
+	pi.ga_tag = ga_tag;
+
+	svm_ops->set_ext_ir_affinity(kvm, vcpu_id, &pi);
+
+	return 0;
 }
