@@ -26,6 +26,34 @@
 #include "amd_viommu.h"
 #include "../iommu-pages.h"
 
+static LIST_HEAD(ext_ir_attached_viommus);
+static DEFINE_SPINLOCK(ext_ir_attached_lock);
+
+void amd_viommu_attach_ext_ir_kvm(struct amd_iommu_viommu *aviommu,
+				  struct kvm *kvm)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ext_ir_attached_lock, flags);
+	if (!aviommu->ext_ir_kvm) {
+		aviommu->ext_ir_kvm = kvm;
+		list_add(&aviommu->kvm_ext_ir_node, &ext_ir_attached_viommus);
+	}
+	spin_unlock_irqrestore(&ext_ir_attached_lock, flags);
+}
+
+static void amd_viommu_detach_ext_ir_kvm(struct amd_iommu_viommu *aviommu)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ext_ir_attached_lock, flags);
+	if (aviommu->ext_ir_kvm) {
+		list_del_init(&aviommu->kvm_ext_ir_node);
+		aviommu->ext_ir_kvm = NULL;
+	}
+	spin_unlock_irqrestore(&ext_ir_attached_lock, flags);
+}
+
 /*
  * Guest Device ID Mapping Table
  */
@@ -553,6 +581,8 @@ void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *avi
 int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu)
 {
 	int ret;
+
+	INIT_LIST_HEAD(&viommu->kvm_ext_ir_node);
 
 	ret = alloc_private_vm_region(iommu, &viommu->devid_table,
 				      VIOMMU_DEVID_MAPPING_BASE,
