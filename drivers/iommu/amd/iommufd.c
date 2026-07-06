@@ -79,7 +79,7 @@ static int amd_iommufd_set_ext_int_remap(struct iommufd_viommu *viommu,
 	ret = amd_viommu_set_ext_int_remap_entry(viommu, kvm, type,
 						 arg->vcpu_id, (u8)arg->vector);
 	if (!ret && !aviommu->ext_ir_kvm)
-		aviommu->ext_ir_kvm = kvm;
+		amd_viommu_attach_ext_ir_kvm(aviommu, kvm);
 
 out_fdput:
 	fdput(f);
