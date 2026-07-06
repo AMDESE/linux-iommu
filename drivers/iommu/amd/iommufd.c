@@ -4,6 +4,7 @@
  */
 
 #include <linux/iommu.h>
+#include <linux/file.h>
 #include <linux/amd-iommu.h>
 
 #include "iommufd.h"
@@ -41,6 +42,48 @@ size_t amd_iommufd_get_viommu_size(struct device *dev, enum iommu_viommu_type vi
 		return 0;
 
 	return VIOMMU_STRUCT_SIZE(struct amd_iommu_viommu, core);
+}
+
+static int amd_iommufd_set_ext_int_remap(struct iommufd_viommu *viommu,
+					 const struct iommu_viommu_ext_int_remap *arg)
+{
+	struct fd f;
+	struct kvm *kvm;
+	enum ext_intremap_type type;
+	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
+	int ret;
+
+	if (!svm_ops || !svm_ops->kvm_from_fd)
+		return -ENODEV;
+
+	switch (arg->type) {
+	case IOMMU_VIOMMU_EXT_INT_EVENT:
+		type = EXT_INTREMAP_EVENT;
+		break;
+	case IOMMU_VIOMMU_EXT_INT_PPR:
+		type = EXT_INTREMAP_PPR;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	kvm = svm_ops->kvm_from_fd(arg->kvmfd, &f);
+	if (IS_ERR(kvm))
+		return PTR_ERR(kvm);
+
+	if (aviommu->ext_ir_kvm && aviommu->ext_ir_kvm != kvm) {
+		ret = -EINVAL;
+		goto out_fdput;
+	}
+
+	ret = amd_viommu_set_ext_int_remap_entry(viommu, kvm, type,
+						 arg->vcpu_id, (u8)arg->vector);
+	if (!ret && !aviommu->ext_ir_kvm)
+		aviommu->ext_ir_kvm = kvm;
+
+out_fdput:
+	fdput(f);
+	return ret;
 }
 
 int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *parent,
@@ -245,4 +288,6 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.vdevice_init = _amd_viommu_vdevice_init,
 	.get_hw_queue_size = amd_iommufd_get_hw_queue_size,
 	.hw_queue_init = amd_iommufd_hw_queue_init,
+	.set_ext_int_remap = amd_iommufd_set_ext_int_remap,
+
 };
