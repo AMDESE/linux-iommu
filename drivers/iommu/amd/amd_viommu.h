@@ -44,6 +44,8 @@ int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
 				       struct kvm *kvm,
 				       enum ext_intremap_type type, u32 vcpu_id,
 				       u8 vector);
+void amd_viommu_attach_ext_ir_kvm(struct amd_iommu_viommu *aviommu,
+				  struct kvm *kvm);
 
 #else
 
