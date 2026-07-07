@@ -1,0 +1,53 @@
+Subject: [PATCH 00/15] iommu/amd: Add vIOMMU Extended Interrupt Remapping support
+
+Notes:
+
+* This series depends on the
+  "[PATCH v3 00/22] iommu/amd: Introduce AMD Hardware-accelerated Virtualized IOMMU (vIOMMU) Support"
+  (https://lore.kernel.org/linux-iommu/20260629153535.15775-1-suravee.suthikulpanit@amd.com/)
+
+* This series depends on the "[PATCH 0/2] iommufd: Add AMD vIOMMU HW queue support"
+  (https://lore.kernel.org/linux-iommu/20260708015628.255088-1-suravee.suthikulpanit@amd.com/)
+
+Overview:
+
+AMD HW-accelerated vIOMMU generates two classes of host-side
+interrupts that must be virtualized for the guest:
+
+  1. General and Event Log interrupt
+  2. PPR Log interrupt
+
+These interruptes are virtualized using AMD Extended Interrupt Remapping
+(Extended-IRT). These are not tied to a host PCI device IRQ; they are
+indexed by interrupt type and guest ID in the IOMMU's Extended-IRT 
+and delivered into the guest via IOMMU AVIC (Guest Virtual APIC).
+
+The Extended-IRT programs these interrupts with guest_mode = 1and
+uses IOMMU AVIC to inject them directly into a target vCPU.
+Userspace programs delivery through a new IOMMU_VIOMMU_EXT_INT_REMAP
+ioctl, supplying the KVM VM fd, vCPU ID, and guest APIC vector.
+
+The series has three main parts:
+
+  A. KVM / IOMMU integration (patches 1-6)
+     Replace the standalone GA log notifier callback with
+     struct amd_iommu_svm_ops, a small ops table that lets the AMD
+     IOMMU driver resolve KVM VMs, query AVIC GA tags and vAPIC
+     backing pages, and manage per-vCPU extended IRTE affinity.
+     KVM tracks extended IRTEs on a per-vCPU list (parallel to the
+     existing irqfd ir_list) and updates affinity on vCPU
+     load/put/block.  vCPU reset and VM teardown flush or rebind
+     extended IR state.
+
+  B. Extended-IRT hardware support (patches 7-10)
+     Allocate a per-IOMMU two-level Extended-IRT, point the IOMMU
+     device DTE at it, and maintain a hash table of programmed
+     extended IRTEs.  Reuse the existing GA-mode IRTE format and
+     modify_irte_ga() paths, extended to update live hardware
+     entries via cmpxchg and to skip IRT invalidation where safe.
+
+  C. iommufd UAPI and lifecycle (patches 11-15)
+     Add IOMMU_VIOMMU_EXT_INT_REMAP and wire it through the AMD
+     iommufd driver.  Track the KVM VM attached to each vIOMMU,
+     program event-log and PPR-log IRTEs, and tear down cleanly on
+     iommufd destroy (KVM affinity first, then hardware IRTE removal).
