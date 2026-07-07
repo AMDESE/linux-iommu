@@ -1,0 +1,138 @@
+Subject: [PATCH 00/16] iommu/amd: Add vIOMMU Extended Interrupt Remapping support
+
+Notes:
+
+* This series depends on the
+  "[PATCH v5 00/24] iommu/amd: Introduce AMD Hardware-accelerated Virtualized IOMMU (vIOMMU) Support"
+  (https://lore.kernel.org/linux-iommu/20260914184750.222939-1-suravee.suthikulpanit@amd.com/)
+
+* This series depends on the "[PATCH 0/2 v2] iommufd: Add AMD vIOMMU HW queue support"
+  (Work-in-progress. To be sent upstream)
+
+Overview:
+
+AMD HW-accelerated vIOMMU generates two classes of host-side
+interrupts that must be virtualized for the guest:
+
+  1. General and Event Log interrupt
+  2. PPR Log interrupt
+
+These interrupts are virtualized using AMD Extended Interrupt Remapping
+(Extended-IRT). These are not tied to a host PCI device IRQ; they are
+indexed by interrupt type and guest ID in the IOMMU's Extended-IRT
+and delivered into the guest via IOMMU AVIC (Guest Virtual APIC).
+
+The Extended-IRT programs these interrupts with guest_mode = 1 and
+uses IOMMU AVIC to inject them directly into a target vCPU.
+Userspace programs delivery through a new IOMMU_VIOMMU_EXT_INT_REMAP
+ioctl, supplying the KVM VM fd, vCPU ID, and guest APIC vector.
+
+The series has four main parts:
+
+  A. KVM / IOMMU integration (patches 1-6)
+     Replace the standalone GA log notifier callback with
+     struct amd_iommu_svm_ops, a small ops table that lets the AMD
+     IOMMU driver resolve a KVM VM from an fd, query AVIC GA tags
+     and vAPIC backing pages, and manage per-vCPU extended IRTE
+     affinity.  The GA log notifier resolves the VM and the vCPU
+     under svm_vm_data_hash_lock.  KVM tracks extended IRTEs on a
+     per-vCPU list (parallel to the existing irqfd ir_list) and
+     updates affinity on vCPU load/put/block.  vCPU reset and VM
+     teardown flush or rebind extended IR state, serialized by
+     ext_ir_lock.
+
+  B. Extended-IRT hardware support (patches 7-10)
+     Allocate a per-IOMMU two-level Extended-IRT, point the IOMMU
+     device DTE at it through amd_iommu_update_dte_ir(), and maintain
+     a hash table of programmed extended IRTEs.  Reuse the existing
+     GA-mode IRTE format and modify_irte_ga() paths, extended to
+     update live hardware entries via cmpxchg and to skip IRT
+     invalidation where safe.
+
+  C. iommufd UAPI and lifecycle (patches 11-15)
+     Add IOMMU_VIOMMU_EXT_INT_REMAP and wire it through the AMD
+     iommufd driver.  Allow one KVM VM per vIOMMU, program event-log
+     and PPR-log IRTEs, and tear down cleanly on iommufd destroy
+     (KVM affinity first, then hardware IRTE removal).  KVM keeps
+     flushing extended-IR affinity on VM exit even when AVIC is off.
+
+  D. vIOMMU feature enablement (patch 16)
+     Enable GstBufferTRPMode, VCmdEn, and VIOMMUEn on each IOMMU that
+     advertised EFR[VIOMMUSup], and fail init when GstBufferTRPMode
+     does not latch.  Quiesce the engine before freeing the self-DTE
+     and Extended-IRT tables, and re-apply the bits on resume.
+
+Changes from https://github.com/AMDESE/linux-iommu/commits/linux-7.1.0-rc4-amd-viommu_upstream_v4/:
+
+Rebase / series scope:
+  * Rebased from Linux 7.1.0-rc4 onto 7.3.0-rc3 (base 704340f1cd0d),
+    on top of HW-vIOMMU v5 and HW queue v2.
+  * Fold "Track vIOMMU extended-IR KVM attachment" into patch 12.
+    The global ext_ir_attached_viommus list and its spinlock are
+    gone; ext_ir_kvm attach/detach is per-vIOMMU under vfctrl_lock.
+    17 patches become 16.
+  * Replace "Detach vIOMMU extended-IR on KVM VM exit" with "Keep
+    extended-IR affinity flush on KVM VM exit" (patch 15). Drop
+    amd_viommu_detach_kvm_ext_int_remap() and its export; iommufd
+    destroy owns the extended-IR list and the kvm reference.
+  * avic_vm_pre_destroy() and the vm_pre_destroy hook are now
+    upstream in 7.3, so patch 6 extends them instead of adding them.
+
+KVM / IOMMU integration (patches 1-6):
+  * Patch 1: Make the ops table static (avic_svm_ops). Read svm_ops
+    once into a local in iommu_poll_ga_log() and NULL-check it
+    before calling ga_log_notifier.
+  * Patch 2: Resolve the vCPU with kvm_get_vcpu() by index inside
+    svm_vm_data_hash_lock instead of kvm_get_vcpu_by_id() after
+    dropping the lock.
+  * Patch 3: kvm_from_fd() returns a counted reference. Take
+    kvm_get_kvm_safe() plus try_module_get(THIS_MODULE) and add
+    put_kvm to the ops, instead of handing back a borrowed pointer
+    with a caller-held struct fd.
+  * Patch 4: GA tag uses vcpu_idx and rejects vm_id <= 0; the
+    backing-page helper checks vcpu->arch.apic and apic->regs.
+  * Patch 6: Add kvm_svm->ext_ir_lock and serialize ext_ir_active
+    and ext_ir_rebind_pending with it. Flush per-vCPU lists with
+    list_first_entry() so dropping ir_list_lock cannot UAF the
+    iterator. Re-check rebind_pending in set_ext_ir_affinity, and
+    clear ext_ir_active after an empty flush.
+
+Extended-IRT hardware support (patches 7-10):
+  * Patch 7: Add a !CONFIG_IRQ_REMAP inline stub for
+    amd_iommu_update_dte_ir().
+  * Patch 8: AMD_IOMMU_IOMMUFD depends on IRQ_REMAP. Free the
+    Extended-IRT from amd_viommu_uninit() and unwind init failures
+    through that helper instead of a duplicated error path.
+  * Patch 9: Shrink the IRTE hash to 2^8 buckets and widen ext_id
+    to u32. Allocate the L2 table outside the lock and re-check
+    after retaking it. free_ext_int_remap_tbl() now frees hashed
+    entries and L2 pages, not just the L1 table.
+  * Patch 10: amd_iommu_reset_ext_irte() flushes the IRT with
+    iommu->devid and propagates errors;
+    amd_iommu_deactivate_guest_mode() routes extended entries
+    through modify_irte_ga(). Add a !CONFIG_IRQ_REMAP stub.
+
+iommufd UAPI and lifecycle (patches 11-15):
+  * Patch 11: IOMMUFD_CMD_VIOMMU_EXT_INT_REMAP moves from 0x95 to
+    0x96; 0x95 is IOAS_NOIOMMU_GET_PA in 7.3.
+  * Patch 12: Resolve kvmfd under rcu_read_lock() with a snapshot of
+    svm_ops so a kvm-amd unload cannot NULL it mid-ioctl. Serialize
+    the one-KVM-per-vIOMMU check and the IRTE update with
+    vfctrl_lock. Store put_kvm on first attach and use it on detach.
+    Always reset a leftover hardware IRTE before programming,
+    zero-init amd_iommu_pi_data, and propagate reset errors.
+  * Patch 13: Share lookup_ext_irte() instead of open-coding the
+    hash walk.
+  * Patch 14: Always reset and free the hardware entries; only
+    clear_ext_ir_affinity depends on svm_ops. Detach moved to the
+    iommufd destroy path.
+
+vIOMMU feature enablement (patch 16):
+  * Do not flip the amd_iommu_viommu default; that gate is gone and
+    vIOMMU is detected from EFR[VIOMMUSup].
+  * Write-and-read GstBufferTRPMode with
+    iommu_feature_enable_and_check() and fail init with -EINVAL if
+    it does not latch.
+  * Add viommu_disable() and re-apply the control bits on resume via
+    amd_viommu_resume() from early_enable_iommu(). Export
+    iommu_feature_disable().
