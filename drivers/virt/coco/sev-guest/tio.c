@@ -879,11 +879,19 @@ static void sev_guest_unlock(struct pci_tsm *tsm)
 
 	tio_tdi_mmio_invalidate(pdev, snp_dev, gtdi->tdi_id);
 
-	sev_tio_op(ghcb_tio_sbdfn(pdev), SVM_VMGEXIT_SEV_TIO_OP_UNBIND, &fw_err, NULL);
-
 	/* Quiesce DMA */
 	pr_err("___K___ %s %u: !!!WA!!!\n", __func__, __LINE__);
 	sev_tio_op(ghcb_tio_sbdfn(pdev), SVM_VMGEXIT_SEV_TIO_OP_STOP, &fw_err, NULL);
+
+	/*
+	 * Up until now the VMM has been blocking clearing of BME and the device may
+	 * not be able to recover without BME going via 0, do it now.
+	 * Note that the device reset is still needed, leave to the userspace to
+	 * decide on that.
+	 */
+	pci_disable_device(pdev);
+
+	sev_tio_op(ghcb_tio_sbdfn(pdev), SVM_VMGEXIT_SEV_TIO_OP_UNBIND, &fw_err, NULL);
 
 	tsm->pdev->tsm = NULL;
 	kvfree(tsm);
