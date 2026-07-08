@@ -1480,11 +1480,18 @@ static int avic_set_ext_ir_affinity(struct kvm *kvm, u32 vcpu_id,
 	return 0;
 }
 
+static void avic_clear_ext_ir_affinity(struct kvm *kvm, void *ir_data)
+{
+	svm_ext_ir_list_del(kvm, ir_data);
+	WARN_ON_ONCE(amd_iommu_deactivate_guest_mode(ir_data));
+}
+
 const struct amd_iommu_svm_ops svm_ops = {
 	.ga_log_notifier = avic_ga_log_notifier,
 	.get_ga_tag = avic_get_ga_tag,
 	.get_apic_backing_page = avic_get_apic_backing_page,
 	.set_ext_ir_affinity = avic_set_ext_ir_affinity,
+	.clear_ext_ir_affinity = avic_clear_ext_ir_affinity,
 	.prepare_ext_ir_rebind = avic_prepare_ext_ir_rebind,
 	.kvm_from_fd = svm_kvm_from_fd,
 };
