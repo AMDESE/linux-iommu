@@ -329,6 +329,7 @@ void avic_vm_pre_destroy(struct kvm *kvm)
 		return;
 
 	avic_flush_all_ext_ir_affinity(kvm);
+	amd_viommu_detach_kvm_ext_int_remap(kvm);
 	kvm_svm->ext_ir_active = false;
 	kvm_svm->ext_ir_rebind_pending = false;
 }

@@ -50,6 +50,12 @@ extern int amd_iommu_update_ga(void *data, int cpu, bool ga_log_intr);
 extern int amd_iommu_activate_guest_mode(void *data, int cpu, bool ga_log_intr);
 extern int amd_iommu_deactivate_guest_mode(void *data);
 
+#ifdef CONFIG_AMD_IOMMU_IOMMUFD
+extern void amd_viommu_detach_kvm_ext_int_remap(struct kvm *kvm);
+#else
+static inline void amd_viommu_detach_kvm_ext_int_remap(struct kvm *kvm) { }
+#endif
+
 #else /* defined(CONFIG_AMD_IOMMU) && defined(CONFIG_IRQ_REMAP) */
 
 static inline int amd_iommu_register_svm_ops(const struct amd_iommu_svm_ops *ops)
