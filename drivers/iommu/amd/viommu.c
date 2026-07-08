@@ -920,3 +920,30 @@ void amd_viommu_remove_ext_int_remap_hw(struct amd_iommu *iommu,
 		remove_ext_irte(iommu, eirte);
 	}
 }
+
+void amd_viommu_clear_ext_int_remap(struct kvm *kvm, struct amd_iommu *iommu,
+				    struct amd_iommu_viommu *aviommu)
+{
+	static const enum ext_intremap_type types[] = {
+		EXT_INTREMAP_EVENT,
+		EXT_INTREMAP_PPR,
+	};
+	int i;
+
+	if (!svm_ops || !svm_ops->clear_ext_ir_affinity)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(types); i++) {
+		struct ext_irte *eirte;
+		u32 ext_id = EXT_IR_ID(types[i], aviommu->gid);
+
+		eirte = find_ext_irte(iommu, ext_id);
+		if (!eirte)
+			continue;
+
+		svm_ops->clear_ext_ir_affinity(kvm, &eirte->ir_data);
+		remove_ext_irte(iommu, eirte);
+	}
+
+	amd_viommu_detach_ext_ir_kvm(aviommu);
+}
