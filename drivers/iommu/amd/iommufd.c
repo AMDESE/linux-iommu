@@ -239,6 +239,20 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	list_del(&aviommu->pdom_list);
 	spin_unlock_irqrestore(&pdom->lock, flags);
 
+	/*
+	 * Drop extended IRTEs for this vIOMMU on iommufd destroy.
+	 *
+	 * ext_ir_kvm is set on the first successful VIOMMU_EXT_INT_REMAP
+	 * ioctl. When still attached, tear down KVM affinity then HW IRTEs.
+	 *
+	 * When ext_ir_kvm is NULL, EXT_INT_REMAP was never successfully
+	 * programmed; drop any leftover HW IRTEs without touching KVM.
+	 */
+	if (aviommu->ext_ir_kvm)
+		amd_viommu_clear_ext_int_remap(aviommu->ext_ir_kvm, iommu, aviommu);
+	else
+		amd_viommu_remove_ext_int_remap_hw(iommu, aviommu);
+
 	amd_viommu_detach_ext_ir_kvm(aviommu);
 
 	xa_destroy(&aviommu->gdomid_array);
