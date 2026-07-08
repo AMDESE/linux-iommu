@@ -380,8 +380,7 @@ void avic_vm_pre_destroy(struct kvm *kvm)
 	struct kvm_svm *kvm_svm = to_kvm_svm(kvm);
 	unsigned long flags;
 
-	if (WARN_ON_ONCE(!enable_apicv))
-		return;
+	WARN_ON_ONCE(!enable_apicv);
 
 	avic_flush_all_ext_ir_affinity(kvm);
 	spin_lock_irqsave(&kvm_svm->ext_ir_lock, flags);
@@ -389,7 +388,7 @@ void avic_vm_pre_destroy(struct kvm *kvm)
 	kvm_svm->ext_ir_rebind_pending = false;
 	spin_unlock_irqrestore(&kvm_svm->ext_ir_lock, flags);
 
-	if (!kvm_svm->avic_vm_id)
+	if (!enable_apicv || !kvm_svm->avic_vm_id)
 		return;
 
 	guard(spinlock_irqsave)(&svm_vm_data_hash_lock);
