@@ -947,3 +947,30 @@ void amd_viommu_clear_ext_int_remap(struct kvm *kvm, struct amd_iommu *iommu,
 
 	amd_viommu_detach_ext_ir_kvm(aviommu);
 }
+
+void amd_viommu_detach_kvm_ext_int_remap(struct kvm *kvm)
+{
+	unsigned long flags;
+	struct amd_iommu_viommu *aviommu, *tmp;
+
+	spin_lock_irqsave(&ext_ir_attached_lock, flags);
+	list_for_each_entry_safe(aviommu, tmp, &ext_ir_attached_viommus,
+				 kvm_ext_ir_node) {
+		struct amd_iommu *iommu;
+
+		if (aviommu->ext_ir_kvm != kvm)
+			continue;
+
+		list_del_init(&aviommu->kvm_ext_ir_node);
+		aviommu->ext_ir_kvm = NULL;
+		spin_unlock_irqrestore(&ext_ir_attached_lock, flags);
+
+		iommu = container_of(aviommu->core.iommu_dev, struct amd_iommu,
+				     iommu);
+		amd_viommu_remove_ext_int_remap_hw(iommu, aviommu);
+
+		spin_lock_irqsave(&ext_ir_attached_lock, flags);
+	}
+	spin_unlock_irqrestore(&ext_ir_attached_lock, flags);
+}
+EXPORT_SYMBOL_GPL(amd_viommu_detach_kvm_ext_int_remap);

@@ -48,6 +48,7 @@ void amd_viommu_remove_ext_int_remap_hw(struct amd_iommu *iommu,
 					struct amd_iommu_viommu *aviommu);
 void amd_viommu_clear_ext_int_remap(struct kvm *kvm, struct amd_iommu *iommu,
 				    struct amd_iommu_viommu *aviommu);
+void amd_viommu_detach_kvm_ext_int_remap(struct kvm *kvm);
 
 #else
 
