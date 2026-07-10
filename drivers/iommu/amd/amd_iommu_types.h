@@ -648,7 +648,7 @@ enum trans_devid_state {
 	TRANS_DEVID_ALLOCATED,
 };
 
-struct amd_iommu_kvmfd_trans_entry {
+struct amd_iommu_kvm_trans_entry {
 	refcount_t refs;
 	u16 trans_devid;
 };
@@ -725,11 +725,14 @@ struct amd_iommu_pci_seg {
 	struct xarray trans_devid_xa;
 
 	/*
-	 * Per-segment kvmfd mapping. The xarray is indexed by the kvmfd.
-	 * Values are struct amd_iommu_kvmfd_trans_entry * or xa_mk_value(trans_devid).
+	 * Per-segment guest (VM) mapping. The xarray is indexed by the host
+	 * struct kvm pointer, which is unique per guest across the host (unlike
+	 * the VMM's KVM fd, whose numeric value is only unique within a single
+	 * VMM process and can collide between guests).
+	 * Values are struct amd_iommu_kvm_trans_entry *.
 	 */
-	struct mutex kvmfd_xa_mutex;
-	struct xarray kvmfd_xa;
+	struct mutex kvm_xa_mutex;
+	struct xarray kvm_xa;
 #endif
 };
 

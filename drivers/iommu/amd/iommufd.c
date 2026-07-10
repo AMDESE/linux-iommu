@@ -165,8 +165,8 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 		goto err_kvmfd;
 	}
 
-	ret = amd_iommu_get_trans_devid_by_kvmfd(iommu->pci_seg, data.kvmfd,
-						 &trans_devid);
+	ret = amd_iommu_get_trans_devid_by_kvm(iommu->pci_seg, aviommu->kvm,
+					       &trans_devid);
 	if (ret)
 		goto err_kvmfd;
 
@@ -211,7 +211,7 @@ err_init:
 	if (!amd_viommu_is_secure_guest(aviommu->gid))
 		amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
 	amd_iommu_clear_translate_dte(iommu, aviommu->gid, trans_devid);
-	amd_iommu_free_trans_devid_by_kvmfd(iommu->pci_seg, data.kvmfd);
+	amd_iommu_free_trans_devid_by_kvm(iommu->pci_seg, aviommu->kvm);
 err_kvmfd:
 	iommufd_viommu_destroy_mmap(&aviommu->core, data.out_vfmmio_mmap_offset);
 err_mmap:
@@ -246,7 +246,7 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 
 	amd_viommu_uninit_one(iommu, aviommu);
 	gid_free(aviommu->gid);
-	amd_iommu_free_trans_devid_by_kvmfd(iommu->pci_seg, aviommu->kvmfd);
+	amd_iommu_free_trans_devid_by_kvm(iommu->pci_seg, aviommu->kvm);
 }
 
 /*

@@ -233,10 +233,10 @@ void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg);
 int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id);
 int amd_iommu_trans_devid_reserve_pci_aliases(struct amd_iommu *iommu,
 					      struct device *dev);
-int amd_iommu_get_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg,
-				       u32 kvmfd, u16 *trans_devid);
-void amd_iommu_free_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg,
-					 u32 kvmfd);
+int amd_iommu_get_trans_devid_by_kvm(struct amd_iommu_pci_seg *pci_seg,
+				     void *kvm, u16 *trans_devid);
+void amd_iommu_free_trans_devid_by_kvm(struct amd_iommu_pci_seg *pci_seg,
+				       void *kvm);
 
 void amd_iommu_set_translate_dte(struct amd_iommu *iommu, u16 gid,
 				 struct protection_domain *pdom,
