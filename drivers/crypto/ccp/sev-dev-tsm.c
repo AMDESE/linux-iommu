@@ -617,7 +617,7 @@ static void tdi_unbind(struct pci_tdi *tdi)
 		pci_notice(pdev, "Sharing %s %llx..%llx\n",
 			   res->name ? res->name : "(null)", res->start, res->end);
 		for (resource_size_t off = res->start; off < res->end; off += PAGE_SIZE)
-			rmp_make_shared(off >> PAGE_SHIFT, PG_LEVEL_4K);
+			rmp_make_shared_mmio(off >> PAGE_SHIFT);
 	}
 
 	kfree(ttdi);
