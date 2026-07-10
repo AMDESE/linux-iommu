@@ -36,8 +36,8 @@ void amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg)
 {
 	mutex_init(&pci_seg->trans_devid_mutex);
 	xa_init(&pci_seg->trans_devid_xa);
-	mutex_init(&pci_seg->kvmfd_xa_mutex);
-	xa_init(&pci_seg->kvmfd_xa);
+	mutex_init(&pci_seg->kvm_xa_mutex);
+	xa_init(&pci_seg->kvm_xa);
 }
 
 void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
@@ -45,23 +45,23 @@ void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
 	unsigned long index = 0;
 	void *e;
 
-	while ((e = xa_find(&pci_seg->kvmfd_xa, &index, ULONG_MAX, XA_PRESENT))) {
+	while ((e = xa_find(&pci_seg->kvm_xa, &index, ULONG_MAX, XA_PRESENT))) {
 		unsigned long cur = index;
 
 		if (xa_is_value(e))
 			trans_devid_free(pci_seg, (u16)xa_to_value(e));
 		else {
-			struct amd_iommu_kvmfd_trans_entry *entry = e;
+			struct amd_iommu_kvm_trans_entry *entry = e;
 
 			trans_devid_free(pci_seg, entry->trans_devid);
 			kfree(entry);
 		}
-		xa_erase(&pci_seg->kvmfd_xa, cur);
+		xa_erase(&pci_seg->kvm_xa, cur);
 		if (cur == ULONG_MAX)
 			break;
 		index = cur + 1;
 	}
-	xa_destroy(&pci_seg->kvmfd_xa);
+	xa_destroy(&pci_seg->kvm_xa);
 	xa_destroy(&pci_seg->trans_devid_xa);
 }
 
@@ -207,28 +207,31 @@ out:
 }
 
 /**
- * amd_iommu_get_trans_devid_by_kvmfd - look up or allocate trans_devid for @kvmfd
+ * amd_iommu_get_trans_devid_by_kvm - look up or allocate trans_devid for @kvm
  *
- * If an entry already exists for @kvmfd, bumps its refcount and returns the same
+ * If an entry already exists for @kvm, bumps its refcount and returns the same
  * @trans_devid. Otherwise allocates a new translate devid, inserts an entry with
  * refcount 1, and returns it.
  *
- * Note: Each translate-device-id is allocated per VM (kvmfd) since there is one
+ * Note: Each translate-device-id is allocated per VM since there is one
  * GPA->SPA mapping per VM. In case of multiple vIOMMUs, all vIOMMUs share the same
- * translate-device-id.
+ * translate-device-id. The map is keyed by the host struct kvm pointer, which is
+ * unique per guest across the host (the VMM's KVM fd number is only unique within
+ * a single VMM process and can collide between guests).
  *
  * Return: 0 on success, %-ENOMEM on allocation failure, %-EIO if the map holds an
  * unexpected entry type.
  */
-int amd_iommu_get_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg, u32 kvmfd,
-				       u16 *trans_devid)
+int amd_iommu_get_trans_devid_by_kvm(struct amd_iommu_pci_seg *pci_seg, void *kvm,
+				     u16 *trans_devid)
 {
-	struct amd_iommu_kvmfd_trans_entry *entry;
+	unsigned long key = (unsigned long)kvm;
+	struct amd_iommu_kvm_trans_entry *entry;
 	void *prev;
 	int id, ret = 0;
 
-	mutex_lock(&pci_seg->kvmfd_xa_mutex);
-	entry = xa_load(&pci_seg->kvmfd_xa, kvmfd);
+	mutex_lock(&pci_seg->kvm_xa_mutex);
+	entry = xa_load(&pci_seg->kvm_xa, key);
 	if (entry) {
 		if (WARN_ON_ONCE(xa_is_value(entry))) {
 			ret = -EIO;
@@ -236,15 +239,15 @@ int amd_iommu_get_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg, u32 kv
 		}
 		refcount_inc(&entry->refs);
 		*trans_devid = entry->trans_devid;
-		pr_debug("%s: Got trans_devid %#x for kvmfd %#x (seg %#x)\n",
-			 __func__, *trans_devid, kvmfd, pci_seg->id);
+		pr_debug("%s: Got trans_devid %#x for kvm %p (seg %#x)\n",
+			 __func__, *trans_devid, kvm, pci_seg->id);
 		goto out_unlock;
 	}
 
 	id = trans_devid_alloc(pci_seg);
 	if (id < 0) {
-		pr_err("%s: Failed to allocate trans_devid (kvmfd=%#x seg=%#x err=%d)\n",
-		       __func__, kvmfd, pci_seg->id, id);
+		pr_err("%s: Failed to allocate trans_devid (kvm=%p seg=%#x err=%d)\n",
+		       __func__, kvm, pci_seg->id, id);
 		ret = id;
 		goto out_unlock;
 	}
@@ -259,7 +262,7 @@ int amd_iommu_get_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg, u32 kv
 	refcount_set(&entry->refs, 1);
 	entry->trans_devid = id;
 
-	prev = xa_store(&pci_seg->kvmfd_xa, kvmfd, entry, GFP_KERNEL);
+	prev = xa_store(&pci_seg->kvm_xa, key, entry, GFP_KERNEL);
 	if (xa_is_err(prev)) {
 		ret = xa_err(prev);
 		kfree(entry);
@@ -269,49 +272,50 @@ int amd_iommu_get_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg, u32 kv
 	WARN_ON_ONCE(prev);
 
 	*trans_devid = id;
-	pr_debug("%s: Allocated trans_devid %#x for kvmfd %#x (seg %#x)\n",
-		 __func__, id, kvmfd, pci_seg->id);
+	pr_debug("%s: Allocated trans_devid %#x for kvm %p (seg %#x)\n",
+		 __func__, id, kvm, pci_seg->id);
 
 out_unlock:
-	mutex_unlock(&pci_seg->kvmfd_xa_mutex);
+	mutex_unlock(&pci_seg->kvm_xa_mutex);
 	return ret;
 }
 
 /**
- * amd_iommu_free_trans_devid_by_kvmfd - drop one reference for @kvmfd
+ * amd_iommu_free_trans_devid_by_kvm - drop one reference for @kvm
  *
- * Decrements the per-kvmfd refcount. The translate devid is returned to the
+ * Decrements the per-VM refcount. The translate devid is returned to the
  * segment pool and the map entry is removed only when the refcount reaches zero.
  */
-void amd_iommu_free_trans_devid_by_kvmfd(struct amd_iommu_pci_seg *pci_seg, u32 kvmfd)
+void amd_iommu_free_trans_devid_by_kvm(struct amd_iommu_pci_seg *pci_seg, void *kvm)
 {
-	struct amd_iommu_kvmfd_trans_entry *entry;
+	unsigned long key = (unsigned long)kvm;
+	struct amd_iommu_kvm_trans_entry *entry;
 	u16 tid;
 
-	mutex_lock(&pci_seg->kvmfd_xa_mutex);
-	entry = xa_load(&pci_seg->kvmfd_xa, kvmfd);
+	mutex_lock(&pci_seg->kvm_xa_mutex);
+	entry = xa_load(&pci_seg->kvm_xa, key);
 	if (!entry) {
-		mutex_unlock(&pci_seg->kvmfd_xa_mutex);
+		mutex_unlock(&pci_seg->kvm_xa_mutex);
 		return;
 	}
 
 	if (WARN_ON_ONCE(xa_is_value(entry))) {
-		mutex_unlock(&pci_seg->kvmfd_xa_mutex);
+		mutex_unlock(&pci_seg->kvm_xa_mutex);
 		return;
 	}
 
 	if (!refcount_dec_and_test(&entry->refs)) {
-		pr_debug("%s: kvmfd %#x, trans_devid %#x (seg %#x)\n",
-			 __func__, kvmfd, entry->trans_devid, pci_seg->id);
-		mutex_unlock(&pci_seg->kvmfd_xa_mutex);
+		pr_debug("%s: kvm %p, trans_devid %#x (seg %#x)\n",
+			 __func__, kvm, entry->trans_devid, pci_seg->id);
+		mutex_unlock(&pci_seg->kvm_xa_mutex);
 		return;
 	}
 
 	tid = entry->trans_devid;
 	trans_devid_free(pci_seg, tid);
-	xa_erase(&pci_seg->kvmfd_xa, kvmfd);
+	xa_erase(&pci_seg->kvm_xa, key);
 	kfree(entry);
-	mutex_unlock(&pci_seg->kvmfd_xa_mutex);
-	pr_debug("%s: Freed trans_devid %#x for kvmfd %#x (seg %#x)\n", __func__, tid,
-		 kvmfd, pci_seg->id);
+	mutex_unlock(&pci_seg->kvm_xa_mutex);
+	pr_debug("%s: Freed trans_devid %#x for kvm %p (seg %#x)\n", __func__, tid,
+		 kvm, pci_seg->id);
 }
