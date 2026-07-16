@@ -3238,9 +3238,10 @@ static void set_dte_irq_entry(struct amd_iommu *iommu, u16 devid,
 	u64 new;
 	struct dev_table_entry *dte = &get_dev_table(iommu)[devid];
 	struct iommu_dev_data *dev_data = search_dev_data(iommu, devid);
+	unsigned long flags;
 
 	if (dev_data)
-		spin_lock(&dev_data->dte_lock);
+		spin_lock_irqsave(&dev_data->dte_lock, flags);
 
 	new = READ_ONCE(dte->data[2]);
 	new &= ~DTE_IRQ_PHYS_ADDR_MASK;
@@ -3251,7 +3252,7 @@ static void set_dte_irq_entry(struct amd_iommu *iommu, u16 devid,
 	WRITE_ONCE(dte->data[2], new);
 
 	if (dev_data)
-		spin_unlock(&dev_data->dte_lock);
+		spin_unlock_irqrestore(&dev_data->dte_lock, flags);
 }
 
 static struct irq_remap_table *get_irq_table(struct amd_iommu *iommu, u16 devid)
