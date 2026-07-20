@@ -159,6 +159,15 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	xa_destroy(&aviommu->gdomid_array);
 	iommufd_viommu_destroy_mmap(&aviommu->core, aviommu->vfmmio_mmap_offset);
 	amd_viommu_uninit_one(iommu, aviommu);
+	/*
+	 * Reset this guest's VF MMIO/VFCTRL so the command/event/PPR rings are
+	 * disabled at the hardware. amd_iommufd_viommu_init() resets on the way
+	 * in but destroy did not, leaving an enabled, still-running ring (a
+	 * "zombie" gid with CmdBufRun=1) on the physical IOMMU after the owning
+	 * VMM exits -- visible after a savevm/quit where the source's vIOMMU is
+	 * torn down but its ring keeps running.
+	 */
+	iommu_reset_vmmio(iommu, aviommu->gid);
 
 	mutex_lock(&aviommu->trans_devid_lock);
 	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
