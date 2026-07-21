@@ -785,8 +785,8 @@ int amd_viommu_sviommu_guest_shutdown(struct amd_iommu *iommu,
 
 	ret = ccp_ops->sev_tio_viommu_guest_shutdown(&g);
 	if (ret) {
-		pr_err("%s: sviommu guest shutdown failed (ret=%d), "
-		       "reclaiming firmware pages anyway\n", __func__, ret);
+		pr_err("%s: sviommu guest shutdown failed (ret=%d)\n", __func__, ret);
+		return ret;
 	}
 
 	/*
