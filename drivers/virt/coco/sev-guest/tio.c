@@ -612,6 +612,7 @@ static bool get_range(struct pci_dev *pdev, struct tsm_blob *report, unsigned in
 
 	*range_id = rangeid;
 	*start = r->start + (offset << PAGE_SHIFT);
+	*start = r->start + offset;
 	*size = (u64)mr.num << PAGE_SHIFT;
 
 	return true;
