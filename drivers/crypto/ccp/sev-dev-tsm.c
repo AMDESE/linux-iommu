@@ -633,7 +633,7 @@ static struct pci_tdi *tdi_bind(struct pci_dev *pdev, struct kvm *kvm, u32 tdi_i
 	pci_dev_for_each_resource(pdev, r, i)
 		max_res_len = max(max_res_len, pci_resource_len(pdev, i));
 
-	tdi_data->mmio_reporting_offset = (get_random_u64() & ~(max_res_len - 1) & ~(0xFULL<<60)) >> 12;
+	tdi_data->mmio_reporting_offset = (get_random_u64() & ~(max_res_len - 1) & ~(0xFULL<<60));
 
 	ret = sev_tio_tdi_create(dev_data, tdi_data, pci_dev_id(pdev), dom);
 	if (ret)
