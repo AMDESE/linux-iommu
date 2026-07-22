@@ -12,6 +12,7 @@
 
 #include <linux/kernel.h>
 #include <linux/pci.h>
+#include <linux/seq_file.h>
 #include <linux/xarray.h>
 
 #include "amd_iommu.h"
@@ -327,3 +328,110 @@ void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
 out:
 	mutex_unlock(&pci_seg->trans_devid_mutex);
 }
+
+#if IS_ENABLED(CONFIG_AMD_IOMMU_DEBUGFS)
+
+static void trans_devid_debugfs_show_slot(struct seq_file *m,
+					  struct amd_iommu_pci_seg *pci_seg,
+					  u16 id, void *entry)
+{
+	struct amd_iommu_viommu *aviommu;
+	struct amd_iommu *iommu;
+
+	seq_printf(m, "  %04x:%02x:%02x.%x (devid %04x) ",
+		   pci_seg->id, PCI_BUS_NUM(id), PCI_SLOT(id), PCI_FUNC(id), id);
+
+	if (trans_devid_xa_is_reserved(entry)) {
+		seq_puts(m, "RESERVED\n");
+		return;
+	}
+
+	aviommu = trans_devid_xa_owner(entry);
+	if (!aviommu) {
+		seq_puts(m, "UNKNOWN\n");
+		return;
+	}
+
+	iommu = container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	seq_printf(m, "ALLOCATED gid=%#x iommu=%d trans_devid=%#x",
+		   aviommu->gid, iommu->index, aviommu->trans_devid);
+	if (aviommu->parent)
+		seq_printf(m, " parent_dom=%#x", aviommu->parent->id);
+	seq_putc(m, '\n');
+}
+
+void amd_iommu_trans_devid_debugfs_show_pool(struct seq_file *m)
+{
+	struct amd_iommu_pci_seg *pci_seg;
+
+	for_each_pci_segment(pci_seg) {
+		unsigned long index, reserved = 0, allocated = 0;
+		void *entry;
+		bool empty = true;
+
+		seq_printf(m, "seg %04x:\n", pci_seg->id);
+
+		mutex_lock(&pci_seg->trans_devid_mutex);
+		xa_for_each(&pci_seg->trans_devid_xa, index, entry) {
+			empty = false;
+			if (trans_devid_xa_is_reserved(entry))
+				reserved++;
+			else if (trans_devid_xa_owner(entry))
+				allocated++;
+
+			trans_devid_debugfs_show_slot(m, pci_seg, index, entry);
+		}
+		mutex_unlock(&pci_seg->trans_devid_mutex);
+
+		if (empty)
+			seq_puts(m, "  (empty)\n");
+		seq_printf(m, "  summary: %lu reserved, %lu allocated\n",
+			   reserved, allocated);
+	}
+}
+
+static u16 trans_devid_debugfs_read_vfctrl(struct amd_iommu *iommu, u16 gid)
+{
+	u64 val;
+
+	val = readq(VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) +
+		    VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
+	return (u16)((val >> 16) & 0xffff);
+}
+
+void amd_iommu_trans_devid_debugfs_show_viommus(struct seq_file *m)
+{
+	struct amd_iommu_pci_seg *pci_seg;
+
+	seq_puts(m, "iommu gid trans_devid mmio_trans_devid parent_dom pool_devid\n");
+
+	for_each_pci_segment(pci_seg) {
+		unsigned long index;
+		void *entry;
+
+		mutex_lock(&pci_seg->trans_devid_mutex);
+		xa_for_each(&pci_seg->trans_devid_xa, index, entry) {
+			struct amd_iommu_viommu *aviommu;
+			struct amd_iommu *iommu;
+			u16 mmio_devid;
+
+			aviommu = trans_devid_xa_owner(entry);
+			if (!aviommu)
+				continue;
+
+			iommu = container_of(aviommu->core.iommu_dev,
+					   struct amd_iommu, iommu);
+			mmio_devid = trans_devid_debugfs_read_vfctrl(iommu,
+								     aviommu->gid);
+
+			seq_printf(m, "iommu%d gid=%#x trans_devid=%#x mmio=%#x parent_dom=%#x pool_devid=%#x\n",
+				   iommu->index, aviommu->gid, aviommu->trans_devid,
+				   mmio_devid,
+				   aviommu->parent ? aviommu->parent->id : 0,
+				   (u16)index);
+		}
+		mutex_unlock(&pci_seg->trans_devid_mutex);
+	}
+}
+
+#endif /* CONFIG_AMD_IOMMU_DEBUGFS */

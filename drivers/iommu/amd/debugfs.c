@@ -8,6 +8,7 @@
  */
 
 #include <linux/debugfs.h>
+#include <linux/fs.h>
 #include <linux/pci.h>
 
 #include "amd_iommu.h"
@@ -361,6 +362,147 @@ static int iommu_irqtbl_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(iommu_irqtbl);
 
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+
+/*
+ * Parse seg:B:D.F, B:D.F, or a raw devid hex value.  Returns the PCI segment
+ * and devid if the segment exists and the devid is within IVRS range.
+ */
+static int trans_devid_debugfs_parse_input(const char __user *ubuf, size_t cnt,
+					   struct amd_iommu_pci_seg **pci_seg_out,
+					   u16 *devid_out, bool *aliases_out)
+{
+	struct amd_iommu_pci_seg *pci_seg = NULL;
+	char *srcid_ptr, *aliases_suffix;
+	int seg = 0, bus, slot, func, i, ret;
+	u16 devid;
+
+	*aliases_out = false;
+
+	if (cnt >= DEVID_IN_SZ)
+		return -EINVAL;
+
+	srcid_ptr = memdup_user_nul(ubuf, cnt);
+	if (IS_ERR(srcid_ptr))
+		return PTR_ERR(srcid_ptr);
+
+	aliases_suffix = strstrip(srcid_ptr);
+	if (strlen(aliases_suffix) > 8 &&
+	    !strcmp(aliases_suffix + strlen(aliases_suffix) - 8, " aliases")) {
+		aliases_suffix[strlen(aliases_suffix) - 8] = '\0';
+		*aliases_out = true;
+	}
+
+	i = sscanf(aliases_suffix, "%x:%x:%x.%x", &seg, &bus, &slot, &func);
+	if (i == 4) {
+		devid = PCI_DEVID(bus, PCI_DEVFN(slot, func));
+	} else {
+		i = sscanf(aliases_suffix, "%x:%x.%x", &bus, &slot, &func);
+		if (i == 3) {
+			devid = PCI_DEVID(bus, PCI_DEVFN(slot, func));
+		} else {
+			ret = kstrtou16(aliases_suffix, 0, &devid);
+			if (ret) {
+				kfree(srcid_ptr);
+				return -EINVAL;
+			}
+		}
+	}
+
+	for_each_pci_segment(pci_seg) {
+		if (pci_seg->id == seg)
+			break;
+	}
+	if (!pci_seg || pci_seg->id != seg) {
+		kfree(srcid_ptr);
+		return -EINVAL;
+	}
+
+	if (devid > pci_seg->last_bdf) {
+		kfree(srcid_ptr);
+		return -EINVAL;
+	}
+
+	*pci_seg_out = pci_seg;
+	*devid_out = devid;
+	kfree(srcid_ptr);
+	return 0;
+}
+
+static int trans_devid_pool_show(struct seq_file *m, void *unused)
+{
+	amd_iommu_trans_devid_debugfs_show_pool(m);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(trans_devid_pool);
+
+static int trans_devid_viommus_show(struct seq_file *m, void *unused)
+{
+	amd_iommu_trans_devid_debugfs_show_viommus(m);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(trans_devid_viommus);
+
+static ssize_t trans_devid_reserve_write(struct file *filp, const char __user *ubuf,
+					 size_t cnt, loff_t *ppos)
+{
+	struct amd_iommu_pci_seg *pci_seg;
+	struct amd_iommu *iommu;
+	struct pci_dev *pdev;
+	u16 devid;
+	bool aliases;
+	int ret;
+
+	ret = trans_devid_debugfs_parse_input(ubuf, cnt, &pci_seg, &devid, &aliases);
+	if (ret)
+		return ret;
+
+	if (!aliases) {
+		ret = amd_iommu_trans_devid_reserve(pci_seg, devid);
+		if (ret)
+			return ret;
+
+		pr_info("AMD-Vi: debugfs reserved translate-device-id %#x (seg %#x)\n",
+			devid, pci_seg->id);
+		return cnt;
+	}
+
+	iommu = pci_seg->rlookup_table[devid];
+	if (!iommu)
+		return -ENODEV;
+
+	pdev = pci_get_domain_bus_and_slot(pci_seg->id, PCI_BUS_NUM(devid),
+					   PCI_DEVFN(PCI_SLOT(devid), PCI_FUNC(devid)));
+	if (!pdev)
+		return -ENODEV;
+
+	ret = amd_iommu_trans_devid_reserve_pci_aliases(iommu, &pdev->dev);
+	pci_dev_put(pdev);
+	if (ret)
+		return ret;
+
+	pr_info("AMD-Vi: debugfs reserved translate-device-id aliases for %#x (seg %#x)\n",
+		devid, pci_seg->id);
+	return cnt;
+}
+
+static const struct file_operations trans_devid_reserve_fops = {
+	.write = trans_devid_reserve_write,
+	.llseek = noop_llseek,
+};
+
+static void amd_iommu_trans_devid_debugfs_setup(struct dentry *parent)
+{
+	struct dentry *dir;
+
+	dir = debugfs_create_dir("trans_devid", parent);
+	debugfs_create_file("pool", 0444, dir, NULL, &trans_devid_pool_fops);
+	debugfs_create_file("reserve", 0200, dir, NULL, &trans_devid_reserve_fops);
+	debugfs_create_file("viommus", 0444, dir, NULL, &trans_devid_viommus_fops);
+}
+
+#endif /* CONFIG_AMD_IOMMU_IOMMUFD */
+
 void amd_iommu_debugfs_setup(void)
 {
 	struct amd_iommu *iommu;
@@ -389,4 +531,8 @@ void amd_iommu_debugfs_setup(void)
 			    &iommu_devtbl_fops);
 	debugfs_create_file("irqtbl", 0444, amd_iommu_debugfs, NULL,
 			    &iommu_irqtbl_fops);
+
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+	amd_iommu_trans_devid_debugfs_setup(amd_iommu_debugfs);
+#endif
 }
