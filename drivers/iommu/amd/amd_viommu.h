@@ -47,6 +47,14 @@ int amd_iommu_trans_devid_alloc(struct amd_iommu_pci_seg *pci_seg,
 				struct amd_iommu_viommu *aviommu);
 void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
 				struct amd_iommu_viommu *aviommu);
+#if IS_ENABLED(CONFIG_AMD_IOMMU_DEBUGFS) && IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+void amd_iommu_trans_devid_debugfs_show_pool(struct seq_file *m);
+void amd_iommu_trans_devid_debugfs_show_viommus(struct seq_file *m);
+int amd_iommu_trans_devid_debugfs_reserve(struct amd_iommu_pci_seg *pci_seg,
+					  u16 id);
+int amd_iommu_trans_devid_debugfs_reserve_pci_aliases(struct amd_iommu *iommu,
+						      struct device *dev);
+#endif
 
 struct iommufd_hw_queue;
 
