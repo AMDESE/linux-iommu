@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/pci.h>
 #include <linux/sched.h>
+#include <linux/seq_file.h>
 #include <linux/xarray.h>
 
 #include "amd_iommu.h"
@@ -216,7 +217,8 @@ unlock_seg:
  * Return: 0 on success, %-ENOSPC if relocation cannot find a free id, or another
  * errno from relocation.  A second reserve of an already-reserved @id succeeds.
  */
-int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id)
+static int trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id,
+			       bool allow_relocate)
 {
 	void *entry;
 	struct amd_iommu_viommu *aviommu;
@@ -230,6 +232,10 @@ retry:
 
 	aviommu = trans_devid_xa_owner(entry);
 	if (aviommu) {
+		if (!allow_relocate) {
+			ret = -EBUSY;
+			goto unlock;
+		}
 		/*
 		 * Pin aviommu with trylock while the mutex still covers
 		 * the xarray pointer. A blocking lock here would invert
@@ -262,13 +268,23 @@ unlock:
 	return ret;
 }
 
+int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id)
+{
+	return trans_devid_reserve(pci_seg, id, true);
+}
+
+struct trans_devid_reserve_alias_ctx {
+	struct amd_iommu_pci_seg *pci_seg;
+	bool allow_relocate;
+};
+
 static int reserve_trans_devid_each_dma_alias(struct pci_dev *pdev, u16 alias,
 					      void *data)
 {
-	struct amd_iommu_pci_seg *pci_seg = data;
+	struct trans_devid_reserve_alias_ctx *ctx = data;
 
 	(void)pdev;
-	return amd_iommu_trans_devid_reserve(pci_seg, alias);
+	return trans_devid_reserve(ctx->pci_seg, alias, ctx->allow_relocate);
 }
 
 /**
@@ -283,6 +299,7 @@ static int reserve_trans_devid_each_dma_alias(struct pci_dev *pdev, u16 alias,
 int amd_iommu_trans_devid_reserve_pci_aliases(struct amd_iommu *iommu,
 					      struct device *dev)
 {
+	struct trans_devid_reserve_alias_ctx ctx;
 	struct pci_dev *pdev;
 	struct amd_iommu_pci_seg *pci_seg;
 	u16 devid, ivrs_alias;
@@ -294,16 +311,18 @@ int amd_iommu_trans_devid_reserve_pci_aliases(struct amd_iommu *iommu,
 	pdev = to_pci_dev(dev);
 	pci_seg = iommu->pci_seg;
 	devid = pci_dev_id(pdev);
+	ctx.pci_seg = pci_seg;
+	ctx.allow_relocate = true;
 
 	ivrs_alias = pci_seg->alias_table[devid];
 	if (ivrs_alias != devid) {
-		ret = amd_iommu_trans_devid_reserve(pci_seg, ivrs_alias);
+		ret = trans_devid_reserve(pci_seg, ivrs_alias, true);
 		if (ret)
 			return ret;
 	}
 
 	return pci_for_each_dma_alias(pdev, reserve_trans_devid_each_dma_alias,
-				      pci_seg);
+				      &ctx);
 }
 
 /**
@@ -371,3 +390,156 @@ void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
 out:
 	mutex_unlock(&pci_seg->trans_devid_mutex);
 }
+
+#if IS_ENABLED(CONFIG_AMD_IOMMU_DEBUGFS) && IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+
+static void trans_devid_debugfs_show_slot(struct seq_file *m,
+					  struct amd_iommu_pci_seg *pci_seg,
+					  u16 id, void *entry)
+{
+	struct amd_iommu_viommu *aviommu;
+	struct amd_iommu *iommu;
+
+	seq_printf(m, "  %04x:%02x:%02x.%x (devid %04x) ",
+		   pci_seg->id, PCI_BUS_NUM(id), PCI_SLOT(id), PCI_FUNC(id), id);
+
+	if (trans_devid_xa_is_reserved(entry)) {
+		seq_puts(m, "RESERVED\n");
+		return;
+	}
+
+	aviommu = trans_devid_xa_owner(entry);
+	if (!aviommu) {
+		seq_puts(m, "UNKNOWN\n");
+		return;
+	}
+
+	iommu = container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	seq_printf(m, "ALLOCATED gid=%#x iommu=%d trans_devid=%#x",
+		   aviommu->gid, iommu->index, aviommu->trans_devid);
+	if (aviommu->parent)
+		seq_printf(m, " parent_dom=%#x", aviommu->parent->id);
+	seq_putc(m, '\n');
+}
+
+void amd_iommu_trans_devid_debugfs_show_pool(struct seq_file *m)
+{
+	struct amd_iommu_pci_seg *pci_seg;
+
+	for_each_pci_segment(pci_seg) {
+		unsigned long index, reserved = 0, allocated = 0;
+		void *entry;
+		bool empty = true;
+
+		seq_printf(m, "seg %04x:\n", pci_seg->id);
+
+		mutex_lock(&pci_seg->trans_devid_mutex);
+		xa_for_each(&pci_seg->trans_devid_xa, index, entry) {
+			empty = false;
+			if (trans_devid_xa_is_reserved(entry))
+				reserved++;
+			else if (trans_devid_xa_owner(entry))
+				allocated++;
+
+			trans_devid_debugfs_show_slot(m, pci_seg, index, entry);
+		}
+		mutex_unlock(&pci_seg->trans_devid_mutex);
+
+		if (empty)
+			seq_puts(m, "  (empty)\n");
+		seq_printf(m, "  summary: %lu reserved, %lu allocated\n",
+			   reserved, allocated);
+	}
+}
+
+static u16 trans_devid_debugfs_read_vfctrl(struct amd_iommu *iommu, u16 gid)
+{
+	u64 val;
+
+	/*
+	 * Diagnostic only. A concurrent relocate can tear this read;
+	 * do not take trans_devid_lock here (would invert lock order
+	 * with the segment mutex held by the caller).
+	 */
+	val = readq(VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) +
+		    VIOMMU_VFCTRL_GUEST_MISC_CONTROL_OFFSET);
+	return (u16)((val >> 16) & 0xffff);
+}
+
+void amd_iommu_trans_devid_debugfs_show_viommus(struct seq_file *m)
+{
+	struct amd_iommu_pci_seg *pci_seg;
+
+	seq_puts(m, "iommu gid trans_devid mmio_trans_devid parent_dom pool_devid\n");
+
+	for_each_pci_segment(pci_seg) {
+		unsigned long index;
+		void *entry;
+
+		mutex_lock(&pci_seg->trans_devid_mutex);
+		xa_for_each(&pci_seg->trans_devid_xa, index, entry) {
+			struct amd_iommu_viommu *aviommu;
+			struct amd_iommu *iommu;
+
+			aviommu = trans_devid_xa_owner(entry);
+			if (!aviommu)
+				continue;
+
+			iommu = container_of(aviommu->core.iommu_dev,
+					   struct amd_iommu, iommu);
+			if (!iommu->vfctrl_base) {
+				seq_printf(m, "iommu%d gid=%#x trans_devid=%#x mmio=n/a parent_dom=%#x pool_devid=%#x\n",
+					   iommu->index, aviommu->gid,
+					   aviommu->trans_devid,
+					   aviommu->parent ? aviommu->parent->id : 0,
+					   (u16)index);
+				continue;
+			}
+
+			seq_printf(m, "iommu%d gid=%#x trans_devid=%#x mmio=%#x parent_dom=%#x pool_devid=%#x\n",
+				   iommu->index, aviommu->gid, aviommu->trans_devid,
+				   trans_devid_debugfs_read_vfctrl(iommu,
+								   aviommu->gid),
+				   aviommu->parent ? aviommu->parent->id : 0,
+				   (u16)index);
+		}
+		mutex_unlock(&pci_seg->trans_devid_mutex);
+	}
+}
+
+int amd_iommu_trans_devid_debugfs_reserve(struct amd_iommu_pci_seg *pci_seg,
+					  u16 id)
+{
+	return trans_devid_reserve(pci_seg, id, false);
+}
+
+int amd_iommu_trans_devid_debugfs_reserve_pci_aliases(struct amd_iommu *iommu,
+						      struct device *dev)
+{
+	struct trans_devid_reserve_alias_ctx ctx;
+	struct pci_dev *pdev;
+	struct amd_iommu_pci_seg *pci_seg;
+	u16 devid, ivrs_alias;
+	int ret;
+
+	if (!dev_is_pci(dev))
+		return 0;
+
+	pdev = to_pci_dev(dev);
+	pci_seg = iommu->pci_seg;
+	devid = pci_dev_id(pdev);
+	ctx.pci_seg = pci_seg;
+	ctx.allow_relocate = false;
+
+	ivrs_alias = pci_seg->alias_table[devid];
+	if (ivrs_alias != devid) {
+		ret = trans_devid_reserve(pci_seg, ivrs_alias, false);
+		if (ret)
+			return ret;
+	}
+
+	return pci_for_each_dma_alias(pdev, reserve_trans_devid_each_dma_alias,
+				      &ctx);
+}
+
+#endif /* CONFIG_AMD_IOMMU_DEBUGFS && CONFIG_AMD_IOMMU_IOMMUFD */
