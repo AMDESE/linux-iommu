@@ -229,6 +229,10 @@ int amd_iommu_trans_devid_alloc(struct amd_iommu_pci_seg *pci_seg,
 				struct amd_iommu_viommu *aviommu);
 void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
 				struct amd_iommu_viommu *aviommu);
+#if IS_ENABLED(CONFIG_AMD_IOMMU_DEBUGFS)
+void amd_iommu_trans_devid_debugfs_show_pool(struct seq_file *m);
+void amd_iommu_trans_devid_debugfs_show_viommus(struct seq_file *m);
+#endif
 #else
 static inline void
 amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg) { }
