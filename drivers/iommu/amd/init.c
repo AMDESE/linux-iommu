@@ -1737,6 +1737,8 @@ static struct amd_iommu_pci_seg *__init alloc_pci_segment(u16 id,
 	if (alloc_rlookup_table(pci_seg))
 		goto err_free_alias_table;
 
+	amd_iommu_pci_seg_trans_devid_init(pci_seg);
+
 	return pci_seg;
 
 err_free_alias_table:
@@ -1768,6 +1770,7 @@ static void __init free_pci_segments(void)
 
 	for_each_pci_segment_safe(pci_seg, next) {
 		list_del(&pci_seg->list);
+		amd_iommu_pci_seg_trans_devid_fini(pci_seg);
 		free_irq_lookup_table(pci_seg);
 		free_rlookup_table(pci_seg);
 		free_alias_table(pci_seg);
