@@ -1972,7 +1972,8 @@ out_err:
 
 struct sev_data_tio_viommu {
 	u32 length;		/* In */
-	u32 reserved1;
+	u8  reserved1[3];
+	u8  version;
 	u16 pci_segid;		/* In */
 	u16 iommu_devid;	/* In */
 	u32 reserved2;
@@ -2082,7 +2083,8 @@ static struct kvm_sev_info *get_sev_info_from_kvm(void *kvm_ptr)
 
 struct sev_data_tio_viommu_guest_init {
 	u32 length;		/* In */
-	u32 reserved1;
+	u8  reserved1[3];
+	u8  version;
 	u64 gctx_paddr;		/* In */
 	u16 pci_segid;		/* In */
 	u16 iommu_devid;	/* In: Host IOMMU devid */
@@ -2180,7 +2182,8 @@ err_out_devid:
 
 struct sev_data_tio_viommu_guest_shutdown {
 	u32 length;		/* In */
-	u32 reserved1;
+	u8  reserved1[3];
+	u8  version;
 	u64 gctx_paddr;		/* In */
 	u16 pci_segid;		/* In */
 	u16 iommu_devid;	/* In */
