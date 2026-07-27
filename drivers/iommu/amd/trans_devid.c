@@ -12,6 +12,7 @@
 
 #include <linux/kernel.h>
 #include <linux/pci.h>
+#include <linux/sched.h>
 #include <linux/xarray.h>
 
 #include "amd_iommu.h"
@@ -89,6 +90,118 @@ void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
 	mutex_destroy(&pci_seg->trans_devid_mutex);
 }
 
+/**
+ * trans_devid_do_relocate - move vIOMMU translation DTE from @old_id to @new_id
+ *
+ * Caller holds @aviommu->trans_devid_lock.  Pool xarray already records @new_id
+ * as allocated to @aviommu and @old_id as reserved.
+ *
+ * amd_iommu_set_translate_dte() cannot fail here: trans_dev_data is
+ * allocated in the same trans_devid_lock section as the xarray owner
+ * and is only cleared with trans_devid_free(). A later failure after
+ * the new DTE is programmed must clear that DTE before the pool drops
+ * @new_id.
+ */
+static int trans_devid_do_relocate(struct amd_iommu_viommu *aviommu,
+				   u16 old_id, u16 new_id)
+{
+	struct iommufd_viommu *viommu = &aviommu->core;
+	struct amd_iommu *iommu =
+		container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	int ret;
+
+	aviommu->trans_devid = new_id;
+
+	ret = amd_iommu_set_translate_dte(viommu);
+	if (ret)
+		goto err_restore_id;
+
+	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, new_id);
+
+	amd_iommu_clear_translate_dte(iommu, aviommu->trans_dev_data, old_id);
+
+	return 0;
+
+err_restore_id:
+	aviommu->trans_devid = old_id;
+	return ret;
+}
+
+/**
+ * trans_devid_relocate - move an allocated id to a new slot and reserve @from_id
+ *
+ * Called when PCI probe needs a BDF that a vIOMMU already owns.  Updates the
+ * per-segment pool, then reprograms DTE and VFctrl on the owning vIOMMU.
+ *
+ * Locking: caller holds @aviommu->trans_devid_lock and
+ * pci_seg->trans_devid_mutex.  Hardware steps run with the viommu lock
+ * held and the segment mutex dropped.
+ */
+static int trans_devid_relocate(struct amd_iommu_pci_seg *pci_seg, u16 from_id,
+				struct amd_iommu_viommu *aviommu)
+{
+	void *old;
+	int new_id, ret;
+
+	if (trans_devid_xa_owner(xa_load(&pci_seg->trans_devid_xa, from_id)) !=
+	    aviommu) {
+		ret = -ENOENT;
+		goto unlock_seg;
+	}
+
+	if (aviommu->trans_devid != from_id) {
+		ret = -EINVAL;
+		goto unlock_seg;
+	}
+
+	new_id = trans_devid_find_free_locked(pci_seg);
+	if (new_id < 0) {
+		ret = new_id;
+		goto unlock_seg;
+	}
+
+	ret = trans_devid_xa_install_allocated_locked(pci_seg, new_id, aviommu);
+	if (ret)
+		goto unlock_seg;
+
+	/*
+	 * Replace ALLOCATED with RESERVED in place. install_reserved
+	 * WARNs on a non-NULL old entry; do not erase first or a failed
+	 * store would leave from_id FREE while hardware still uses it.
+	 */
+	old = xa_store(&pci_seg->trans_devid_xa, from_id,
+		       trans_devid_xa_mk_reserved(), GFP_KERNEL);
+	if (xa_is_err(old)) {
+		xa_erase(&pci_seg->trans_devid_xa, new_id);
+		ret = xa_err(old);
+		goto unlock_seg;
+	}
+	WARN_ON_ONCE(trans_devid_xa_owner(old) != aviommu);
+
+	mutex_unlock(&pci_seg->trans_devid_mutex);
+
+	ret = trans_devid_do_relocate(aviommu, from_id, new_id);
+	if (ret) {
+		mutex_lock(&pci_seg->trans_devid_mutex);
+		xa_erase(&pci_seg->trans_devid_xa, new_id);
+		old = xa_store(&pci_seg->trans_devid_xa, from_id, aviommu,
+			       GFP_KERNEL);
+		if (xa_is_err(old))
+			ret = xa_err(old);
+		else
+			WARN_ON_ONCE(!trans_devid_xa_is_reserved(old));
+		mutex_unlock(&pci_seg->trans_devid_mutex);
+	}
+
+	mutex_unlock(&aviommu->trans_devid_lock);
+	return ret;
+
+unlock_seg:
+	mutex_unlock(&pci_seg->trans_devid_mutex);
+	mutex_unlock(&aviommu->trans_devid_lock);
+	return ret;
+}
+
 /*
  * amd_iommu_trans_devid_reserve - occupy @id so it is never returned by alloc
  *
@@ -96,17 +209,48 @@ void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
  * It is not released from amd_iommu_release_device(); the slot stays
  * reserved for the pci_seg lifetime so replug cannot race later alloc.
  *
- * Return: 0 on success.  A second reserve of an already-reserved @id succeeds.
+ * When @id is allocated to a vIOMMU (e.g. after PCI hot-plug), the driver relocates
+ * that vIOMMU to a newly allocated translate-device-id and reserves @id for the PCI
+ * function.
+ *
+ * Return: 0 on success, %-ENOSPC if relocation cannot find a free id, or another
+ * errno from relocation.  A second reserve of an already-reserved @id succeeds.
  */
 int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id)
 {
 	void *entry;
+	struct amd_iommu_viommu *aviommu;
 	int ret = 0;
 
+retry:
 	mutex_lock(&pci_seg->trans_devid_mutex);
 	entry = xa_load(&pci_seg->trans_devid_xa, id);
 	if (trans_devid_xa_is_reserved(entry))
 		goto unlock;
+
+	aviommu = trans_devid_xa_owner(entry);
+	if (aviommu) {
+		/*
+		 * Pin aviommu with trylock while the mutex still covers
+		 * the xarray pointer. A blocking lock here would invert
+		 * the nested order (ABBA with destroy). Dropping the
+		 * mutex first would UAF if destroy frees aviommu.
+		 *
+		 * No retry bound. cond_resched() avoids a soft lockup;
+		 * progress is this owner dropping trans_devid_lock or
+		 * freeing the slot.
+		 */
+		if (!mutex_trylock(&aviommu->trans_devid_lock)) {
+			mutex_unlock(&pci_seg->trans_devid_mutex);
+			cond_resched();
+			goto retry;
+		}
+		ret = trans_devid_relocate(pci_seg, id, aviommu);
+		if (!ret)
+			pr_debug("%s: Reserved trans_devid %#x after relocation (seg %#x)\n",
+				 __func__, id, pci_seg->id);
+		return ret;
+	}
 
 	ret = trans_devid_xa_install_reserved_locked(pci_seg, id);
 unlock:

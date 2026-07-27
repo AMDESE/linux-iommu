@@ -558,11 +558,15 @@ struct amd_iommu_viommu {
 
 	/*
 	 * Serializes this vIOMMU's translation DTE and VFctrl TransDevID
-	 * updates on init and teardown. VFctrl TransDevID is not written
-	 * from amd_viommu_uninit_one().
+	 * updates on init and teardown against PCI-probe relocation, which
+	 * may reprogram the same registers to a newly allocated id.
+	 * VFctrl TransDevID is not written from amd_viommu_uninit_one().
 	 *
 	 * Nested lock order: trans_devid_lock, then
-	 * pci_seg->trans_devid_mutex.
+	 * pci_seg->trans_devid_mutex (same as destroy). Relocate drops
+	 * the segment mutex around the MMIO updates. Reserve holds the
+	 * segment mutex and mutex_trylock()s trans_devid_lock so the
+	 * aviommu pointer stays valid without reversing lock order.
 	 */
 	struct mutex trans_devid_lock;
 
