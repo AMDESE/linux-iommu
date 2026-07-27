@@ -557,6 +557,16 @@ struct amd_iommu_viommu {
 	struct iommu_dev_data *trans_dev_data;
 
 	/*
+	 * Serializes this vIOMMU's translation DTE and VFctrl TransDevID
+	 * updates on init and teardown. VFctrl TransDevID is not written
+	 * from amd_viommu_uninit_one().
+	 *
+	 * Nested lock order: trans_devid_lock, then
+	 * pci_seg->trans_devid_mutex.
+	 */
+	struct mutex trans_devid_lock;
+
+	/*
 	 * Serializes VFCTRL Guest DID map CONTROL0/CONTROL1 doorbells
 	 * (DevID and DomID table updates) for this gid. Those registers
 	 * are shared by every vDevice on this vIOMMU; igroup locks are
