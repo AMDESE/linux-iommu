@@ -28,6 +28,10 @@ void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
 
 void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
 				   u16 hdev_id, u16 gdev_id);
+
+void amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg);
+void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg);
+int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id);
 #else
 
 /*
@@ -56,6 +60,22 @@ static inline void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviomm
 
 static inline void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
 						      u16 hdom_id, u16 gdom_id)
+{
+}
+
+static inline void
+amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg)
+{
+}
+
+static inline int
+amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id)
+{
+	return 0;
+}
+
+static inline void
+amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg)
 {
 }
 

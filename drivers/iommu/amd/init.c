@@ -1747,6 +1747,7 @@ static struct amd_iommu_pci_seg *__init alloc_pci_segment(u16 id,
 	xa_init(&pci_seg->dev_data_xa);
 	INIT_LIST_HEAD(&pci_seg->unity_map);
 	list_add_tail(&pci_seg->list, &amd_iommu_pci_seg_list);
+	amd_iommu_pci_seg_trans_devid_init(pci_seg);
 
 	if (alloc_dev_table(pci_seg))
 		goto err_free_pci_seg;
@@ -1763,6 +1764,7 @@ err_free_dev_table:
 	free_dev_table(pci_seg);
 err_free_pci_seg:
 	list_del(&pci_seg->list);
+	amd_iommu_pci_seg_trans_devid_fini(pci_seg);
 	xa_destroy(&pci_seg->dev_data_xa);
 	kfree(pci_seg);
 	return NULL;
@@ -1787,6 +1789,7 @@ static void __init free_pci_segments(void)
 
 	for_each_pci_segment_safe(pci_seg, next) {
 		list_del(&pci_seg->list);
+		amd_iommu_pci_seg_trans_devid_fini(pci_seg);
 		xa_destroy(&pci_seg->dev_data_xa);
 		free_irq_lookup_table(pci_seg);
 		free_rlookup_table(pci_seg);
@@ -2006,8 +2009,18 @@ static int __init init_iommu_one_late(struct amd_iommu *iommu)
 	/*
 	 * Make sure IOMMU is not considered to translate itself. The IVRS
 	 * table tells us so, but this is a lie!
+	 *
+	 * Clearing rlookup keeps this function off amd_iommu_probe_device(),
+	 * so its devid is never reserved there. The vIOMMU self DTE is
+	 * still programmed at iommu->devid. Reserve it here so translate-id
+	 * alloc does not treat the empty xarray slot as free.
 	 */
 	iommu->pci_seg->rlookup_table[iommu->devid] = NULL;
+	ret = amd_iommu_trans_devid_reserve(iommu->pci_seg, iommu->devid);
+	if (ret) {
+		pr_err("Failed to reserve IOMMU devid %#x\n", iommu->devid);
+		return ret;
+	}
 
 	return 0;
 }

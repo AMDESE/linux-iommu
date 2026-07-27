@@ -110,6 +110,9 @@ static int viommu_alloc_self_dev_data(struct amd_iommu *iommu)
 	 * Synthetic DTE for iommu->devid only: no struct device, so
 	 * amd_iommu_update_dte() skips clone_aliases(), and not on
 	 * pdom->dev_list (not an IOMMU-API attach).
+	 *
+	 * init_iommu_one_late() reserves this devid. rlookup is NULL, so
+	 * probe never runs, and alloc must not reuse the self DTE slot.
 	 */
 	dev_data->dev = NULL;
 	dev_data->domain = pdom;

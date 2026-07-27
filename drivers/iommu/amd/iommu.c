@@ -2738,6 +2738,25 @@ static struct iommu_device *amd_iommu_probe_device(struct device *dev)
 	if (dev_is_pci(dev))
 		pci_prepare_ats(to_pci_dev(dev), PAGE_SHIFT);
 
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+	/*
+	 * Occupy this RID in the per-segment translate-device-id pool
+	 * so vIOMMU alloc cannot reuse it. Probe is the RID lifetime
+	 * for devices that reach it. The IOMMU function is reserved
+	 * from init_iommu_one_late() instead: rlookup is cleared, so
+	 * probe never runs, while the self DTE still uses iommu->devid.
+	 * The reservation is not released on unplug. If reserve fails,
+	 * the IOMMU core frees dev->iommu and a later re-probe retries.
+	 */
+	ret = amd_iommu_trans_devid_reserve(iommu->pci_seg, dev_data->devid);
+	if (ret) {
+		pr_err("%s: Failed to reserve device id %#x\n", __func__,
+		       dev_data->devid);
+		iommu_dev = ERR_PTR(ret);
+		goto out_err;
+	}
+#endif
+
 out_err:
 	return iommu_dev;
 }
@@ -2751,6 +2770,9 @@ static void amd_iommu_release_device(struct device *dev)
 	/*
 	 * We keep dev_data around for unplugged devices and reuse it when the
 	 * device is re-plugged - not doing so would introduce a ton of races.
+	 * Translate-device-id reservations stay as well: the RID remains
+	 * occupied for the pci_seg lifetime so later alloc cannot reuse a
+	 * DTE index that still belongs to this function.
 	 */
 }
 
