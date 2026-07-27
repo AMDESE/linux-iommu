@@ -559,6 +559,13 @@ struct amd_iommu_viommu {
 	u64 *domid_table;
 	u16 trans_devid;
 
+	/*
+	 * Serializes translate-device-id hardware changes (DTE, VFctrl) and
+	 * coordinates with pool relocation during PCI attach.  Lock ordering:
+	 * pci_seg->trans_devid_mutex, then trans_devid_lock.
+	 */
+	struct mutex trans_devid_lock;
+
 	/* Offset for mmap() of guest VF MMIO; set after iommufd_viommu_alloc_mmap(). */
 	unsigned long vfmmio_mmap_offset;
 };

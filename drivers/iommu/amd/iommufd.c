@@ -48,11 +48,15 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 	int ret;
 	phys_addr_t page_base;
 	unsigned long flags;
+	u16 trans_devid;
+	bool trans_devid_allocated = false;
+	bool trans_dte_set = false;
 	struct iommu_viommu_amd data = {};
 	struct protection_domain *pdom = to_pdomain(parent);
 	struct amd_iommu *iommu = container_of(viommu->iommu_dev, struct amd_iommu, iommu);
 	struct amd_iommu_viommu *aviommu = container_of(viommu, struct amd_iommu_viommu, core);
 
+	mutex_init(&aviommu->trans_devid_lock);
 	xa_init_flags(&aviommu->gdomid_array, XA_FLAGS_ALLOC1);
 	aviommu->parent = pdom;
 
@@ -81,8 +85,21 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 
 	data.out_vfmmio_mmap_offset = aviommu->vfmmio_mmap_offset;
 
+	ret = amd_iommu_trans_devid_alloc(iommu->pci_seg, aviommu);
+	if (ret < 0)
+		goto err_trans_devid;
+	trans_devid = ret;
+	trans_devid_allocated = true;
+	aviommu->trans_devid = trans_devid;
+
 	/* Reset vIOMMU MMIOs to initialize the vIOMMU */
 	iommu_reset_vmmio(iommu, aviommu->gid);
+
+	ret = amd_iommu_set_translate_dte(viommu);
+	if (ret)
+		goto err_init;
+	trans_dte_set = true;
+	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, trans_devid);
 
 	ret = amd_viommu_init_one(iommu, aviommu);
 	if (ret)
@@ -102,6 +119,18 @@ int amd_iommufd_viommu_init(struct iommufd_viommu *viommu, struct iommu_domain *
 
 	return 0;
 err_init:
+	if (trans_dte_set) {
+		mutex_lock(&aviommu->trans_devid_lock);
+		amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
+		amd_iommu_clear_translate_dte(iommu, trans_devid);
+		mutex_unlock(&aviommu->trans_devid_lock);
+	}
+	if (trans_devid_allocated) {
+		mutex_lock(&aviommu->trans_devid_lock);
+		amd_iommu_trans_devid_free(iommu->pci_seg, trans_devid, aviommu);
+		mutex_unlock(&aviommu->trans_devid_lock);
+	}
+err_trans_devid:
 	iommufd_viommu_destroy_mmap(&aviommu->core, aviommu->vfmmio_mmap_offset);
 err_mmap:
 	amd_iommu_gid_free(iommu, aviommu->gid);
@@ -124,6 +153,12 @@ static void amd_iommufd_viommu_destroy(struct iommufd_viommu *viommu)
 	xa_destroy(&aviommu->gdomid_array);
 	iommufd_viommu_destroy_mmap(&aviommu->core, aviommu->vfmmio_mmap_offset);
 	amd_viommu_uninit_one(iommu, aviommu);
+
+	mutex_lock(&aviommu->trans_devid_lock);
+	amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
+	amd_iommu_clear_translate_dte(iommu, aviommu->trans_devid);
+	amd_iommu_trans_devid_free(iommu->pci_seg, aviommu->trans_devid, aviommu);
+	mutex_unlock(&aviommu->trans_devid_lock);
 	amd_iommu_gid_free(iommu, aviommu->gid);
 }
 
