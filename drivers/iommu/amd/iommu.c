@@ -3069,6 +3069,18 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 	if (dom->dirty_ops && !amd_iommu_hd_support(iommu))
 		return -EINVAL;
 
+#if IS_ENABLED(CONFIG_AMD_IOMMU_IOMMUFD)
+	/* Translate-device-id reservation must be done before setting up
+	 * the DTE for the device to make sure that the id has not been allocated
+	 * yet. (See amd_iommu_trans_devid_alloc().)
+	 */
+	ret = amd_iommu_trans_devid_reserve(iommu->pci_seg, dev_data->devid);
+	if (ret) {
+		pr_err("%s: Failed to reserve device id %#x\n", __func__, dev_data->devid);
+		return ret;
+	}
+#endif
+
 	if (dev_data->domain)
 		detach_device(dev);
 

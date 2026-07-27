@@ -612,6 +612,13 @@ PT_IOMMU_CHECK_DOMAIN(struct protection_domain, iommu, domain);
 PT_IOMMU_CHECK_DOMAIN(struct protection_domain, amdv1.iommu, domain);
 PT_IOMMU_CHECK_DOMAIN(struct protection_domain, amdv2.iommu, domain);
 
+#ifdef CONFIG_AMD_IOMMU_IOMMUFD
+enum trans_devid_state {
+	TRANS_DEVID_FREE = 0,
+	TRANS_DEVID_RESERVED,
+};
+#endif
+
 /*
  * This structure contains information about one PCI segment in the system.
  */
@@ -673,6 +680,16 @@ struct amd_iommu_pci_seg {
 	 * parsing time.
 	 */
 	struct list_head unity_map;
+
+#ifdef CONFIG_AMD_IOMMU_IOMMUFD
+	/*
+	 * Per-segment translate-device-id pool indexed by id.  Entries are:
+	 * absent (FREE), xa value TRANS_DEVID_RESERVED, or a pointer to the
+	 * owning struct amd_iommu_viommu (ALLOCATED).
+	 */
+	struct mutex trans_devid_mutex;
+	struct xarray trans_devid_xa;
+#endif
 };
 
 /*
