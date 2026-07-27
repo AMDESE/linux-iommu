@@ -225,6 +225,10 @@ void amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg);
 int amd_iommu_trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id);
 int amd_iommu_trans_devid_reserve_pci_aliases(struct amd_iommu *iommu,
 					      struct device *dev);
+int amd_iommu_trans_devid_alloc(struct amd_iommu_pci_seg *pci_seg,
+				struct amd_iommu_viommu *aviommu);
+void amd_iommu_trans_devid_free(struct amd_iommu_pci_seg *pci_seg, u16 id,
+				struct amd_iommu_viommu *aviommu);
 #else
 static inline void
 amd_iommu_pci_seg_trans_devid_init(struct amd_iommu_pci_seg *pci_seg) { }
