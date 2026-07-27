@@ -1740,6 +1740,7 @@ static struct amd_iommu_pci_seg *__init alloc_pci_segment(u16 id,
 	xa_init(&pci_seg->dev_data_xa);
 	INIT_LIST_HEAD(&pci_seg->unity_map);
 	list_add_tail(&pci_seg->list, &amd_iommu_pci_seg_list);
+	amd_iommu_pci_seg_trans_devid_init(pci_seg);
 
 	if (alloc_dev_table(pci_seg))
 		goto err_free_pci_seg;
@@ -1756,6 +1757,7 @@ err_free_dev_table:
 	free_dev_table(pci_seg);
 err_free_pci_seg:
 	list_del(&pci_seg->list);
+	amd_iommu_pci_seg_trans_devid_fini(pci_seg);
 	xa_destroy(&pci_seg->dev_data_xa);
 	kfree(pci_seg);
 	return NULL;
@@ -1780,6 +1782,7 @@ static void __init free_pci_segments(void)
 
 	for_each_pci_segment_safe(pci_seg, next) {
 		list_del(&pci_seg->list);
+		amd_iommu_pci_seg_trans_devid_fini(pci_seg);
 		xa_destroy(&pci_seg->dev_data_xa);
 		free_irq_lookup_table(pci_seg);
 		free_rlookup_table(pci_seg);
