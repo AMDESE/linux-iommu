@@ -681,6 +681,16 @@ struct amd_iommu_pci_seg {
 	 * parsing time.
 	 */
 	struct list_head unity_map;
+
+#ifdef CONFIG_AMD_IOMMU_IOMMUFD
+	/*
+	 * Per-segment translate-device-id pool indexed by id.  Entries are:
+	 * absent (FREE), xa value TRANS_DEVID_RESERVED, or a pointer to the
+	 * owning struct amd_iommu_viommu (ALLOCATED).
+	 */
+	struct mutex trans_devid_mutex;
+	struct xarray trans_devid_xa;
+#endif
 };
 
 /*
