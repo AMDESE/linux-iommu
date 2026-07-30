@@ -651,6 +651,8 @@ void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
 	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
 	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
 
+	spin_lock(&aviommu->vfctrl_lock);
+
 	/* Clear fields in VFCTRL MMIO */
 	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
 	val &= ~(GENMASK_ULL(51, 12) | GENMASK_ULL(9, 8) | GENMASK_ULL(3, 0));
@@ -662,6 +664,8 @@ void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
 	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN));
 
 	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
+
+	spin_unlock(&aviommu->vfctrl_lock);
 
 	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
 		 __func__, iommu->devid, gid, hw_queue->type,
@@ -681,6 +685,8 @@ void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
 	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
 	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
 
+	spin_lock(&aviommu->vfctrl_lock);
+
 	/* Clear fields in VFCTRL MMIO */
 	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
 	val &= ~GENMASK_ULL(51, 0);
@@ -691,6 +697,8 @@ void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
 	val |= FIELD_PREP(BIT_ULL_MASK(8), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN));
 	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN));
 	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+
+	spin_unlock(&aviommu->vfctrl_lock);
 
 	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
 		 __func__, iommu->devid, gid, hw_queue->type,
@@ -710,6 +718,8 @@ void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 	vf = VIOMMU_VF_MMIO_BASE(iommu, gid);
 	vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
 
+	spin_lock(&aviommu->vfctrl_lock);
+
 	/* Clear fields in VFCTRL MMIO */
 	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
 	val &= ~GENMASK_ULL(55, 0);
@@ -724,6 +734,8 @@ void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 	val |= FIELD_PREP(BIT_ULL_MASK(14), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN));
 	val |= FIELD_PREP(BIT_ULL_MASK(15), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON));
 	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+
+	spin_unlock(&aviommu->vfctrl_lock);
 
 	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, addr=%#llx, len=%#lx, flags=%#x, val=%#llx\n",
 		 __func__, iommu->devid, gid, hw_queue->type,

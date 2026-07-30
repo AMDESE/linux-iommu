@@ -582,6 +582,16 @@ struct amd_iommu_viommu {
 	 */
 	struct mutex trans_devid_lock;
 
+	/*
+	 * Serializes read-modify-write of the VFCTRL guest command, event and
+	 * PPR control registers.  Per-vIOMMU is sufficient granularity because
+	 * VIOMMU_VFCTRL_MMIO_BASE() indexes by gid, so each vIOMMU owns a
+	 * disjoint VFCTRL entry.  Taken from process context only, so no IRQ
+	 * variant is needed; held across MMIO accesses only, never while
+	 * sleeping.
+	 */
+	spinlock_t vfctrl_lock;
+
 	/* Offset for mmap() of guest VF MMIO; set after iommufd_viommu_alloc_mmap(). */
 	unsigned long vfmmio_mmap_offset;
 };
