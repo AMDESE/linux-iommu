@@ -256,6 +256,7 @@ struct sdxi_desc {
 				__le64 db_value;
 				__u8 rsvd_2[32];
 		);
+#define SDXI_DSC_CXT_START_VF BIT(7)
 
 #define SDXI_DSC_OP_SUBTYPE_CXT_STOP     0x04
 		/* AdminGrp: DSC_CXT_STOP */
