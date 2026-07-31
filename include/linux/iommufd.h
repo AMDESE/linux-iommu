@@ -9,6 +9,7 @@
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/iommu.h>
+#include <linux/mutex.h>
 #include <linux/refcount.h>
 #include <linux/types.h>
 #include <linux/xarray.h>
@@ -96,6 +97,29 @@ void iommufd_access_detach(struct iommufd_access *access);
 
 void iommufd_ctx_get(struct iommufd_ctx *ictx);
 
+/**
+ * enum iommufd_viommu_mig_state - Migration state of a vIOMMU
+ * @IOMMUFD_VIOMMU_MIG_NONE: No migration in progress
+ * @IOMMUFD_VIOMMU_MIG_PREPARED: Quiesced and ready to be saved
+ * @IOMMUFD_VIOMMU_MIG_SAVED: State has been handed to userspace
+ * @IOMMUFD_VIOMMU_MIG_RESTORING: A payload has been accepted but not applied
+ * @IOMMUFD_VIOMMU_MIG_COMMITTED: A restored payload has been applied
+ *
+ * Saving runs NONE -> PREPARED -> SAVED, restoring runs
+ * NONE -> RESTORING -> COMMITTED, and an abort returns to NONE from anywhere.
+ * SAVED and COMMITTED are terminal: the vIOMMU is either about to be destroyed
+ * along with its VM, or is resumed by an abort. That makes abort the path a
+ * source takes when migration fails and the VM keeps running, which is why it
+ * is reachable from a state where nothing actually went wrong.
+ */
+enum iommufd_viommu_mig_state {
+	IOMMUFD_VIOMMU_MIG_NONE = 0,
+	IOMMUFD_VIOMMU_MIG_PREPARED,
+	IOMMUFD_VIOMMU_MIG_SAVED,
+	IOMMUFD_VIOMMU_MIG_RESTORING,
+	IOMMUFD_VIOMMU_MIG_COMMITTED,
+};
+
 struct iommufd_viommu {
 	struct iommufd_object obj;
 	struct iommufd_ctx *ictx;
@@ -107,6 +131,15 @@ struct iommufd_viommu {
 	struct xarray vdevs;
 	struct list_head veventqs;
 	struct rw_semaphore veventqs_rwsem;
+
+	/*
+	 * Serializes the migration sequence and guards @mig_state. Held across
+	 * a whole migration operation, which may sleep for as long as a
+	 * userspace-supplied drain timeout, so it must never be taken on a
+	 * fast path.
+	 */
+	struct mutex mig_lock;
+	enum iommufd_viommu_mig_state mig_state;
 
 	enum iommu_viommu_type type;
 };
@@ -187,6 +220,32 @@ struct iommufd_hw_queue {
  * @set_ext_int_remap: Program extended interrupt remapping for a vIOMMU log
  *                     interrupt (event, PPR, etc.). Optional; return
  *                     -EOPNOTSUPP if unsupported.
+ * @mig_get_size: Report the payload size needed to save this vIOMMU, in
+ *                @out_size. Must not change any state
+ * @mig_prepare_save: Quiesce the vIOMMU so that its state stops changing:
+ *                    drain in-flight guest commands, fence them, and freeze
+ *                    log generation. May sleep for up to @timeout_ms waiting
+ *                    for the drain. Report operation-specific detail in
+ *                    @out_status
+ * @mig_save: Fill in @hdr and write up to @payload_len bytes to @payload. The
+ *            core has zeroed both. The driver owns the payload layout and must
+ *            set hdr->payload_size to the number of bytes it actually wrote
+ * @mig_restore: Consume a header and payload saved by @mig_save, validating
+ *               them against the objects userspace has allocated. Must not
+ *               apply anything to hardware, so that a rejected payload leaves
+ *               the vIOMMU untouched
+ * @mig_commit_restore: Apply the state accepted by @mig_restore to hardware,
+ *                      arm queues and invalidate caches
+ * @mig_abort: Abandon an in-progress save or restore and undo its effects,
+ *             including any freeze applied by @mig_prepare_save. Cannot fail:
+ *             there is no useful way for a caller to respond to a failed abort
+ *
+ * The migration ops are optional, but must be provided as a set: the core
+ * reports migration as unsupported unless all of them are present. The core
+ * owns the migration state machine and its lock, validates the operation
+ * sequence, and copies buffers to and from userspace, so a driver only ever
+ * sees kernel pointers and an operation it is already known to be in the right
+ * state for.
  */
 struct iommufd_viommu_ops {
 	void (*destroy)(struct iommufd_viommu *viommu);
@@ -204,6 +263,17 @@ struct iommufd_viommu_ops {
 	int (*hw_queue_init)(struct iommufd_hw_queue *hw_queue, u32 index);
 	int (*set_ext_int_remap)(struct iommufd_viommu *viommu,
 				 const struct iommu_viommu_ext_int_remap *arg);
+	int (*mig_get_size)(struct iommufd_viommu *viommu, size_t *out_size);
+	int (*mig_prepare_save)(struct iommufd_viommu *viommu, u32 timeout_ms,
+				u32 *out_status);
+	int (*mig_save)(struct iommufd_viommu *viommu,
+			struct iommu_viommu_mig_header *hdr, void *payload,
+			size_t payload_len);
+	int (*mig_restore)(struct iommufd_viommu *viommu,
+			   const struct iommu_viommu_mig_header *hdr,
+			   const void *payload, size_t payload_len);
+	int (*mig_commit_restore)(struct iommufd_viommu *viommu);
+	void (*mig_abort)(struct iommufd_viommu *viommu);
 };
 
 #if IS_ENABLED(CONFIG_IOMMUFD)

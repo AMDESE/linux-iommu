@@ -12,6 +12,63 @@ void iommufd_viommu_destroy(struct iommufd_object *obj)
 		viommu->ops->destroy(viommu);
 	refcount_dec(&viommu->hwpt->common.obj.users);
 	xa_destroy(&viommu->vdevs);
+	mutex_destroy(&viommu->mig_lock);
+}
+
+/* All of the migration ops are needed for any of them to be usable */
+bool iommufd_viommu_mig_supported(struct iommufd_viommu *viommu)
+{
+	return viommu->ops && viommu->ops->mig_get_size &&
+	       viommu->ops->mig_prepare_save && viommu->ops->mig_save &&
+	       viommu->ops->mig_restore && viommu->ops->mig_commit_restore &&
+	       viommu->ops->mig_abort;
+}
+
+static bool iommufd_viommu_mig_may_enter(enum iommufd_viommu_mig_state cur,
+					 enum iommufd_viommu_mig_state next)
+{
+	switch (next) {
+	case IOMMUFD_VIOMMU_MIG_NONE:
+		/* Abort resets from any state, including a completed one */
+		return true;
+	case IOMMUFD_VIOMMU_MIG_PREPARED:
+		return cur == IOMMUFD_VIOMMU_MIG_NONE;
+	case IOMMUFD_VIOMMU_MIG_SAVED:
+		return cur == IOMMUFD_VIOMMU_MIG_PREPARED;
+	case IOMMUFD_VIOMMU_MIG_RESTORING:
+		return cur == IOMMUFD_VIOMMU_MIG_NONE;
+	case IOMMUFD_VIOMMU_MIG_COMMITTED:
+		return cur == IOMMUFD_VIOMMU_MIG_RESTORING;
+	default:
+		return false;
+	}
+}
+
+/**
+ * iommufd_viommu_mig_enter() - Advance the migration state machine
+ * @viommu: vIOMMU to transition
+ * @next: State to enter
+ *
+ * Migration spans several ioctls, and the later ones act on hardware using
+ * state that an earlier one validated. Userspace cannot be trusted to issue
+ * them in order, so each step declares the state it produces and is refused if
+ * the vIOMMU is not in a state that step can legally follow. Refusing here is
+ * what stops, for example, a queue being armed from a payload that was never
+ * validated.
+ *
+ * Context: Caller must hold @viommu->mig_lock.
+ * Return: 0 on success, -EINVAL if the transition is not legal.
+ */
+int iommufd_viommu_mig_enter(struct iommufd_viommu *viommu,
+			     enum iommufd_viommu_mig_state next)
+{
+	lockdep_assert_held(&viommu->mig_lock);
+
+	if (!iommufd_viommu_mig_may_enter(viommu->mig_state, next))
+		return -EINVAL;
+
+	viommu->mig_state = next;
+	return 0;
 }
 
 int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
@@ -76,6 +133,8 @@ int iommufd_viommu_alloc_ioctl(struct iommufd_ucmd *ucmd)
 	}
 
 	xa_init(&viommu->vdevs);
+	mutex_init(&viommu->mig_lock);
+	viommu->mig_state = IOMMUFD_VIOMMU_MIG_NONE;
 	viommu->type = cmd->type;
 	viommu->ictx = ucmd->ictx;
 	viommu->hwpt = hwpt_paging;
