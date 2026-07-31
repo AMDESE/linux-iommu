@@ -122,30 +122,41 @@ int sdxi_encode_intr(struct sdxi_desc *desc,
 }
 EXPORT_SYMBOL_IF_KUNIT(sdxi_encode_intr);
 
-int sdxi_encode_cxt_start(struct sdxi_desc *desc,
-			  const struct sdxi_cxt_start *params)
+static void sdxi_encode_cxt_start_subtype(struct sdxi_desc *desc,
+					  const struct sdxi_cxt_start *params,
+					  u8 subtype)
 {
-	u64 csb_ptr;
-	u32 opcode;
-
-	opcode = (FIELD_PREP(SDXI_DSC_FE, 1) |
-		  FIELD_PREP(SDXI_DSC_SUBTYPE, SDXI_DSC_OP_SUBTYPE_CXT_START_NM) |
-		  FIELD_PREP(SDXI_DSC_TYPE, SDXI_DSC_OP_TYPE_ADMIN));
-
-	csb_ptr = FIELD_PREP(SDXI_DSC_NP, 1);
+	u32 opcode = (FIELD_PREP(SDXI_DSC_FE, 1) |
+		      FIELD_PREP(SDXI_DSC_SUBTYPE, subtype) |
+		      FIELD_PREP(SDXI_DSC_TYPE, SDXI_DSC_OP_TYPE_ADMIN));
 
 	*desc = (typeof(*desc)) {
 		.cxt_start = (typeof(desc->cxt_start)) {
-			.opcode = cpu_to_le32(opcode),
+			.opcode    = cpu_to_le32(opcode),
+			.vflags    = params->vf ? SDXI_DSC_CXT_START_VF : 0,
+			.vf_num    = params->vf ? cpu_to_le16(params->vf_num) : 0,
 			.cxt_start = cpu_to_le16(params->range.cxt_start),
-			.cxt_end = cpu_to_le16(params->range.cxt_end),
-			.csb_ptr = cpu_to_le64(csb_ptr),
+			.cxt_end   = cpu_to_le16(params->range.cxt_end),
+			.csb_ptr   = cpu_to_le64(FIELD_PREP(SDXI_DSC_NP, 1)),
 		},
 	};
+}
 
+int sdxi_encode_cxt_start(struct sdxi_desc *desc,
+			  const struct sdxi_cxt_start *params)
+{
+	sdxi_encode_cxt_start_subtype(desc, params,
+				      SDXI_DSC_OP_SUBTYPE_CXT_START_NM);
 	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(sdxi_encode_cxt_start);
+
+void sdxi_encode_cxt_start_rs(struct sdxi_desc *desc,
+			      const struct sdxi_cxt_start *params)
+{
+	sdxi_encode_cxt_start_subtype(desc, params,
+				      SDXI_DSC_OP_SUBTYPE_CXT_START_RS);
+}
 
 int sdxi_encode_cxt_stop(struct sdxi_desc *desc,
 			  const struct sdxi_cxt_stop *params)

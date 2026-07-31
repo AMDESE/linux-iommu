@@ -19,6 +19,7 @@
 #include <linux/wordpart.h>
 
 #include "admin.h"
+#include "completion.h"
 #include "context.h"
 #include "hw.h"
 #include "intr.h"
@@ -981,4 +982,36 @@ void sdxi_cxt_push_doorbell(struct sdxi_cxt *cxt, u64 index)
 	sdxi_dbg(cxt->sdxi, "Ringing context %u (state = %s) doorbell: %llu\n",
 		 cxt->id, cxt_sts_state_str(state), index);
 	iowrite64(index, cxt->db);
+}
+
+int sdxi_p2v_restart_cxts(struct sdxi_dev *pf, u16 vf_num,
+			  struct sdxi_cxt_range range)
+{
+	struct sdxi_completion *sc __free(sdxi_completion) = NULL;
+	struct sdxi_cxt *adm = pf->admin_cxt;
+	struct sdxi_desc *desc;
+	struct sdxi_ring_resv resv;
+	int err;
+
+	might_sleep();
+
+	sc = sdxi_completion_alloc(pf);
+	if (!sc)
+		return -ENOMEM;
+
+	err = sdxi_ring_reserve(adm->ring_state, 1, &resv);
+	if (err)
+		return err;
+
+	desc = sdxi_ring_resv_next(&resv);
+	sdxi_encode_cxt_start_rs(desc, &(const struct sdxi_cxt_start) {
+			.range  = range,
+			.vf     = true,
+			.vf_num = vf_num,
+		});
+	sdxi_completion_attach(desc, sc);
+	sdxi_desc_make_valid(desc);
+	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
+
+	return sdxi_completion_poll(sc);
 }

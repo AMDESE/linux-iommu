@@ -15,6 +15,7 @@
 #include <linux/workqueue.h>
 #include <asm/barrier.h>
 
+#include "descriptor.h"
 #include "sdxi.h"
 
 struct eventfd_ctx;
@@ -97,5 +98,7 @@ void sdxi_cxt_vma_open(struct sdxi_cxt *cxt);
 void sdxi_cxt_vma_close(struct sdxi_cxt *cxt);
 
 void sdxi_cxt_push_doorbell(struct sdxi_cxt *cxt, u64 index);
+int sdxi_p2v_restart_cxts(struct sdxi_dev *pf, u16 vf_num,
+			  struct sdxi_cxt_range range);
 
 #endif /* __DMA_SDXI_CONTEXT_H */

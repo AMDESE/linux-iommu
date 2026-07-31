@@ -24,6 +24,7 @@
 #include <linux/sdxi.h>
 
 #include "error.h"
+#include "context.h"
 #include "process.h"
 #include "sdxi.h"
 
@@ -340,6 +341,20 @@ static struct pci_driver sdxi_driver = {
 	.sriov_configure = pci_sriov_configure_simple,
 	.driver.pm = &sdxi_pm_ops,
 };
+
+int sdxi_pf_restart_vf_contexts(struct pci_dev *vf, u16 vf_num,
+				u16 cxt_start, u16 cxt_end)
+{
+	struct sdxi_dev *sdxi;
+
+	sdxi = pci_iov_get_pf_drvdata(vf, &sdxi_driver);
+	if (IS_ERR_OR_NULL(sdxi))
+		return -ENODEV;
+
+	return sdxi_p2v_restart_cxts(sdxi, vf_num,
+				     sdxi_cxt_range(cxt_start, cxt_end));
+}
+EXPORT_SYMBOL_FOR_MODULES(sdxi_pf_restart_vf_contexts, "sdxi-vfio-pci");
 
 static int __init sdxi_module_init(void)
 {

@@ -126,4 +126,17 @@ static inline const char *sdxi_gsv_str(enum sdxi_fn_gsv gsv)
 	return "unknown";
 }
 
+/**
+ * sdxi_pf_restart_vf_contexts() - Restart a VF's contexts after VM resume.
+ * @vf:        SDXI VF whose contexts should be restarted.
+ * @vf_num:    VF number as understood by the SDXI function (1-based).
+ * @cxt_start: First context to target (inclusive).
+ * @cxt_end:   Last context to target (inclusive).
+ *
+ * Returns 0 on success, -ENODEV if @vf is not a VF or its PF is not bound
+ * to the SDXI core driver.
+ */
+int sdxi_pf_restart_vf_contexts(struct pci_dev *vf, u16 vf_num,
+				u16 cxt_start, u16 cxt_end);
+
 #endif /* LINUX_SDXI_H */

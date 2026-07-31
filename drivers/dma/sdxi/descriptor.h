@@ -125,10 +125,15 @@ int sdxi_encode_intr(struct sdxi_desc *desc,
 
 struct sdxi_cxt_start {
 	struct sdxi_cxt_range range;
+	bool vf;	/* if true, target vf_num (PF admin context only) */
+	u16 vf_num;
 };
 
 int sdxi_encode_cxt_start(struct sdxi_desc *desc,
 			  const struct sdxi_cxt_start *params);
+
+void sdxi_encode_cxt_start_rs(struct sdxi_desc *desc,
+			      const struct sdxi_cxt_start *params);
 
 struct sdxi_cxt_stop {
 	struct sdxi_cxt_range range;
