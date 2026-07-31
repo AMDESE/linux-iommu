@@ -454,6 +454,7 @@ union ucmd_buffer {
 	struct iommu_vfio_ioas vfio_ioas;
 	struct iommu_viommu_alloc viommu;
 	struct iommu_viommu_ext_int_remap viommu_ext_int_remap;
+	struct iommu_viommu_mig_state viommu_mig_state;
 #ifdef CONFIG_IOMMUFD_TEST
 	struct iommu_test_cmd test;
 #endif
@@ -519,6 +520,8 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 struct iommu_viommu_alloc, out_viommu_id),
 	IOCTL_OP(IOMMU_VIOMMU_EXT_INT_REMAP, iommufd_viommu_ext_int_remap_ioctl,
 		 struct iommu_viommu_ext_int_remap, __reserved),
+	IOCTL_OP(IOMMU_VIOMMU_MIG_STATE, iommufd_viommu_mig_state_ioctl,
+		 struct iommu_viommu_mig_state, out_status),
 #ifdef CONFIG_IOMMUFD_TEST
 	IOCTL_OP(IOMMU_TEST_CMD, iommufd_test, struct iommu_test_cmd, last),
 #endif
