@@ -1119,6 +1119,14 @@ static int pci_mmap_resource(struct kobject *kobj, const struct bin_attribute *a
 	if (res->flags & IORESOURCE_MEM && iomem_is_exclusive(res->start))
 		return -EINVAL;
 
+	/*
+	 * Encrypted/private MMIO mapping is only valid once the device has
+	 * been transitioned into the trusted (accepted) state. Reject the
+	 * mapping otherwise.
+	 */
+	if (enc && !device_cc_accepted(&pdev->dev))
+		return -EINVAL;
+
 	if (!pci_mmap_fits(pdev, bar, vma, PCI_MMAP_SYSFS))
 		return -EINVAL;
 
