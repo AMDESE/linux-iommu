@@ -534,3 +534,288 @@ out_put_viommu:
 	iommufd_put_object(ucmd->ictx, &viommu->obj);
 	return rc;
 }
+
+/*
+ * Give up on an in-progress migration and put the vIOMMU back the way it was.
+ * Used both for an explicit abort and for any step that fails partway, so that
+ * a failure can never leave a vIOMMU quiesced with nothing driving it forward.
+ */
+static void iommufd_viommu_mig_unwind(struct iommufd_viommu *viommu)
+{
+	lockdep_assert_held(&viommu->mig_lock);
+
+	viommu->ops->mig_abort(viommu);
+	/* NONE follows every state, so this transition cannot be refused */
+	viommu->mig_state = IOMMUFD_VIOMMU_MIG_NONE;
+}
+
+/*
+ * Sizing is a query about the current contents, not a step in the sequence, so
+ * it is allowed in any state. The figure is only stable once the vIOMMU has
+ * been quiesced; before that it is an estimate, and IOMMU_VIOMMU_MIG_OP_SAVE
+ * reports the size actually written.
+ */
+static int iommufd_viommu_mig_get_size(struct iommufd_viommu *viommu,
+				       struct iommu_viommu_mig_state *cmd)
+{
+	size_t size;
+	int rc;
+
+	rc = viommu->ops->mig_get_size(viommu, &size);
+	if (rc)
+		return rc;
+	/* A driver that cannot say how much it needs cannot be saved */
+	if (WARN_ON_ONCE(!size))
+		return -EINVAL;
+	if (size > IOMMUFD_VIOMMU_MIG_PAYLOAD_MAX)
+		return -EOVERFLOW;
+
+	cmd->hdr_len = sizeof(struct iommu_viommu_mig_header);
+	cmd->data_len = size;
+	return 0;
+}
+
+static int iommufd_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
+					   struct iommu_viommu_mig_state *cmd)
+{
+	int rc;
+
+	rc = iommufd_viommu_mig_enter(viommu, IOMMUFD_VIOMMU_MIG_PREPARED);
+	if (rc)
+		return rc;
+
+	rc = viommu->ops->mig_prepare_save(viommu, cmd->timeout_ms,
+					   &cmd->out_status);
+	if (rc)
+		iommufd_viommu_mig_unwind(viommu);
+	return rc;
+}
+
+static int iommufd_viommu_mig_save(struct iommufd_viommu *viommu,
+				   struct iommu_viommu_mig_state *cmd)
+{
+	const size_t hdr_size = sizeof(struct iommu_viommu_mig_header);
+	struct iommu_viommu_mig_header hdr = {};
+	size_t payload_len;
+	void *payload;
+	int rc;
+
+	/*
+	 * Check the sequence before the buffers, so that a caller that has not
+	 * quiesced the vIOMMU is told that rather than being sent off to fix a
+	 * buffer size that was never the problem.
+	 */
+	if (!iommufd_viommu_mig_may_enter(viommu->mig_state,
+					  IOMMUFD_VIOMMU_MIG_SAVED))
+		return -EINVAL;
+
+	rc = viommu->ops->mig_get_size(viommu, &payload_len);
+	if (rc)
+		return rc;
+	if (WARN_ON_ONCE(!payload_len))
+		return -EINVAL;
+	if (payload_len > IOMMUFD_VIOMMU_MIG_PAYLOAD_MAX)
+		return -EOVERFLOW;
+
+	/*
+	 * Report what the caller needs and leave the state alone. A buffer
+	 * that is too small is a sizing mistake the caller can correct, and
+	 * throwing away a quiesced vIOMMU over it would force a needless
+	 * re-drain.
+	 */
+	if (cmd->hdr_len < hdr_size || cmd->data_len < payload_len) {
+		cmd->hdr_len = hdr_size;
+		cmd->data_len = payload_len;
+		return -EMSGSIZE;
+	}
+
+	rc = iommufd_viommu_mig_enter(viommu, IOMMUFD_VIOMMU_MIG_SAVED);
+	if (rc)
+		return rc;
+
+	payload = kvzalloc(payload_len, GFP_KERNEL | __GFP_NOWARN);
+	if (!payload) {
+		rc = -ENOMEM;
+		goto out_unwind;
+	}
+
+	rc = viommu->ops->mig_save(viommu, &hdr, payload, payload_len);
+	if (rc)
+		goto out_free;
+
+	/* It is a driver bug to report writing more than it was given */
+	if (WARN_ON_ONCE(!hdr.payload_size || hdr.payload_size > payload_len)) {
+		rc = -EINVAL;
+		goto out_free;
+	}
+
+	/*
+	 * The core owns the field it validates on restore, so that a payload
+	 * cannot be replayed into a vIOMMU of a different type however the
+	 * driver fills the rest of the header in.
+	 */
+	hdr.blob_type = viommu->type;
+
+	if (copy_to_user(u64_to_user_ptr(cmd->hdr_uptr), &hdr, hdr_size) ||
+	    copy_to_user(u64_to_user_ptr(cmd->data_uptr), payload,
+			 hdr.payload_size)) {
+		rc = -EFAULT;
+		goto out_free;
+	}
+
+	cmd->hdr_len = hdr_size;
+	cmd->data_len = hdr.payload_size;
+
+out_free:
+	kvfree(payload);
+out_unwind:
+	if (rc)
+		iommufd_viommu_mig_unwind(viommu);
+	return rc;
+}
+
+static int iommufd_viommu_mig_restore(struct iommufd_viommu *viommu,
+				      struct iommu_viommu_mig_state *cmd)
+{
+	const size_t hdr_size = sizeof(struct iommu_viommu_mig_header);
+	struct iommu_viommu_mig_header hdr;
+	void *payload;
+	int rc;
+
+	/* Reject an out-of-sequence call before copying anything in */
+	if (!iommufd_viommu_mig_may_enter(viommu->mig_state,
+					  IOMMUFD_VIOMMU_MIG_RESTORING))
+		return -EINVAL;
+
+	if (cmd->hdr_len < hdr_size || !cmd->data_len)
+		return -EINVAL;
+	if (cmd->data_len > IOMMUFD_VIOMMU_MIG_PAYLOAD_MAX)
+		return -EOVERFLOW;
+
+	if (copy_from_user(&hdr, u64_to_user_ptr(cmd->hdr_uptr), hdr_size))
+		return -EFAULT;
+
+	/*
+	 * Check what the core can check before the driver sees any of it: an
+	 * unknown reserved field means a payload from a kernel that knows more
+	 * than this one, and the type and size have to agree with what the
+	 * caller is actually handing over.
+	 */
+	if (memchr_inv(hdr.__reserved, 0, sizeof(hdr.__reserved)))
+		return -EOPNOTSUPP;
+	/*
+	 * A feature flag is not a section: it says the payload depends on the
+	 * destination doing something, so one this kernel has never heard of
+	 * cannot be skipped the way an unknown section can. None are defined
+	 * yet, which makes any bit here a payload from a newer kernel.
+	 */
+	if (hdr.feature_flags)
+		return -EOPNOTSUPP;
+	if (hdr.blob_type != viommu->type)
+		return -EINVAL;
+	if (hdr.payload_size != cmd->data_len)
+		return -EINVAL;
+
+	rc = iommufd_viommu_mig_enter(viommu, IOMMUFD_VIOMMU_MIG_RESTORING);
+	if (rc)
+		return rc;
+
+	payload = kvzalloc(cmd->data_len, GFP_KERNEL | __GFP_NOWARN);
+	if (!payload) {
+		rc = -ENOMEM;
+		goto out_unwind;
+	}
+
+	if (copy_from_user(payload, u64_to_user_ptr(cmd->data_uptr),
+			   cmd->data_len)) {
+		rc = -EFAULT;
+		goto out_free;
+	}
+
+	rc = viommu->ops->mig_restore(viommu, &hdr, payload, cmd->data_len);
+
+out_free:
+	kvfree(payload);
+out_unwind:
+	if (rc)
+		iommufd_viommu_mig_unwind(viommu);
+	return rc;
+}
+
+static int iommufd_viommu_mig_commit_restore(struct iommufd_viommu *viommu)
+{
+	int rc;
+
+	rc = iommufd_viommu_mig_enter(viommu, IOMMUFD_VIOMMU_MIG_COMMITTED);
+	if (rc)
+		return rc;
+
+	rc = viommu->ops->mig_commit_restore(viommu);
+	if (rc)
+		iommufd_viommu_mig_unwind(viommu);
+	return rc;
+}
+
+int iommufd_viommu_mig_state_ioctl(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_viommu_mig_state *cmd = ucmd->cmd;
+	struct iommufd_viommu *viommu;
+	int respond_rc;
+	int rc;
+
+	if (cmd->flags)
+		return -EOPNOTSUPP;
+
+	viommu = iommufd_get_viommu(ucmd, cmd->viommu_id);
+	if (IS_ERR(viommu))
+		return PTR_ERR(viommu);
+
+	if (!iommufd_viommu_mig_supported(viommu)) {
+		rc = -EOPNOTSUPP;
+		goto out_put_viommu;
+	}
+
+	cmd->out_status = 0;
+
+	mutex_lock(&viommu->mig_lock);
+	switch (cmd->op) {
+	case IOMMU_VIOMMU_MIG_OP_GET_SIZE:
+		rc = iommufd_viommu_mig_get_size(viommu, cmd);
+		break;
+	case IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE:
+		rc = iommufd_viommu_mig_prepare_save(viommu, cmd);
+		break;
+	case IOMMU_VIOMMU_MIG_OP_SAVE:
+		rc = iommufd_viommu_mig_save(viommu, cmd);
+		break;
+	case IOMMU_VIOMMU_MIG_OP_RESTORE:
+		rc = iommufd_viommu_mig_restore(viommu, cmd);
+		break;
+	case IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE:
+		rc = iommufd_viommu_mig_commit_restore(viommu);
+		break;
+	case IOMMU_VIOMMU_MIG_OP_ABORT:
+		iommufd_viommu_mig_unwind(viommu);
+		rc = 0;
+		break;
+	default:
+		rc = -EOPNOTSUPP;
+		break;
+	}
+	mutex_unlock(&viommu->mig_lock);
+
+	if (rc && rc != -EMSGSIZE)
+		goto out_put_viommu;
+
+	/*
+	 * Respond on -EMSGSIZE too: the required buffer size is in the
+	 * response and the caller has no other way to learn it.
+	 */
+	respond_rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	if (respond_rc)
+		rc = respond_rc;
+
+out_put_viommu:
+	iommufd_put_object(ucmd->ictx, &viommu->obj);
+	return rc;
+}

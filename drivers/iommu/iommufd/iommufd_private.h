@@ -696,6 +696,14 @@ int iommufd_viommu_ext_int_remap_ioctl(struct iommufd_ucmd *ucmd);
 bool iommufd_viommu_mig_supported(struct iommufd_viommu *viommu);
 int iommufd_viommu_mig_enter(struct iommufd_viommu *viommu,
 			     enum iommufd_viommu_mig_state next);
+int iommufd_viommu_mig_state_ioctl(struct iommufd_ucmd *ucmd);
+
+/*
+ * Sanity bound on a migration payload. Not a policy limit: it only keeps a
+ * bogus size from reaching kvzalloc(). A driver reports what it actually needs
+ * through IOMMU_VIOMMU_MIG_OP_GET_SIZE.
+ */
+#define IOMMUFD_VIOMMU_MIG_PAYLOAD_MAX (16 * 1024 * 1024)
 int iommufd_vdevice_alloc_ioctl(struct iommufd_ucmd *ucmd);
 void iommufd_vdevice_destroy(struct iommufd_object *obj);
 void iommufd_vdevice_abort(struct iommufd_object *obj);
