@@ -704,12 +704,27 @@ enum iommu_hw_info_type {
  * @IOMMU_HW_CAP_PCI_ATS_NOT_SUPPORTED: ATS is not supported or cannot be used
  *                                      on this device (absence implies ATS
  *                                      may be enabled)
+ * @IOMMU_HW_CAP_VIOMMU_MIGRATION: The IOMMU behind this device can save and
+ *                                 restore the state of a vIOMMU allocated on
+ *                                 it. If available, it means the following
+ *                                 API is supported:
+ *
+ *                                     IOMMU_VIOMMU_MIG_STATE
+ *
+ *                                 This describes that IOMMU, not any one
+ *                                 vIOMMU allocated on it. A vIOMMU of a
+ *                                 type it cannot migrate still fails
+ *                                 IOMMU_VIOMMU_MIG_STATE with EOPNOTSUPP,
+ *                                 so a VMM that needs certainty for a
+ *                                 specific vIOMMU should allocate it and
+ *                                 probe with IOMMU_VIOMMU_MIG_OP_GET_SIZE
  */
 enum iommufd_hw_capabilities {
 	IOMMU_HW_CAP_DIRTY_TRACKING = 1 << 0,
 	IOMMU_HW_CAP_PCI_PASID_EXEC = 1 << 1,
 	IOMMU_HW_CAP_PCI_PASID_PRIV = 1 << 2,
 	IOMMU_HW_CAP_PCI_ATS_NOT_SUPPORTED = 1 << 3,
+	IOMMU_HW_CAP_VIOMMU_MIGRATION = 1 << 4,
 };
 
 /**

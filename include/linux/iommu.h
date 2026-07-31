@@ -274,6 +274,13 @@ enum iommu_cap {
 	IOMMU_CAP_DIRTY_TRACKING,	/* IOMMU supports dirty tracking */
 	/* ATS is supported and may be enabled for this device */
 	IOMMU_CAP_PCI_ATS_SUPPORTED,
+	/*
+	 * Driver can save and restore the state of a vIOMMU allocated on this
+	 * device's IOMMU. Describes the driver rather than any one vIOMMU, so
+	 * a vIOMMU type the driver cannot migrate still refuses the migration
+	 * ioctl.
+	 */
+	IOMMU_CAP_VIOMMU_MIGRATION,
 };
 
 /* These are the possible reserved region types */

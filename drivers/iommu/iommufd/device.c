@@ -1624,6 +1624,9 @@ int iommufd_get_hw_info(struct iommufd_ucmd *ucmd)
 	if (device_iommu_capable(idev->dev, IOMMU_CAP_DIRTY_TRACKING))
 		cmd->out_capabilities |= IOMMU_HW_CAP_DIRTY_TRACKING;
 
+	if (device_iommu_capable(idev->dev, IOMMU_CAP_VIOMMU_MIGRATION))
+		cmd->out_capabilities |= IOMMU_HW_CAP_VIOMMU_MIGRATION;
+
 	/* Report when ATS cannot be used for this device */
 	if (!device_iommu_capable(idev->dev, IOMMU_CAP_PCI_ATS_SUPPORTED))
 		cmd->out_capabilities |= IOMMU_HW_CAP_PCI_ATS_NOT_SUPPORTED;
