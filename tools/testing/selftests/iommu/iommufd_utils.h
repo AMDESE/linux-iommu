@@ -1001,6 +1001,48 @@ static int _test_cmd_viommu_alloc(int fd, __u32 device_id, __u32 hwpt_id,
 		     _test_cmd_viommu_alloc(self->fd, device_id, hwpt_id, 0, \
 					    type, data, data_len, viommu_id))
 
+static int _test_cmd_viommu_mig(int fd, __u32 viommu_id, __u32 op,
+				__u32 timeout_ms, void *hdr, __u32 *hdr_len,
+				void *data, __u32 *data_len, __u32 *out_status)
+{
+	struct iommu_viommu_mig_state cmd = {
+		.size = sizeof(cmd),
+		.viommu_id = viommu_id,
+		.op = op,
+		.timeout_ms = timeout_ms,
+		.hdr_uptr = (uint64_t)hdr,
+		.hdr_len = hdr_len ? *hdr_len : 0,
+		.data_uptr = (uint64_t)data,
+		.data_len = data_len ? *data_len : 0,
+	};
+	int ret;
+
+	ret = ioctl(fd, IOMMU_VIOMMU_MIG_STATE, &cmd);
+	/*
+	 * Read the sizes back even on failure: an EMSGSIZE response carries
+	 * the sizes the caller needs in order to retry.
+	 */
+	if (hdr_len)
+		*hdr_len = cmd.hdr_len;
+	if (data_len)
+		*data_len = cmd.data_len;
+	if (out_status)
+		*out_status = cmd.out_status;
+	return ret;
+}
+
+#define test_cmd_viommu_mig(viommu_id, op, timeout_ms, hdr, hdr_len, data,     \
+			    data_len, out_status)                              \
+	ASSERT_EQ(0, _test_cmd_viommu_mig(self->fd, viommu_id, op, timeout_ms, \
+					  hdr, hdr_len, data, data_len,        \
+					  out_status))
+#define test_err_viommu_mig(_errno, viommu_id, op, timeout_ms, hdr, hdr_len,   \
+			    data, data_len, out_status)                        \
+	EXPECT_ERRNO(_errno,                                                   \
+		     _test_cmd_viommu_mig(self->fd, viommu_id, op, timeout_ms, \
+					  hdr, hdr_len, data, data_len,        \
+					  out_status))
+
 static int _test_cmd_vdevice_alloc(int fd, __u32 viommu_id, __u32 idev_id,
 				   __u64 virt_id, __u32 *vdev_id)
 {
