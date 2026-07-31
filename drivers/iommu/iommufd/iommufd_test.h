@@ -63,6 +63,7 @@ enum {
 enum {
 	MOCK_FLAGS_DEVICE_NO_DIRTY = 1 << 0,
 	MOCK_FLAGS_DEVICE_PASID = 1 << 2,
+	MOCK_FLAGS_DEVICE_NO_VIOMMU_MIG = 1 << 3,
 };
 
 enum {
@@ -289,5 +290,15 @@ struct iommu_viommu_event_selftest {
 
 #define IOMMU_HW_QUEUE_TYPE_SELFTEST 0xdeadbeef
 #define IOMMU_TEST_HW_QUEUE_MAX 2
+
+/*
+ * Mock vIOMMU migration payload, for IOMMU_VIOMMU_MIG_STATE tests. The payload
+ * is a fixed run of IOMMU_TEST_VIOMMU_MIG_FILL bytes, so a test can corrupt one
+ * of them and see the restore refused.
+ */
+#define IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE 64
+#define IOMMU_TEST_VIOMMU_MIG_FORMAT_VERSION 1
+#define IOMMU_TEST_VIOMMU_MIG_FILL 0xa5
+#define IOMMU_TEST_VIOMMU_MIG_STATUS 0x5a5a5a5a
 
 #endif

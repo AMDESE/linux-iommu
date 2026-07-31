@@ -149,6 +149,10 @@ struct mock_viommu {
 
 	unsigned long mmap_offset;
 	u32 *page; /* Mmap page to test u32 type of in_data */
+
+	u8 mig_payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE];
+	bool mig_prepared;
+	bool mig_committed;
 };
 
 static inline struct mock_viommu *to_mock_viommu(struct iommufd_viommu *viommu)
@@ -529,6 +533,8 @@ static bool mock_domain_capable(struct device *dev, enum iommu_cap cap)
 		return true;
 	case IOMMU_CAP_DIRTY_TRACKING:
 		return !(mdev->flags & MOCK_FLAGS_DEVICE_NO_DIRTY);
+	case IOMMU_CAP_VIOMMU_MIGRATION:
+		return !(mdev->flags & MOCK_FLAGS_DEVICE_NO_VIOMMU_MIG);
 	default:
 		break;
 	}
@@ -772,12 +778,107 @@ unlock:
 	return rc;
 }
 
+static int mock_viommu_mig_get_size(struct iommufd_viommu *viommu,
+				    size_t *out_size)
+{
+	*out_size = IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE;
+	return 0;
+}
+
+/*
+ * A zero timeout stands in for a quiesce that could not be completed, so that
+ * the failure path can be driven without needing a stuck queue.
+ */
+static int mock_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
+					u32 timeout_ms, u32 *out_status)
+{
+	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
+
+	if (!timeout_ms)
+		return -ETIMEDOUT;
+
+	mock_viommu->mig_prepared = true;
+	*out_status = IOMMU_TEST_VIOMMU_MIG_STATUS;
+	return 0;
+}
+
+static int mock_viommu_mig_save(struct iommufd_viommu *viommu,
+				struct iommu_viommu_mig_header *hdr,
+				void *payload, size_t payload_len)
+{
+	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
+
+	/* The core must not reach a save that was never prepared */
+	if (WARN_ON(!mock_viommu->mig_prepared))
+		return -EINVAL;
+	if (WARN_ON(payload_len < sizeof(mock_viommu->mig_payload)))
+		return -EINVAL;
+
+	memset(mock_viommu->mig_payload, IOMMU_TEST_VIOMMU_MIG_FILL,
+	       sizeof(mock_viommu->mig_payload));
+	memcpy(payload, mock_viommu->mig_payload,
+	       sizeof(mock_viommu->mig_payload));
+
+	hdr->blob_format_version = IOMMU_TEST_VIOMMU_MIG_FORMAT_VERSION;
+	hdr->min_reader_version = IOMMU_TEST_VIOMMU_MIG_FORMAT_VERSION;
+	hdr->payload_size = sizeof(mock_viommu->mig_payload);
+	hdr->section_mask = IOMMU_VIOMMU_MIG_SECTION_VFCTRL;
+	return 0;
+}
+
+static int mock_viommu_mig_restore(struct iommufd_viommu *viommu,
+				   const struct iommu_viommu_mig_header *hdr,
+				   const void *payload, size_t payload_len)
+{
+	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
+	const u8 *bytes = payload;
+	size_t i;
+
+	if (hdr->min_reader_version > IOMMU_TEST_VIOMMU_MIG_FORMAT_VERSION)
+		return -EOPNOTSUPP;
+	if (payload_len != sizeof(mock_viommu->mig_payload))
+		return -EINVAL;
+
+	for (i = 0; i < payload_len; i++)
+		if (bytes[i] != IOMMU_TEST_VIOMMU_MIG_FILL)
+			return -EINVAL;
+
+	memcpy(mock_viommu->mig_payload, payload, payload_len);
+	return 0;
+}
+
+static int mock_viommu_mig_commit_restore(struct iommufd_viommu *viommu)
+{
+	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
+
+	/* The core must not commit the same restore twice */
+	if (WARN_ON(mock_viommu->mig_committed))
+		return -EINVAL;
+
+	mock_viommu->mig_committed = true;
+	return 0;
+}
+
+static void mock_viommu_mig_abort(struct iommufd_viommu *viommu)
+{
+	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
+
+	mock_viommu->mig_prepared = false;
+	mock_viommu->mig_committed = false;
+}
+
 static struct iommufd_viommu_ops mock_viommu_ops = {
 	.destroy = mock_viommu_destroy,
 	.alloc_domain_nested = mock_viommu_alloc_domain_nested,
 	.cache_invalidate = mock_viommu_cache_invalidate,
 	.get_hw_queue_size = mock_viommu_get_hw_queue_size,
 	.hw_queue_init_phys = mock_hw_queue_init_phys,
+	.mig_get_size = mock_viommu_mig_get_size,
+	.mig_prepare_save = mock_viommu_mig_prepare_save,
+	.mig_save = mock_viommu_mig_save,
+	.mig_restore = mock_viommu_mig_restore,
+	.mig_commit_restore = mock_viommu_mig_commit_restore,
+	.mig_abort = mock_viommu_mig_abort,
 };
 
 static size_t mock_get_viommu_size(struct device *dev,

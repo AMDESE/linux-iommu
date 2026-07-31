@@ -2913,6 +2913,150 @@ TEST_F(iommufd_viommu, viommu_negative_tests)
 	}
 }
 
+TEST_F(iommufd_viommu, viommu_migration)
+{
+	uint8_t payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE] = {};
+	struct iommu_viommu_mig_header hdr = {};
+	uint32_t data_len = sizeof(payload);
+	uint32_t hdr_len = sizeof(hdr);
+	uint32_t status = 0;
+	uint32_t caps = 0;
+
+	if (!self->device_id) {
+		test_err_viommu_mig(ENOENT, self->viommu_id,
+				    IOMMU_VIOMMU_MIG_OP_GET_SIZE, 0, &hdr,
+				    &hdr_len, payload, &data_len, &status);
+		return;
+	}
+
+	test_cmd_get_hw_capabilities(self->device_id, caps);
+	ASSERT_EQ(IOMMU_HW_CAP_VIOMMU_MIGRATION,
+		  caps & IOMMU_HW_CAP_VIOMMU_MIGRATION);
+
+	/* Sizing is a query, so it answers before the vIOMMU is quiesced */
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_GET_SIZE, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+	ASSERT_EQ(sizeof(struct iommu_viommu_mig_header), hdr_len);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE, data_len);
+
+	/* Saving a vIOMMU that was never quiesced is refused */
+	test_err_viommu_mig(EINVAL, self->viommu_id, IOMMU_VIOMMU_MIG_OP_SAVE,
+			    0, &hdr, &hdr_len, payload, &data_len, &status);
+
+	/* A failed prepare unwinds, so the next one still succeeds */
+	test_err_viommu_mig(ETIMEDOUT, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE, 0, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+			    1000, &hdr, &hdr_len, payload, &data_len, &status);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_STATUS, status);
+
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE, 1000, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+
+	/* A short buffer reports what is needed and stays quiesced */
+	data_len = 1;
+	test_err_viommu_mig(EMSGSIZE, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_SAVE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE, data_len);
+
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_SAVE, 0, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE, data_len);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE, hdr.payload_size);
+	ASSERT_EQ(IOMMU_VIOMMU_TYPE_SELFTEST, hdr.blob_type);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_FILL, payload[0]);
+
+	test_err_viommu_mig(EINVAL, self->viommu_id, IOMMU_VIOMMU_MIG_OP_SAVE,
+			    0, &hdr, &hdr_len, payload, &data_len, &status);
+
+	/* Abort resets, so the same vIOMMU can then take a restore */
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE, 0, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+
+	/* Round trip what was just saved */
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+	test_cmd_viommu_mig(self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE, 0, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+
+	/* Restoring over a committed vIOMMU is refused */
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+}
+
+TEST_F(iommufd_viommu, viommu_migration_bad_payload)
+{
+	uint8_t payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE] = {};
+	struct iommu_viommu_mig_header hdr = {};
+	uint32_t data_len = sizeof(payload);
+	uint32_t short_hdr_len = sizeof(hdr) - 1;
+	uint32_t hdr_len = sizeof(hdr);
+	uint32_t status = 0;
+
+	if (!self->device_id)
+		return;
+
+	test_err_viommu_mig(EOPNOTSUPP, self->viommu_id, 0xdead, 0, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+
+	/* Produce a header and payload that are known good, then break them */
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+			    1000, &hdr, &hdr_len, payload, &data_len, &status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_SAVE, 0, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	/* A header the kernel cannot read in full */
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr,
+			    &short_hdr_len, payload, &data_len, &status);
+
+	/* Reserved words carry meaning this kernel does not know */
+	hdr.__reserved[0] = 1;
+	test_err_viommu_mig(EOPNOTSUPP, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+	hdr.__reserved[0] = 0;
+
+	/* A payload saved from a different kind of vIOMMU */
+	hdr.blob_type = IOMMU_VIOMMU_TYPE_DEFAULT;
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+	hdr.blob_type = IOMMU_VIOMMU_TYPE_SELFTEST;
+
+	/* The header must agree with the payload actually handed over */
+	hdr.payload_size = IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE - 1;
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+	hdr.payload_size = IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE;
+
+	/* A payload the driver rejects unwinds, so a good one still works */
+	payload[0] = (uint8_t)~IOMMU_TEST_VIOMMU_MIG_FILL;
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+	payload[0] = IOMMU_TEST_VIOMMU_MIG_FILL;
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+}
+
 TEST_F(iommufd_viommu, viommu_alloc_nested_iopf)
 {
 	struct iommu_hwpt_selftest data = {
