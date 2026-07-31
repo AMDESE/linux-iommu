@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
+#include <linux/sdxi.h>
 #include <linux/slab.h>
 #include <asm/mmu.h>
 
@@ -31,41 +32,6 @@
 static bool dma_engine;
 module_param(dma_engine, bool, 0644);
 MODULE_PARM_DESC(dma_engine, "Enable DMA engine interface (default: false)");
-
-enum sdxi_fn_gsv {
-	SDXI_GSV_STOP,
-	SDXI_GSV_INIT,
-	SDXI_GSV_ACTIVE,
-	SDXI_GSV_STOPG_SF,
-	SDXI_GSV_STOPG_HD,
-	SDXI_GSV_ERROR,
-};
-
-static const char *const gsv_strings[] = {
-	[SDXI_GSV_STOP]     = "stopped",
-	[SDXI_GSV_INIT]     = "initializing",
-	[SDXI_GSV_ACTIVE]   = "active",
-	[SDXI_GSV_STOPG_SF] = "soft stopping",
-	[SDXI_GSV_STOPG_HD] = "hard stopping",
-	[SDXI_GSV_ERROR]    = "error",
-};
-
-static const char *gsv_str(enum sdxi_fn_gsv gsv)
-{
-	if ((size_t)gsv < ARRAY_SIZE(gsv_strings))
-		return gsv_strings[(size_t)gsv];
-
-	WARN_ONCE(1, "unexpected gsv %u\n", gsv);
-
-	return "unknown";
-}
-
-enum sdxi_fn_gsr {
-	SDXI_GSRV_RESET,
-	SDXI_GSRV_STOP_SF,
-	SDXI_GSRV_STOP_HD,
-	SDXI_GSRV_ACTIVE,
-};
 
 static enum sdxi_fn_gsv sdxi_dev_gsv(const struct sdxi_dev *sdxi)
 {
@@ -90,7 +56,7 @@ static int sdxi_dev_start(struct sdxi_dev *sdxi)
 	if (status != SDXI_GSV_STOP) {
 		sdxi_err(sdxi,
 			 "can't activate busy device (unexpected gsv: %s)\n",
-			 gsv_str(status));
+			 sdxi_gsv_str(status));
 		return -EIO;
 	}
 
@@ -99,7 +65,7 @@ static int sdxi_dev_start(struct sdxi_dev *sdxi)
 	deadline = jiffies + msecs_to_jiffies(1000);
 	do {
 		status = sdxi_dev_gsv(sdxi);
-		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, gsv_str(status));
+		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, sdxi_gsv_str(status));
 
 		switch (status) {
 		case SDXI_GSV_ACTIVE:
@@ -133,7 +99,7 @@ static int sdxi_dev_stop(struct sdxi_dev *sdxi)
 	do {
 		enum sdxi_fn_gsv status = sdxi_dev_gsv(sdxi);
 
-		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, gsv_str(status));
+		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, sdxi_gsv_str(status));
 
 		switch (status) {
 		case SDXI_GSV_ACTIVE:

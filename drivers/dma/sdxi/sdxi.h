@@ -16,11 +16,11 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/sdxi.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 
 #include "hw.h"
-#include "mmio.h"
 #include "version.h"
 
 #define SDXI_DRV_NAME		"sdxi"
