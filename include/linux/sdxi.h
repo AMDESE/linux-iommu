@@ -1,18 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-
 /*
- * SDXI MMIO register offsets and layouts.
- *
  * Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
  */
 
-#ifndef __DMA_SDXI_MMIO_H
-#define __DMA_SDXI_MMIO_H
+#ifndef LINUX_SDXI_H
+#define LINUX_SDXI_H
 
+#include <linux/array_size.h>
+#include <linux/bitfield.h>
 #include <linux/bits.h>
-#include <linux/compiler_attributes.h>
-#include <linux/compiler_types.h>
+#include <linux/bug.h>
 #include <linux/types.h>
+
+struct pci_dev;
 
 /* Refer to "MMIO Control Registers". */
 enum sdxi_reg {
@@ -91,4 +91,39 @@ enum {
 	SDXI_MMIO_ERR_STS_ERR_BIT = BIT_ULL(3),
 };
 
-#endif  /* __DMA_SDXI_MMIO_H */
+enum sdxi_fn_gsv {
+	SDXI_GSV_STOP,
+	SDXI_GSV_INIT,
+	SDXI_GSV_ACTIVE,
+	SDXI_GSV_STOPG_SF,
+	SDXI_GSV_STOPG_HD,
+	SDXI_GSV_ERROR,
+};
+
+enum sdxi_fn_gsr {
+	SDXI_GSRV_RESET,
+	SDXI_GSRV_STOP_SF,
+	SDXI_GSRV_STOP_HD,
+	SDXI_GSRV_ACTIVE,
+};
+
+static inline const char *sdxi_gsv_str(enum sdxi_fn_gsv gsv)
+{
+	static const char *const gsv_strings[] = {
+		[SDXI_GSV_STOP]     = "stopped",
+		[SDXI_GSV_INIT]     = "initializing",
+		[SDXI_GSV_ACTIVE]   = "active",
+		[SDXI_GSV_STOPG_SF] = "soft stopping",
+		[SDXI_GSV_STOPG_HD] = "hard stopping",
+		[SDXI_GSV_ERROR]    = "error",
+	};
+
+	if ((size_t)gsv < ARRAY_SIZE(gsv_strings))
+		return gsv_strings[(size_t)gsv];
+
+	WARN_ONCE(1, "unexpected gsv %u\n", gsv);
+
+	return "unknown";
+}
+
+#endif /* LINUX_SDXI_H */

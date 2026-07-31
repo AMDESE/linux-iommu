@@ -10,12 +10,12 @@
 #include <linux/interrupt.h>
 #include <linux/irqreturn.h>
 #include <linux/packing.h>
+#include <linux/sdxi.h>
 #include <linux/string.h>
 #include <linux/types.h>
 
 #include "context.h"
 #include "error.h"
-#include "mmio.h"
 #include "sdxi.h"
 
 /*

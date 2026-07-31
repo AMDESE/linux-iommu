@@ -21,9 +21,9 @@
 #include <linux/pci-ats.h>
 #include <linux/pci.h>
 #include <linux/pm.h>
+#include <linux/sdxi.h>
 
 #include "error.h"
-#include "mmio.h"
 #include "process.h"
 #include "sdxi.h"
 

@@ -24384,6 +24384,7 @@ L:	dmaengine@vger.kernel.org
 S:	Supported
 F:	drivers/dma/sdxi/
 F:	drivers/dma/sdxi/amd/
+F:	include/linux/sdxi.h
 F:	include/uapi/linux/sdxi.h
 F:	tools/testing/selftests/sdxi/
 
