@@ -11,6 +11,7 @@
 #include "amd_iommu.h"
 #include "amd_viommu.h"
 #include "amd_iommu_types.h"
+#include "viommu_mig.h"
 #include "../iommufd/iommufd_private.h"
 
 static const struct iommufd_viommu_ops amd_viommu_ops;
@@ -331,5 +332,10 @@ static const struct iommufd_viommu_ops amd_viommu_ops = {
 	.get_hw_queue_size = amd_iommufd_get_hw_queue_size,
 	.hw_queue_init = amd_iommufd_hw_queue_init,
 	.set_ext_int_remap = amd_iommufd_set_ext_int_remap,
-
+	.mig_get_size = amd_viommu_mig_get_size,
+	.mig_prepare_save = amd_viommu_mig_prepare_save,
+	.mig_save = amd_viommu_mig_save,
+	.mig_restore = amd_viommu_mig_restore,
+	.mig_commit_restore = amd_viommu_mig_commit_restore,
+	.mig_abort = amd_viommu_mig_abort,
 };

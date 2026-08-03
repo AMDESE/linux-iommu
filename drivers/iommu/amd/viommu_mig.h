@@ -81,10 +81,29 @@ int amd_viommu_mig_put(struct amd_viommu_mig_writer *w, u32 type,
 		       const void *data, size_t length);
 
 struct amd_iommu_viommu;
+struct iommufd_viommu;
 struct iommufd_viommu_mig_ctx;
+struct iommu_viommu_mig_header;
 
 int amd_viommu_mig_quiesce_cmdbuf(struct amd_iommu_viommu *aviommu,
 				  const struct iommufd_viommu_mig_ctx *ctx,
 				  unsigned int timeout_ms);
+
+/* struct iommufd_viommu_ops migration entry points */
+int amd_viommu_mig_get_size(struct iommufd_viommu *viommu, size_t *out_size);
+int amd_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
+				const struct iommufd_viommu_mig_ctx *ctx,
+				u32 timeout_ms, u32 *out_status);
+int amd_viommu_mig_save(struct iommufd_viommu *viommu,
+			const struct iommufd_viommu_mig_ctx *ctx,
+			struct iommu_viommu_mig_header *hdr, void *payload,
+			size_t payload_len);
+int amd_viommu_mig_restore(struct iommufd_viommu *viommu,
+			   const struct iommufd_viommu_mig_ctx *ctx,
+			   const struct iommu_viommu_mig_header *hdr,
+			   const void *payload, size_t payload_len);
+int amd_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
+				  const struct iommufd_viommu_mig_ctx *ctx);
+void amd_viommu_mig_abort(struct iommufd_viommu *viommu);
 
 #endif /* AMD_VIOMMU_MIG_H */

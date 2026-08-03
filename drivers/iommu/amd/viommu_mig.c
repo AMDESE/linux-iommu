@@ -338,3 +338,198 @@ int amd_viommu_mig_quiesce_cmdbuf(struct amd_iommu_viommu *aviommu,
 
 	return amd_viommu_mig_wait_newest(ctx, &ring, tail, deadline);
 }
+
+/*
+ * Log generation freeze.
+ *
+ * Stopping the endpoint does not stop the IOMMU. It writes the EventLog and
+ * PPRLog rings itself, and the host can append to a guest's event log with
+ * CMD_INSERT_GUEST_EVENT independently of both the guest and the endpoint. An
+ * entry landing between the point where the ring pointers are recorded and the
+ * point where the ring contents are copied would produce a payload whose
+ * pointers and contents disagree, so generation is turned off for the duration.
+ *
+ * Entries the guest would have received during the frozen window are dropped
+ * rather than queued. That is why the overflow status is recorded here: it is
+ * the only evidence that anything was lost.
+ */
+static void amd_viommu_mig_freeze_logs(struct amd_iommu_viommu *aviommu)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+	u64 evt, ppr;
+
+	lockdep_assert_held(&aviommu->core.mig_lock);
+
+	spin_lock(&aviommu->vfctrl_lock);
+
+	evt = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+	writeq(evt & ~VIOMMU_VFCTRL_EVT_GEN_EN,
+	       vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+
+	ppr = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+	writeq(ppr & ~VIOMMU_VFCTRL_PPR_GEN_EN,
+	       vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+
+	spin_unlock(&aviommu->vfctrl_lock);
+
+	aviommu->mig.evt_ctrl = evt;
+	aviommu->mig.ppr_ctrl = ppr;
+	aviommu->mig.logs_frozen = true;
+}
+
+/*
+ * Put back only the generation bits the freeze cleared, rather than writing the
+ * whole saved register, so that anything else which changed meanwhile survives.
+ */
+static void amd_viommu_mig_thaw_logs(struct amd_iommu_viommu *aviommu)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+	u64 val;
+
+	lockdep_assert_held(&aviommu->core.mig_lock);
+
+	if (!aviommu->mig.logs_frozen)
+		return;
+
+	spin_lock(&aviommu->vfctrl_lock);
+
+	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+	val |= aviommu->mig.evt_ctrl & VIOMMU_VFCTRL_EVT_GEN_EN;
+	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
+
+	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+	val |= aviommu->mig.ppr_ctrl & VIOMMU_VFCTRL_PPR_GEN_EN;
+	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
+
+	spin_unlock(&aviommu->vfctrl_lock);
+
+	aviommu->mig.logs_frozen = false;
+}
+
+/*
+ * Record the guest status register once nothing is generating entries any more.
+ * An overflow bit here means the guest lost log entries, which is worth
+ * reporting but is not a reason to refuse the migration: the entries are
+ * already gone, and refusing would not bring them back.
+ *
+ * What is recorded travels as a report and nothing else. The sticky bits are
+ * write-one-to-clear, so no destination can be handed a pending overflow
+ * whatever this reads, which is also why it does not matter here whether a bit
+ * describes the guest's own history or the freeze that has just started.
+ */
+static void amd_viommu_mig_read_status(struct amd_iommu_viommu *aviommu)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vf = VIOMMU_VF_MMIO_BASE(iommu, aviommu->gid);
+	u64 status;
+
+	status = readq(vf + VIOMMU_VF_MMIO_OFF(MMIO_STATUS_OFFSET));
+	aviommu->mig.status = status;
+
+	/*
+	 * Only the two logs the freeze covers. The GA log has an overflow bit
+	 * of its own, but nothing here disables it, so reporting it would say
+	 * something about the guest rather than about this migration.
+	 */
+	if (status & (MMIO_STATUS_EVT_OVERFLOW_MASK |
+		      MMIO_STATUS_PPR_OVERFLOW_MASK))
+		pr_warn("%s: gid=%#x log overflow before save, status=%#llx\n",
+			__func__, aviommu->gid, status);
+}
+
+/**
+ * amd_viommu_mig_prepare_save - Quiesce a vIOMMU so its state stops changing
+ * @viommu: vIOMMU being migrated
+ * @ctx: Guest memory accessor for this operation
+ * @timeout_ms: How long the guest command ring may take to settle
+ * @out_status: Operation detail for userspace
+ *
+ * Return: 0 with the vIOMMU quiesced, or an error leaving nothing applied.
+ *
+ * Settle the command ring before freezing the logs, not after, so that a ring
+ * which never settles leaves the guest exactly as it was. Command execution can
+ * itself generate log entries, and those belong to the guest's history, so they
+ * must be allowed to land before generation stops.
+ */
+int amd_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
+				const struct iommufd_viommu_mig_ctx *ctx,
+				u32 timeout_ms, u32 *out_status)
+{
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	int ret;
+
+	ret = amd_viommu_mig_quiesce_cmdbuf(aviommu, ctx, timeout_ms);
+	if (ret)
+		return ret;
+
+	amd_viommu_mig_freeze_logs(aviommu);
+	amd_viommu_mig_read_status(aviommu);
+
+	/*
+	 * Left at zero deliberately. The bits of out_status are a userspace
+	 * interface and nothing consumes them yet, so assigning meanings here
+	 * would fix an ABI ahead of the code that needs it.
+	 */
+	*out_status = 0;
+
+	return 0;
+}
+
+/**
+ * amd_viommu_mig_abort - Abandon a migration and undo what it applied
+ * @viommu: vIOMMU to release
+ *
+ * Also runs when an earlier step failed partway, so it undoes only what was
+ * actually applied and must work from any point in the sequence.
+ */
+void amd_viommu_mig_abort(struct iommufd_viommu *viommu)
+{
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+
+	amd_viommu_mig_thaw_logs(aviommu);
+	aviommu->mig.status = 0;
+}
+
+/*
+ * The core treats the migration ops as a set and offers none of them unless all
+ * are present, so the parts of the sequence that are not written yet have to be
+ * refused individually rather than left out. Quiescing a vIOMMU is useful on its
+ * own for validating the drain and the freeze, which is why these are stubs
+ * rather than the whole set waiting for the last one.
+ *
+ * Userspace cannot reach any of this by accident: the capability that tells a
+ * VMM migration is available is not advertised until the sequence is complete.
+ */
+int amd_viommu_mig_get_size(struct iommufd_viommu *viommu, size_t *out_size)
+{
+	return -EOPNOTSUPP;
+}
+
+int amd_viommu_mig_save(struct iommufd_viommu *viommu,
+			const struct iommufd_viommu_mig_ctx *ctx,
+			struct iommu_viommu_mig_header *hdr, void *payload,
+			size_t payload_len)
+{
+	return -EOPNOTSUPP;
+}
+
+int amd_viommu_mig_restore(struct iommufd_viommu *viommu,
+			   const struct iommufd_viommu_mig_ctx *ctx,
+			   const struct iommu_viommu_mig_header *hdr,
+			   const void *payload, size_t payload_len)
+{
+	return -EOPNOTSUPP;
+}
+
+int amd_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
+				  const struct iommufd_viommu_mig_ctx *ctx)
+{
+	return -EOPNOTSUPP;
+}

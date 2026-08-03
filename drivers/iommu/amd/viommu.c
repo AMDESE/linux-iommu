@@ -695,10 +695,12 @@ void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue)
 	val &= ~GENMASK_ULL(51, 0);
 
 	/* Set Event buffer base and length */
-	val |= FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
-	val |= FIELD_PREP(GENMASK_ULL(51, 12), (hw_queue->base_addr >> 12));
-	val |= FIELD_PREP(BIT_ULL_MASK(8), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN));
-	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_EVT_LEN, hw_queue->length);
+	val |= FIELD_PREP(VIOMMU_VFCTRL_EVT_BASE, (hw_queue->base_addr >> 12));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_EVT_LOG_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_EVT_INT_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN));
 	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET);
 
 	spin_unlock(&aviommu->vfctrl_lock);
@@ -728,14 +730,20 @@ void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 	val &= ~GENMASK_ULL(55, 0);
 
 	/* Set PPR buffer base and length */
-	val |= FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
-	val |= FIELD_PREP(GENMASK_ULL(55, 16), (hw_queue->base_addr >> 12));
-	val |= FIELD_PREP(BIT_ULL_MASK(8), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN));
-	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN));
-	val |= FIELD_PREP(BIT_ULL_MASK(10), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN));
-	val |= FIELD_PREP(BIT_ULL_MASK(13), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN));
-	val |= FIELD_PREP(BIT_ULL_MASK(14), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN));
-	val |= FIELD_PREP(BIT_ULL_MASK(15), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPR_LEN, hw_queue->length);
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPR_BASE, (hw_queue->base_addr >> 12));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPRLOG_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPRINT_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPR_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPR_AUTO_RSP_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPR_BLKSTOPMRK_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_PPR_AUTO_RSP_AON,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON));
 	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET);
 
 	spin_unlock(&aviommu->vfctrl_lock);
