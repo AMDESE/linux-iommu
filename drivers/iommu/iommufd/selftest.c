@@ -785,6 +785,7 @@ static int mock_viommu_mig_get_size(struct iommufd_viommu *viommu,
  * the failure path can be driven without needing a stuck queue.
  */
 static int mock_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
+					const struct iommufd_viommu_mig_ctx *ctx,
 					u32 timeout_ms, u32 *out_status)
 {
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
@@ -798,6 +799,7 @@ static int mock_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
 }
 
 static int mock_viommu_mig_save(struct iommufd_viommu *viommu,
+				const struct iommufd_viommu_mig_ctx *ctx,
 				struct iommu_viommu_mig_header *hdr,
 				void *payload, size_t payload_len)
 {
@@ -822,6 +824,7 @@ static int mock_viommu_mig_save(struct iommufd_viommu *viommu,
 }
 
 static int mock_viommu_mig_restore(struct iommufd_viommu *viommu,
+				   const struct iommufd_viommu_mig_ctx *ctx,
 				   const struct iommu_viommu_mig_header *hdr,
 				   const void *payload, size_t payload_len)
 {
@@ -842,7 +845,8 @@ static int mock_viommu_mig_restore(struct iommufd_viommu *viommu,
 	return 0;
 }
 
-static int mock_viommu_mig_commit_restore(struct iommufd_viommu *viommu)
+static int mock_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
+					  const struct iommufd_viommu_mig_ctx *ctx)
 {
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
 
