@@ -1567,6 +1567,7 @@ void sev_tio_tdi_reclaim(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_d
 	struct sev_data_tio_tdi_reclaim r = {
 		.length = sizeof(r),
 	};
+	int ret;
 
 	if (WARN_ON(!dev_data || !tdi_data))
 		return;
@@ -1576,9 +1577,11 @@ void sev_tio_tdi_reclaim(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_d
 	r.dev_ctx_sla = dev_data->dev_ctx;
 	r.tdi_ctx_sla = tdi_data->tdi_ctx;
 
-	sev_do_cmd(SEV_CMD_TIO_TDI_RECLAIM, &r, &dev_data->psp_ret);
+	ret = sev_do_cmd(SEV_CMD_TIO_TDI_RECLAIM, &r, &dev_data->psp_ret);
 
-	sla_free(tdi_data->tdi_ctx, tio_status->tdictx_size, true);
+	if (!ret)
+		sla_free(tdi_data->tdi_ctx, tio_status->tdictx_size, true);
+
 	tdi_data->tdi_ctx = SLA_NULL;
 }
 
