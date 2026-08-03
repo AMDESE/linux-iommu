@@ -3057,6 +3057,59 @@ TEST_F(iommufd_viommu, viommu_migration_bad_payload)
 			    &hdr, &hdr_len, payload, &data_len, &status);
 }
 
+TEST_F(iommufd_viommu, viommu_migration_guest_memory)
+{
+	const uint64_t pattern = 0x0123456789abcdefULL;
+	uint8_t payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE] = {};
+	struct iommu_viommu_mig_header hdr = {};
+	uint32_t data_len = sizeof(payload);
+	uint32_t hdr_len = sizeof(hdr);
+	uint64_t unmapped_iova;
+	uint32_t status = 0;
+	__u64 iova;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	/*
+	 * Plant a value where the vIOMMU's own address space can see it. The
+	 * mock driver reads it during PREPARE_SAVE, reports what it read, and
+	 * writes the complement back.
+	 */
+	test_ioctl_ioas_map(buffer, PAGE_SIZE, &iova);
+	*(uint64_t *)buffer = pattern;
+
+	test_cmd_viommu_mig_set_probe(self->viommu_id, iova);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+			    1000, &hdr, &hdr_len, payload, &data_len, &status);
+
+	/* The driver reached the right page, in both directions */
+	ASSERT_EQ((uint32_t)pattern, status);
+	ASSERT_EQ(~pattern, *(uint64_t *)buffer);
+
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	/*
+	 * An address the guest never mapped fails the prepare rather than
+	 * reading something else, and unwinds so the vIOMMU stays usable.
+	 */
+	unmapped_iova = iova + PAGE_SIZE;
+	test_cmd_viommu_mig_set_probe(self->viommu_id, unmapped_iova);
+	test_err_viommu_mig(ENOENT, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE, 1000, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+
+	test_cmd_viommu_mig_set_probe(self->viommu_id, 0);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+			    1000, &hdr, &hdr_len, payload, &data_len, &status);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_STATUS, status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	test_ioctl_ioas_unmap(iova, PAGE_SIZE);
+}
+
 TEST_F(iommufd_viommu, viommu_alloc_nested_iopf)
 {
 	struct iommu_hwpt_selftest data = {

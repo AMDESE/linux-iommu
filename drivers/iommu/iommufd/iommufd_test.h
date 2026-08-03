@@ -31,6 +31,7 @@ enum {
 	IOMMU_TEST_OP_PASID_CHECK_HWPT,
 	IOMMU_TEST_OP_DMABUF_GET,
 	IOMMU_TEST_OP_DMABUF_REVOKE,
+	IOMMU_TEST_OP_VIOMMU_MIG_SET_PROBE,
 };
 
 enum {
@@ -194,6 +195,14 @@ struct iommu_test_cmd {
 			__s32 dmabuf_fd;
 			__u32 revoked;
 		} dmabuf_revoke;
+		struct {
+			/*
+			 * Guest address the mock driver reads and writes back
+			 * during PREPARE_SAVE, or 0 to stop probing.
+			 * @id is viommu_id
+			 */
+			__aligned_u64 iova;
+		} mig_probe;
 	};
 	__u32 last;
 };

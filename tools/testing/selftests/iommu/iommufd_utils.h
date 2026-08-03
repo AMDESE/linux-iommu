@@ -1043,6 +1043,21 @@ static int _test_cmd_viommu_mig(int fd, __u32 viommu_id, __u32 op,
 					  hdr, hdr_len, data, data_len,        \
 					  out_status))
 
+static int _test_cmd_viommu_mig_set_probe(int fd, __u32 viommu_id, __u64 iova)
+{
+	struct iommu_test_cmd cmd = {
+		.size = sizeof(cmd),
+		.op = IOMMU_TEST_OP_VIOMMU_MIG_SET_PROBE,
+		.id = viommu_id,
+		.mig_probe = { .iova = iova },
+	};
+
+	return ioctl(fd, IOMMU_TEST_CMD, &cmd);
+}
+
+#define test_cmd_viommu_mig_set_probe(viommu_id, iova) \
+	ASSERT_EQ(0, _test_cmd_viommu_mig_set_probe(self->fd, viommu_id, iova))
+
 static int _test_cmd_vdevice_alloc(int fd, __u32 viommu_id, __u32 idev_id,
 				   __u64 virt_id, __u32 *vdev_id)
 {
