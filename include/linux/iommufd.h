@@ -144,6 +144,45 @@ struct iommufd_viommu {
 	enum iommu_viommu_type type;
 };
 
+/**
+ * struct iommufd_viommu_mig_ctx - Guest memory access lent to a driver for
+ *				   the duration of one migration operation
+ * @rw: Read or write guest memory. @iova is an address in the vIOMMU's
+ *	nesting parent address space, which is the address space a guest posts
+ *	addresses in. @flags takes IOMMUFD_ACCESS_RW_* values
+ *
+ * A vIOMMU's own state lives in hardware, but the guest structures it walks
+ * live in guest memory, so a driver saving or restoring one generally has to
+ * read or write pages the guest owns.
+ *
+ * The core hands this to a driver rather than the driver reaching for guest
+ * memory itself, because the machinery behind it lives in the iommufd module
+ * while an IOMMU driver may be built in, and a built-in driver cannot call
+ * into a module. Passing a function pointer works in either configuration.
+ *
+ * Valid only for the duration of the op it was passed to. The core tears the
+ * underlying mapping down afterwards, so a driver that stashes this pointer
+ * and uses it later has a use-after-free.
+ */
+struct iommufd_viommu_mig_ctx {
+	int (*rw)(const struct iommufd_viommu_mig_ctx *ctx, unsigned long iova,
+		  void *data, size_t len, unsigned int flags);
+};
+
+static inline int
+iommufd_viommu_mig_read(const struct iommufd_viommu_mig_ctx *ctx,
+			unsigned long iova, void *data, size_t len)
+{
+	return ctx->rw(ctx, iova, data, len, IOMMUFD_ACCESS_RW_READ);
+}
+
+static inline int
+iommufd_viommu_mig_write(const struct iommufd_viommu_mig_ctx *ctx,
+			 unsigned long iova, void *data, size_t len)
+{
+	return ctx->rw(ctx, iova, data, len, IOMMUFD_ACCESS_RW_WRITE);
+}
+
 struct iommufd_vdevice {
 	struct iommufd_object obj;
 	struct iommufd_viommu *viommu;
@@ -236,6 +275,11 @@ struct iommufd_hw_queue {
  *               the vIOMMU untouched
  * @mig_commit_restore: Apply the state accepted by @mig_restore to hardware,
  *                      arm queues and invalidate caches
+ *
+ * Every migration op that may touch guest memory is passed a @ctx it can read
+ * and write guest pages through, valid only for that call. @mig_get_size and
+ * @mig_abort are not: sizing must not depend on guest memory, and an abort
+ * only has hardware left to undo.
  * @mig_abort: Abandon an in-progress save or restore and undo its effects,
  *             including any freeze applied by @mig_prepare_save. Cannot fail:
  *             there is no useful way for a caller to respond to a failed abort
@@ -264,15 +308,19 @@ struct iommufd_viommu_ops {
 	int (*set_ext_int_remap)(struct iommufd_viommu *viommu,
 				 const struct iommu_viommu_ext_int_remap *arg);
 	int (*mig_get_size)(struct iommufd_viommu *viommu, size_t *out_size);
-	int (*mig_prepare_save)(struct iommufd_viommu *viommu, u32 timeout_ms,
-				u32 *out_status);
+	int (*mig_prepare_save)(struct iommufd_viommu *viommu,
+				const struct iommufd_viommu_mig_ctx *ctx,
+				u32 timeout_ms, u32 *out_status);
 	int (*mig_save)(struct iommufd_viommu *viommu,
+			const struct iommufd_viommu_mig_ctx *ctx,
 			struct iommu_viommu_mig_header *hdr, void *payload,
 			size_t payload_len);
 	int (*mig_restore)(struct iommufd_viommu *viommu,
+			   const struct iommufd_viommu_mig_ctx *ctx,
 			   const struct iommu_viommu_mig_header *hdr,
 			   const void *payload, size_t payload_len);
-	int (*mig_commit_restore)(struct iommufd_viommu *viommu);
+	int (*mig_commit_restore)(struct iommufd_viommu *viommu,
+				  const struct iommufd_viommu_mig_ctx *ctx);
 	void (*mig_abort)(struct iommufd_viommu *viommu);
 };
 

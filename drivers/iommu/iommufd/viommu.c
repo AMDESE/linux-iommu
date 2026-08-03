@@ -535,6 +535,66 @@ out_put_viommu:
 	return rc;
 }
 
+/**
+ * struct iommufd_viommu_mig_mem - Guest memory access for one migration op
+ * @ctx: Handed to the driver, which reaches guest memory through it
+ * @viommu: vIOMMU being migrated
+ * @access: Internal access attached to the nesting parent IOAS
+ *
+ * Set up around a single migration op and torn down again afterwards, rather
+ * than kept for the whole sequence, so that a driver holding on to @ctx
+ * beyond the call it was given fails loudly instead of quietly reading
+ * through a stale mapping.
+ */
+struct iommufd_viommu_mig_mem {
+	struct iommufd_viommu_mig_ctx ctx;
+	struct iommufd_viommu *viommu;
+	struct iommufd_access *access;
+};
+
+static int iommufd_viommu_mig_rw(const struct iommufd_viommu_mig_ctx *ctx,
+				 unsigned long iova, void *data, size_t len,
+				 unsigned int flags)
+{
+	const struct iommufd_viommu_mig_mem *mem =
+		container_of(ctx, struct iommufd_viommu_mig_mem, ctx);
+
+	return iommufd_access_rw(mem->access, iova, data, len, flags);
+}
+
+/*
+ * The nesting parent IOAS is the address space the guest posts addresses in,
+ * so it is what a guest queue base or a semaphore address in a guest command
+ * resolves through.
+ */
+static int iommufd_viommu_mig_mem_init(struct iommufd_viommu_mig_mem *mem,
+				       struct iommufd_viommu *viommu)
+{
+	struct iommufd_access *access;
+	int rc;
+
+	access = iommufd_access_create_internal(viommu->ictx);
+	if (IS_ERR(access))
+		return PTR_ERR(access);
+
+	rc = iommufd_access_attach_internal(access, viommu->hwpt->ioas);
+	if (rc) {
+		iommufd_access_destroy_internal(viommu->ictx, access);
+		return rc;
+	}
+
+	mem->ctx.rw = iommufd_viommu_mig_rw;
+	mem->viommu = viommu;
+	mem->access = access;
+	return 0;
+}
+
+static void iommufd_viommu_mig_mem_destroy(struct iommufd_viommu_mig_mem *mem)
+{
+	iommufd_access_detach_internal(mem->access);
+	iommufd_access_destroy_internal(mem->viommu->ictx, mem->access);
+}
+
 /*
  * Give up on an in-progress migration and put the vIOMMU back the way it was.
  * Used both for an explicit abort and for any step that fails partway, so that
@@ -576,6 +636,7 @@ static int iommufd_viommu_mig_get_size(struct iommufd_viommu *viommu,
 }
 
 static int iommufd_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
+					   const struct iommufd_viommu_mig_ctx *ctx,
 					   struct iommu_viommu_mig_state *cmd)
 {
 	int rc;
@@ -584,7 +645,7 @@ static int iommufd_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
 	if (rc)
 		return rc;
 
-	rc = viommu->ops->mig_prepare_save(viommu, cmd->timeout_ms,
+	rc = viommu->ops->mig_prepare_save(viommu, ctx, cmd->timeout_ms,
 					   &cmd->out_status);
 	if (rc)
 		iommufd_viommu_mig_unwind(viommu);
@@ -592,6 +653,7 @@ static int iommufd_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
 }
 
 static int iommufd_viommu_mig_save(struct iommufd_viommu *viommu,
+				   const struct iommufd_viommu_mig_ctx *ctx,
 				   struct iommu_viommu_mig_state *cmd)
 {
 	const size_t hdr_size = sizeof(struct iommu_viommu_mig_header);
@@ -639,7 +701,7 @@ static int iommufd_viommu_mig_save(struct iommufd_viommu *viommu,
 		goto out_unwind;
 	}
 
-	rc = viommu->ops->mig_save(viommu, &hdr, payload, payload_len);
+	rc = viommu->ops->mig_save(viommu, ctx, &hdr, payload, payload_len);
 	if (rc)
 		goto out_free;
 
@@ -675,6 +737,7 @@ out_unwind:
 }
 
 static int iommufd_viommu_mig_restore(struct iommufd_viommu *viommu,
+				      const struct iommufd_viommu_mig_ctx *ctx,
 				      struct iommu_viommu_mig_state *cmd)
 {
 	const size_t hdr_size = sizeof(struct iommu_viommu_mig_header);
@@ -732,7 +795,8 @@ static int iommufd_viommu_mig_restore(struct iommufd_viommu *viommu,
 		goto out_free;
 	}
 
-	rc = viommu->ops->mig_restore(viommu, &hdr, payload, cmd->data_len);
+	rc = viommu->ops->mig_restore(viommu, ctx, &hdr, payload,
+				      cmd->data_len);
 
 out_free:
 	kvfree(payload);
@@ -742,7 +806,9 @@ out_unwind:
 	return rc;
 }
 
-static int iommufd_viommu_mig_commit_restore(struct iommufd_viommu *viommu)
+static int
+iommufd_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
+				  const struct iommufd_viommu_mig_ctx *ctx)
 {
 	int rc;
 
@@ -750,15 +816,35 @@ static int iommufd_viommu_mig_commit_restore(struct iommufd_viommu *viommu)
 	if (rc)
 		return rc;
 
-	rc = viommu->ops->mig_commit_restore(viommu);
+	rc = viommu->ops->mig_commit_restore(viommu, ctx);
 	if (rc)
 		iommufd_viommu_mig_unwind(viommu);
 	return rc;
 }
 
+/*
+ * Sizing and abort are the two operations a driver services without looking
+ * at guest memory, so they are also the two that stay usable if the guest
+ * address space cannot be reached at all.
+ */
+static bool iommufd_viommu_mig_op_needs_mem(u32 op)
+{
+	switch (op) {
+	case IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE:
+	case IOMMU_VIOMMU_MIG_OP_SAVE:
+	case IOMMU_VIOMMU_MIG_OP_RESTORE:
+	case IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE:
+		return true;
+	default:
+		return false;
+	}
+}
+
 int iommufd_viommu_mig_state_ioctl(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_viommu_mig_state *cmd = ucmd->cmd;
+	const struct iommufd_viommu_mig_ctx *ctx = NULL;
+	struct iommufd_viommu_mig_mem mem;
 	struct iommufd_viommu *viommu;
 	int respond_rc;
 	int rc;
@@ -778,21 +864,29 @@ int iommufd_viommu_mig_state_ioctl(struct iommufd_ucmd *ucmd)
 	cmd->out_status = 0;
 
 	mutex_lock(&viommu->mig_lock);
+
+	if (iommufd_viommu_mig_op_needs_mem(cmd->op)) {
+		rc = iommufd_viommu_mig_mem_init(&mem, viommu);
+		if (rc)
+			goto out_unlock;
+		ctx = &mem.ctx;
+	}
+
 	switch (cmd->op) {
 	case IOMMU_VIOMMU_MIG_OP_GET_SIZE:
 		rc = iommufd_viommu_mig_get_size(viommu, cmd);
 		break;
 	case IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE:
-		rc = iommufd_viommu_mig_prepare_save(viommu, cmd);
+		rc = iommufd_viommu_mig_prepare_save(viommu, ctx, cmd);
 		break;
 	case IOMMU_VIOMMU_MIG_OP_SAVE:
-		rc = iommufd_viommu_mig_save(viommu, cmd);
+		rc = iommufd_viommu_mig_save(viommu, ctx, cmd);
 		break;
 	case IOMMU_VIOMMU_MIG_OP_RESTORE:
-		rc = iommufd_viommu_mig_restore(viommu, cmd);
+		rc = iommufd_viommu_mig_restore(viommu, ctx, cmd);
 		break;
 	case IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE:
-		rc = iommufd_viommu_mig_commit_restore(viommu);
+		rc = iommufd_viommu_mig_commit_restore(viommu, ctx);
 		break;
 	case IOMMU_VIOMMU_MIG_OP_ABORT:
 		iommufd_viommu_mig_unwind(viommu);
@@ -802,6 +896,10 @@ int iommufd_viommu_mig_state_ioctl(struct iommufd_ucmd *ucmd)
 		rc = -EOPNOTSUPP;
 		break;
 	}
+
+	if (ctx)
+		iommufd_viommu_mig_mem_destroy(&mem);
+out_unlock:
 	mutex_unlock(&viommu->mig_lock);
 
 	if (rc && rc != -EMSGSIZE)
