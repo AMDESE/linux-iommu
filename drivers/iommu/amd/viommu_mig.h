@@ -80,4 +80,11 @@ void *amd_viommu_mig_section(struct amd_viommu_mig_writer *w, u32 type,
 int amd_viommu_mig_put(struct amd_viommu_mig_writer *w, u32 type,
 		       const void *data, size_t length);
 
+struct amd_iommu_viommu;
+struct iommufd_viommu_mig_ctx;
+
+int amd_viommu_mig_quiesce_cmdbuf(struct amd_iommu_viommu *aviommu,
+				  const struct iommufd_viommu_mig_ctx *ctx,
+				  unsigned int timeout_ms);
+
 #endif /* AMD_VIOMMU_MIG_H */

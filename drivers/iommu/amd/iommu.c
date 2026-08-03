@@ -48,7 +48,8 @@
 #include "../irq_remapping.h"
 #include "../iommu-pages.h"
 
-#define CMD_SET_TYPE(cmd, t) ((cmd)->data[1] |= ((t) << 28))
+#define CMD_SET_TYPE(cmd, t) \
+	((cmd)->data[1] |= FIELD_PREP(CMD_TYPE_MASK, (t)))
 
 /* Reserved IOVA ranges */
 #define MSI_RANGE_START		(0xfee00000)

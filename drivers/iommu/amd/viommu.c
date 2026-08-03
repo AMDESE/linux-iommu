@@ -655,13 +655,16 @@ void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue)
 
 	/* Clear fields in VFCTRL MMIO */
 	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
-	val &= ~(GENMASK_ULL(51, 12) | GENMASK_ULL(9, 8) | GENMASK_ULL(3, 0));
+	val &= ~(VIOMMU_VFCTRL_CMD_BASE | VIOMMU_VFCTRL_CMD_COMWAIT_EN |
+		 VIOMMU_VFCTRL_CMD_EN | VIOMMU_VFCTRL_CMD_LEN);
 
 	/* Set Command buffer base, length, enable, command wait enable */
-	val |= FIELD_PREP(GENMASK_ULL(3, 0), hw_queue->length);
-	val |= FIELD_PREP(GENMASK_ULL(51, 12), (hw_queue->base_addr >> 12));
-	val |= FIELD_PREP(BIT_ULL_MASK(8), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN));
-	val |= FIELD_PREP(BIT_ULL_MASK(9), !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_CMD_LEN, hw_queue->length);
+	val |= FIELD_PREP(VIOMMU_VFCTRL_CMD_BASE, (hw_queue->base_addr >> 12));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_CMD_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN));
+	val |= FIELD_PREP(VIOMMU_VFCTRL_CMD_COMWAIT_EN,
+			  !!(flags & IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN));
 
 	writeq(val, vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
 

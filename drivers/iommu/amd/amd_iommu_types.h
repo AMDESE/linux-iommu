@@ -215,6 +215,7 @@
 #define CTRL_INV_TO_100S	6
 
 /* command specific defines */
+#define CMD_TYPE_MASK		GENMASK(31, 28)	/* Opcode, in data[1] */
 #define CMD_COMPL_WAIT          0x01
 #define CMD_INV_DEV_ENTRY       0x02
 #define CMD_INV_IOMMU_PAGES	0x03
@@ -513,6 +514,16 @@ extern bool amdr_ivrs_remap_support;
 
 #define VIOMMU_VF_MMIO_BASE(iommu, guestId) \
 	(iommu->vf_base + (guestId * VIOMMU_VF_MMIO_ENTRY_SIZE))
+
+/*
+ * The VF MMIO window is the page a guest sees at BAR offset 0x2000, so a
+ * register documented at MMIO_*_OFFSET sits that much lower down in it. Use
+ * this rather than MMIO_*_OFFSET directly, which is relative to the whole BAR
+ * and only correct against iommu->mmio_base.
+ */
+#define VIOMMU_VF_MMIO_GUEST_BASE	0x2000
+#define VIOMMU_VF_MMIO_OFF(guest_offset) \
+	((guest_offset) - VIOMMU_VF_MMIO_GUEST_BASE)
 
 #define VIOMMU_VFCTRL_MMIO_BASE(iommu, guestId) \
 	(iommu->vfctrl_base + (guestId * VIOMMU_VFCTRL_MMIO_ENTRY_SIZE))
