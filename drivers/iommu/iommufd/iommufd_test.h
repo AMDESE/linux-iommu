@@ -31,6 +31,8 @@ enum {
 	IOMMU_TEST_OP_PASID_CHECK_HWPT,
 	IOMMU_TEST_OP_DMABUF_GET,
 	IOMMU_TEST_OP_DMABUF_REVOKE,
+	IOMMU_TEST_OP_VIOMMU_MIG_SET_PROBE,
+	IOMMU_TEST_OP_VIOMMU_MIG_GET_ABORTS,
 };
 
 enum {
@@ -194,6 +196,22 @@ struct iommu_test_cmd {
 			__s32 dmabuf_fd;
 			__u32 revoked;
 		} dmabuf_revoke;
+		struct {
+			/*
+			 * Guest address the mock driver reads and writes back
+			 * during PREPARE_SAVE, or 0 to stop probing.
+			 * @id is viommu_id
+			 */
+			__aligned_u64 iova;
+		} mig_probe;
+		struct {
+			/*
+			 * Out: how many times any mock vIOMMU's migration
+			 * abort has run, so that a test can see an abort that
+			 * happens when the vIOMMU is destroyed
+			 */
+			__u32 count;
+		} mig_aborts;
 	};
 	__u32 last;
 };

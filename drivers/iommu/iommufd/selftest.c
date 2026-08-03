@@ -154,6 +154,8 @@ struct mock_viommu {
 	u8 mig_payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE];
 	bool mig_prepared;
 	bool mig_committed;
+	/* Guest address exercised during PREPARE_SAVE, 0 to skip */
+	u64 mig_probe_iova;
 };
 
 static inline struct mock_viommu *to_mock_viommu(struct iommufd_viommu *viommu)
@@ -781,20 +783,62 @@ static int mock_viommu_mig_get_size(struct iommufd_viommu *viommu,
 }
 
 /*
+ * Stand in for the guest memory a real driver touches while quiescing: read a
+ * value the test planted, then write its complement back. Doing both proves
+ * the context reaches guest pages in either direction, and reporting the value
+ * read proves it reached the right ones.
+ */
+static int mock_viommu_mig_probe(struct mock_viommu *mock_viommu,
+				 const struct iommufd_viommu_mig_ctx *ctx,
+				 u32 *out_status)
+{
+	u64 val;
+	int rc;
+
+	rc = iommufd_viommu_mig_read(ctx, mock_viommu->mig_probe_iova, &val,
+				     sizeof(val));
+	if (rc)
+		return rc;
+
+	val = ~val;
+	rc = iommufd_viommu_mig_write(ctx, mock_viommu->mig_probe_iova, &val,
+				      sizeof(val));
+	if (rc)
+		return rc;
+
+	*out_status = lower_32_bits(~val);
+	return 0;
+}
+
+/*
  * A zero timeout stands in for a quiesce that could not be completed, so that
- * the failure path can be driven without needing a stuck queue.
+ * the failure path can be driven without needing a stuck queue. That is a test
+ * hook and not the contract: a real driver treats zero as one attempt without
+ * waiting, and succeeds if nothing is outstanding.
  */
 static int mock_viommu_mig_prepare_save(struct iommufd_viommu *viommu,
 					const struct iommufd_viommu_mig_ctx *ctx,
 					u32 timeout_ms, u32 *out_status)
 {
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
+	int rc;
+
+	/* The core owes every op that may touch guest memory a context */
+	if (WARN_ON(!ctx))
+		return -EINVAL;
 
 	if (!timeout_ms)
 		return -ETIMEDOUT;
 
+	if (mock_viommu->mig_probe_iova) {
+		rc = mock_viommu_mig_probe(mock_viommu, ctx, out_status);
+		if (rc)
+			return rc;
+	} else {
+		*out_status = IOMMU_TEST_VIOMMU_MIG_STATUS;
+	}
+
 	mock_viommu->mig_prepared = true;
-	*out_status = IOMMU_TEST_VIOMMU_MIG_STATUS;
 	return 0;
 }
 
@@ -805,6 +849,8 @@ static int mock_viommu_mig_save(struct iommufd_viommu *viommu,
 {
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
 
+	if (WARN_ON(!ctx))
+		return -EINVAL;
 	/* The core must not reach a save that was never prepared */
 	if (WARN_ON(!mock_viommu->mig_prepared))
 		return -EINVAL;
@@ -832,6 +878,8 @@ static int mock_viommu_mig_restore(struct iommufd_viommu *viommu,
 	const u8 *bytes = payload;
 	size_t i;
 
+	if (WARN_ON(!ctx))
+		return -EINVAL;
 	if (hdr->min_reader_version > IOMMU_TEST_VIOMMU_MIG_FORMAT_VERSION)
 		return -EOPNOTSUPP;
 	if (payload_len != sizeof(mock_viommu->mig_payload))
@@ -850,6 +898,8 @@ static int mock_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
 {
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
 
+	if (WARN_ON(!ctx))
+		return -EINVAL;
 	/* The core must not commit the same restore twice */
 	if (WARN_ON(mock_viommu->mig_committed))
 		return -EINVAL;
@@ -858,10 +908,18 @@ static int mock_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
 	return 0;
 }
 
+/*
+ * Counted globally rather than per vIOMMU, because the interesting abort is the
+ * one that runs as the vIOMMU is destroyed, after which there is no mock_viommu
+ * left to ask.
+ */
+static atomic_t mock_viommu_mig_abort_count = ATOMIC_INIT(0);
+
 static void mock_viommu_mig_abort(struct iommufd_viommu *viommu)
 {
 	struct mock_viommu *mock_viommu = to_mock_viommu(viommu);
 
+	atomic_inc(&mock_viommu_mig_abort_count);
 	mock_viommu->mig_prepared = false;
 	mock_viommu->mig_committed = false;
 }
@@ -2195,6 +2253,33 @@ err_put:
 	return rc;
 }
 
+/*
+ * Point the mock driver at a guest address to exercise during PREPARE_SAVE.
+ * The access itself has to happen inside a migration op, because that is the
+ * only place a driver is handed a context to reach guest memory through.
+ */
+static int iommufd_test_set_mig_probe(struct iommufd_ucmd *ucmd, u32 viommu_id,
+				      u64 iova)
+{
+	struct iommufd_viommu *viommu;
+
+	viommu = iommufd_get_viommu(ucmd, viommu_id);
+	if (IS_ERR(viommu))
+		return PTR_ERR(viommu);
+
+	to_mock_viommu(viommu)->mig_probe_iova = iova;
+	iommufd_put_object(ucmd->ictx, &viommu->obj);
+	return 0;
+}
+
+static int iommufd_test_get_mig_aborts(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_test_cmd *cmd = ucmd->cmd;
+
+	cmd->mig_aborts.count = atomic_read(&mock_viommu_mig_abort_count);
+	return iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+}
+
 int iommufd_test(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_test_cmd *cmd = ucmd->cmd;
@@ -2280,6 +2365,11 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 		return iommufd_test_dmabuf_revoke(ucmd,
 						  cmd->dmabuf_revoke.dmabuf_fd,
 						  cmd->dmabuf_revoke.revoked);
+	case IOMMU_TEST_OP_VIOMMU_MIG_SET_PROBE:
+		return iommufd_test_set_mig_probe(ucmd, cmd->id,
+						  cmd->mig_probe.iova);
+	case IOMMU_TEST_OP_VIOMMU_MIG_GET_ABORTS:
+		return iommufd_test_get_mig_aborts(ucmd);
 	default:
 		return -EOPNOTSUPP;
 	}

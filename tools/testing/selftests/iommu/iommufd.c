@@ -3013,6 +3013,8 @@ TEST_F(iommufd_viommu, viommu_migration)
 TEST_F(iommufd_viommu, viommu_migration_bad_payload)
 {
 	uint8_t payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE] = {};
+	uint8_t padded[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE + 16];
+	uint32_t padded_len;
 	struct iommu_viommu_mig_header hdr = {};
 	uint32_t data_len = sizeof(payload);
 	uint32_t short_hdr_len = sizeof(hdr) - 1;
@@ -3052,7 +3054,19 @@ TEST_F(iommufd_viommu, viommu_migration_bad_payload)
 			    payload, &data_len, &status);
 	hdr.blob_type = IOMMU_VIOMMU_TYPE_SELFTEST;
 
-	/* The header must agree with the payload actually handed over */
+	/* A header that claims more payload than the buffer holds */
+	hdr.payload_size = IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE + 1;
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+
+	/* A header that claims no payload at all */
+	hdr.payload_size = 0;
+	test_err_viommu_mig(EINVAL, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
+			    payload, &data_len, &status);
+
+	/* A shorter payload reaches the driver, which rejects its size */
 	hdr.payload_size = IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE - 1;
 	test_err_viommu_mig(EINVAL, self->viommu_id,
 			    IOMMU_VIOMMU_MIG_OP_RESTORE, 0, &hdr, &hdr_len,
@@ -3069,6 +3083,177 @@ TEST_F(iommufd_viommu, viommu_migration_bad_payload)
 			    &hdr, &hdr_len, payload, &data_len, &status);
 	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
 			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	/*
+	 * A buffer larger than the payload restores, as it saves. The bytes
+	 * past the payload are junk the driver would reject if it saw them.
+	 */
+	memset(padded, ~IOMMU_TEST_VIOMMU_MIG_FILL, sizeof(padded));
+	memcpy(padded, payload, sizeof(payload));
+	padded_len = sizeof(padded);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
+			    &hdr, &hdr_len, padded, &padded_len, &status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, padded, &padded_len, &status);
+}
+
+/*
+ * Destroying a vIOMMU that is still partway through a migration must give the
+ * driver its abort, because the process driving the migration can die at any
+ * step. A vIOMMU with nothing in flight has nothing to abort, and one that was
+ * already aborted must not be aborted a second time.
+ */
+TEST_F(iommufd_viommu, viommu_migration_destroy)
+{
+	uint8_t payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE] = {};
+	struct iommu_viommu_mig_header hdr = {};
+	uint32_t data_len = sizeof(payload);
+	uint32_t hdr_len = sizeof(hdr);
+	uint32_t status = 0;
+	uint32_t before;
+	uint32_t after;
+	uint32_t viommu_id;
+	int i;
+
+	enum {
+		DESTROY_IDLE,
+		DESTROY_PREPARED,
+		DESTROY_SAVED,
+		DESTROY_RESTORING,
+		DESTROY_COMMITTED,
+		DESTROY_AFTER_ABORT,
+		DESTROY_NR,
+	};
+	static const uint32_t expected_aborts[DESTROY_NR] = {
+		[DESTROY_IDLE] = 0,
+		[DESTROY_PREPARED] = 1,
+		[DESTROY_SAVED] = 1,
+		[DESTROY_RESTORING] = 1,
+		[DESTROY_COMMITTED] = 1,
+		[DESTROY_AFTER_ABORT] = 1, /* the explicit one, and no more */
+	};
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	/* Get a payload that later cases can feed to RESTORE */
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+			    0, &hdr, &hdr_len, payload, &data_len, &status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_SAVE, 0, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	for (i = 0; i < DESTROY_NR; i++) {
+		test_cmd_viommu_alloc(self->device_id, self->hwpt_id,
+				      IOMMU_VIOMMU_TYPE_SELFTEST, NULL, 0,
+				      &viommu_id);
+
+		switch (i) {
+		case DESTROY_COMMITTED:
+			test_cmd_viommu_mig(viommu_id,
+					    IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
+					    &hdr, &hdr_len, payload,
+					    &data_len, &status);
+			test_cmd_viommu_mig(viommu_id,
+					    IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE,
+					    0, &hdr, &hdr_len, payload,
+					    &data_len, &status);
+			break;
+		case DESTROY_RESTORING:
+			test_cmd_viommu_mig(viommu_id,
+					    IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
+					    &hdr, &hdr_len, payload,
+					    &data_len, &status);
+			break;
+		case DESTROY_SAVED:
+		case DESTROY_AFTER_ABORT:
+		case DESTROY_PREPARED:
+			test_cmd_viommu_mig(viommu_id,
+					    IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+					    0, &hdr, &hdr_len, payload,
+					    &data_len, &status);
+			if (i == DESTROY_PREPARED)
+				break;
+			test_cmd_viommu_mig(viommu_id,
+					    IOMMU_VIOMMU_MIG_OP_SAVE, 0, &hdr,
+					    &hdr_len, payload, &data_len,
+					    &status);
+			if (i == DESTROY_AFTER_ABORT)
+				test_cmd_viommu_mig(viommu_id,
+						    IOMMU_VIOMMU_MIG_OP_ABORT,
+						    0, &hdr, &hdr_len, payload,
+						    &data_len, &status);
+			break;
+		default:
+			break;
+		}
+
+		/*
+		 * The explicit abort is part of what this case counts, so the
+		 * baseline is taken before it.
+		 */
+		test_cmd_viommu_mig_aborts(&before);
+		if (i == DESTROY_AFTER_ABORT)
+			before--;
+		test_ioctl_destroy(viommu_id);
+		test_cmd_viommu_mig_aborts(&after);
+
+		ASSERT_EQ(expected_aborts[i], after - before);
+	}
+}
+
+TEST_F(iommufd_viommu, viommu_migration_guest_memory)
+{
+	const uint64_t pattern = 0x0123456789abcdefULL;
+	uint8_t payload[IOMMU_TEST_VIOMMU_MIG_PAYLOAD_SIZE] = {};
+	struct iommu_viommu_mig_header hdr = {};
+	uint32_t data_len = sizeof(payload);
+	uint32_t hdr_len = sizeof(hdr);
+	uint64_t unmapped_iova;
+	uint32_t status = 0;
+	__u64 iova;
+
+	if (!self->device_id)
+		SKIP(return, "Skipping test for variant no_viommu");
+
+	/*
+	 * Plant a value where the vIOMMU's own address space can see it. The
+	 * mock driver reads it during PREPARE_SAVE, reports what it read, and
+	 * writes the complement back.
+	 */
+	test_ioctl_ioas_map(buffer, PAGE_SIZE, &iova);
+	*(uint64_t *)buffer = pattern;
+
+	test_cmd_viommu_mig_set_probe(self->viommu_id, iova);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+			    1000, &hdr, &hdr_len, payload, &data_len, &status);
+
+	/* The driver reached the right page, in both directions */
+	ASSERT_EQ((uint32_t)pattern, status);
+	ASSERT_EQ(~pattern, *(uint64_t *)buffer);
+
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	/*
+	 * An address the guest never mapped fails the prepare rather than
+	 * reading something else, and unwinds so the vIOMMU stays usable.
+	 */
+	unmapped_iova = iova + PAGE_SIZE;
+	test_cmd_viommu_mig_set_probe(self->viommu_id, unmapped_iova);
+	test_err_viommu_mig(ENOENT, self->viommu_id,
+			    IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE, 1000, &hdr,
+			    &hdr_len, payload, &data_len, &status);
+
+	test_cmd_viommu_mig_set_probe(self->viommu_id, 0);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+			    1000, &hdr, &hdr_len, payload, &data_len, &status);
+	ASSERT_EQ(IOMMU_TEST_VIOMMU_MIG_STATUS, status);
+	test_cmd_viommu_mig(self->viommu_id, IOMMU_VIOMMU_MIG_OP_ABORT, 0,
+			    &hdr, &hdr_len, payload, &data_len, &status);
+
+	test_ioctl_ioas_unmap(iova, PAGE_SIZE);
 }
 
 TEST_F(iommufd_viommu, viommu_alloc_nested_iopf)
