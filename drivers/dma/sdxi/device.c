@@ -33,46 +33,46 @@ static bool dma_engine;
 module_param(dma_engine, bool, 0644);
 MODULE_PARM_DESC(dma_engine, "Enable DMA engine interface (default: false)");
 
-static enum sdxi_fn_gsv sdxi_dev_gsv(const struct sdxi_dev *sdxi)
+static enum sdxi_fn_gsv sdxi_fn_gsv(void __iomem *ctrl_regs)
 {
 	return (enum sdxi_fn_gsv)FIELD_GET(SDXI_MMIO_STS0_FN_GSV,
-					sdxi_read64(sdxi, SDXI_MMIO_STS0));
+					ioread64(ctrl_regs + SDXI_MMIO_STS0));
 }
 
-static void sdxi_write_fn_gsr(struct sdxi_dev *sdxi, enum sdxi_fn_gsr cmd)
+static void sdxi_write_fn_gsr(void __iomem *ctrl_regs, enum sdxi_fn_gsr cmd)
 {
-	u64 ctl0 = sdxi_read64(sdxi, SDXI_MMIO_CTL0);
+	u64 ctl0 = ioread64(ctrl_regs + SDXI_MMIO_CTL0);
 
 	FIELD_MODIFY(SDXI_MMIO_CTL0_FN_GSR, &ctl0, cmd);
-	sdxi_write64(sdxi, SDXI_MMIO_CTL0, ctl0);
+	iowrite64(ctl0, ctrl_regs + SDXI_MMIO_CTL0);
 }
 
-static int sdxi_dev_start(struct sdxi_dev *sdxi)
+int sdxi_fn_start(struct device *dev, void __iomem *ctrl_regs)
 {
 	unsigned long deadline;
 	enum sdxi_fn_gsv status;
 
-	status = sdxi_dev_gsv(sdxi);
+	status = sdxi_fn_gsv(ctrl_regs);
 	if (status != SDXI_GSV_STOP) {
-		sdxi_err(sdxi,
-			 "can't activate busy device (unexpected gsv: %s)\n",
-			 sdxi_gsv_str(status));
+		dev_err(dev,
+			"can't activate busy device (unexpected gsv: %s)\n",
+			sdxi_gsv_str(status));
 		return -EIO;
 	}
 
-	sdxi_write_fn_gsr(sdxi, SDXI_GSRV_ACTIVE);
+	sdxi_write_fn_gsr(ctrl_regs, SDXI_GSRV_ACTIVE);
 
 	deadline = jiffies + msecs_to_jiffies(1000);
 	do {
-		status = sdxi_dev_gsv(sdxi);
-		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, sdxi_gsv_str(status));
+		status = sdxi_fn_gsv(ctrl_regs);
+		dev_dbg(dev, "%s: function state: %s\n", __func__, sdxi_gsv_str(status));
 
 		switch (status) {
 		case SDXI_GSV_ACTIVE:
-			sdxi_dbg(sdxi, "activated\n");
+			dev_dbg(dev, "activated\n");
 			return 0;
 		case SDXI_GSV_ERROR:
-			sdxi_err(sdxi, "went to error state\n");
+			dev_err(dev, "went to error state\n");
 			return -EIO;
 		case SDXI_GSV_INIT:
 		case SDXI_GSV_STOP:
@@ -80,36 +80,41 @@ static int sdxi_dev_start(struct sdxi_dev *sdxi)
 			fsleep(1000);
 			break;
 		default:
-			sdxi_err(sdxi, "unexpected gsv %u, giving up\n", status);
+			dev_err(dev, "unexpected gsv %u, giving up\n", status);
 			return -EIO;
 		}
 	} while (time_before(jiffies, deadline));
 
-	sdxi_err(sdxi, "activation timed out, current status %u\n",
-		sdxi_dev_gsv(sdxi));
+	dev_err(dev, "activation timed out, current status %u\n",
+		sdxi_fn_gsv(ctrl_regs));
 	return -ETIMEDOUT;
 }
+EXPORT_SYMBOL_FOR_MODULES(sdxi_fn_start, "sdxi-vfio-pci");
 
-/* Get the device to the GSV_STOP state. */
-static int sdxi_dev_stop(struct sdxi_dev *sdxi)
+static int sdxi_dev_start(struct sdxi_dev *sdxi)
+{
+	return sdxi_fn_start(sdxi_to_dev(sdxi), sdxi->ctrl_regs);
+}
+
+int sdxi_fn_stop(struct device *dev, void __iomem *ctrl_regs)
 {
 	unsigned long deadline = jiffies + msecs_to_jiffies(1000);
 	bool reset_issued = false;
 
 	do {
-		enum sdxi_fn_gsv status = sdxi_dev_gsv(sdxi);
+		enum sdxi_fn_gsv status = sdxi_fn_gsv(ctrl_regs);
 
-		sdxi_dbg(sdxi, "%s: function state: %s\n", __func__, sdxi_gsv_str(status));
+		dev_dbg(dev, "%s: function state: %s\n", __func__, sdxi_gsv_str(status));
 
 		switch (status) {
 		case SDXI_GSV_ACTIVE:
-			sdxi_write_fn_gsr(sdxi, SDXI_GSRV_STOP_SF);
+			sdxi_write_fn_gsr(ctrl_regs, SDXI_GSRV_STOP_SF);
 			break;
 		case SDXI_GSV_ERROR:
 			if (!reset_issued) {
-				sdxi_info(sdxi,
-					  "function in error state, issuing reset\n");
-				sdxi_write_fn_gsr(sdxi, SDXI_GSRV_RESET);
+				dev_info(dev,
+					 "function in error state, issuing reset\n");
+				sdxi_write_fn_gsr(ctrl_regs, SDXI_GSRV_RESET);
 				reset_issued = true;
 			} else {
 				fsleep(1000);
@@ -121,24 +126,25 @@ static int sdxi_dev_stop(struct sdxi_dev *sdxi)
 		case SDXI_GSV_STOPG_SF:
 		case SDXI_GSV_STOPG_HD:
 			/* transitional states, wait */
-			sdxi_dbg(sdxi, "waiting for stop (gsv = %u)\n",
-				 status);
+			dev_dbg(dev, "waiting for stop (gsv = %u)\n",
+				status);
 			fsleep(1000);
 			break;
 		default:
-			sdxi_err(sdxi, "unknown gsv %u, giving up\n", status);
+			dev_err(dev, "unknown gsv %u, giving up\n", status);
 			return -EIO;
 		}
 	} while (time_before(jiffies, deadline));
 
-	sdxi_err(sdxi, "stop attempt timed out, current status %u\n",
-		sdxi_dev_gsv(sdxi));
+	dev_err(dev, "stop attempt timed out, current status %u\n",
+		sdxi_fn_gsv(ctrl_regs));
 	return -ETIMEDOUT;
 }
+EXPORT_SYMBOL_FOR_MODULES(sdxi_fn_stop, "sdxi-vfio-pci");
 
-static void sdxi_stop(struct sdxi_dev *sdxi)
+static int sdxi_dev_stop(struct sdxi_dev *sdxi)
 {
-	sdxi_dev_stop(sdxi);
+	return sdxi_fn_stop(sdxi_to_dev(sdxi), sdxi->ctrl_regs);
 }
 
 /* Refer to "Activation of the SDXI Function by Software". */
@@ -366,7 +372,7 @@ void sdxi_device_exit(struct sdxi_dev *sdxi)
 	kfree(sdxi->cxt_array[0]);
 
 	sdxi_keys_exit(sdxi);
-	sdxi_stop(sdxi);
+	sdxi_dev_stop(sdxi);
 	sdxi_error_exit(sdxi);
 
 	if (sdxi->dev_ops && sdxi->dev_ops->irq_exit)

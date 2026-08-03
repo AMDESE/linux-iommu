@@ -12,6 +12,7 @@
 #include <linux/bug.h>
 #include <linux/types.h>
 
+struct device;
 struct pci_dev;
 
 /* Refer to "MMIO Control Registers". */
@@ -125,6 +126,35 @@ static inline const char *sdxi_gsv_str(enum sdxi_fn_gsv gsv)
 
 	return "unknown";
 }
+
+/**
+ * sdxi_fn_start() - Drive an SDXI function to the GSV_ACTIVE state.
+ * @dev:       Device to log against.
+ * @ctrl_regs: Mapping of the function's BAR0 control registers.
+ *
+ * The function must already be in GSV_STOP; activating from any other state is
+ * rejected rather than forced, since the caller is expected to have configured
+ * the function's tables while it was stopped.
+ *
+ * May sleep. Returns 0 once the function is active, -ETIMEDOUT if it did
+ * not activate within one second, or -EIO if it was not stopped to begin
+ * with, landed in GSV_ERROR, or reported an unrecognized state.
+ */
+int sdxi_fn_start(struct device *dev, void __iomem *ctrl_regs);
+
+/**
+ * sdxi_fn_stop() - Drive an SDXI function to the GSV_STOP state.
+ * @dev:       Device to log against.
+ * @ctrl_regs: Mapping of the function's BAR0 control registers.
+ *
+ * Implements SDXI 1.0a §4.1.9: requests a soft stop from GSV_ACTIVE and
+ * polls until the function reaches GSV_STOP. A function found in (or
+ * landing in) GSV_ERROR is recovered once via GSRV_RESET per §4.1.6.
+ *
+ * May sleep. Returns 0 once the function is stopped, -ETIMEDOUT if it
+ * did not stop within one second, or -EIO on an unrecognized state.
+ */
+int sdxi_fn_stop(struct device *dev, void __iomem *ctrl_regs);
 
 /**
  * sdxi_pf_restart_vf_contexts() - Restart a VF's contexts after VM resume.
