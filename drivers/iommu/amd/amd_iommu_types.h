@@ -566,6 +566,17 @@ extern bool amdr_ivrs_remap_support;
 #define VIOMMU_VFCTRL_PPR_AUTO_RSP_AON	BIT_ULL(15)
 #define VIOMMU_VFCTRL_PPR_BASE		GENMASK_ULL(55, 16)
 
+/*
+ * Bits migration clears to stop the IOMMU generating log entries while state
+ * is being captured, and sets again if the capture is abandoned. A subset of
+ * the ring's enable bits.
+ */
+#define VIOMMU_VFCTRL_EVT_GEN_EN	(VIOMMU_VFCTRL_EVT_LOG_EN | \
+					 VIOMMU_VFCTRL_EVT_INT_EN)
+#define VIOMMU_VFCTRL_PPR_GEN_EN	(VIOMMU_VFCTRL_PPRLOG_EN | \
+					 VIOMMU_VFCTRL_PPRINT_EN | \
+					 VIOMMU_VFCTRL_PPR_EN)
+
 /* The three rings a vIOMMU presents its guest: command, event log, PPR log */
 #define AMD_VIOMMU_GUEST_RINGS		3
 
@@ -754,6 +765,21 @@ struct amd_iommu_viommu {
 
 	/* Offset for mmap() of guest VF MMIO; set after iommufd_viommu_alloc_mmap(). */
 	unsigned long vfmmio_mmap_offset;
+
+	/* State of an in-progress migration, guarded by core.mig_lock */
+	struct amd_viommu_mig {
+		/*
+		 * The guest event and PPR control registers as they were
+		 * before the log freeze, so that abandoning a migration can
+		 * put back exactly the generation bits it cleared.
+		 */
+		u64 evt_ctrl;
+		u64 ppr_ctrl;
+		bool logs_frozen;
+
+		/* Guest status register as read once the vIOMMU was quiesced */
+		u64 status;
+	} mig;
 };
 
 /*
