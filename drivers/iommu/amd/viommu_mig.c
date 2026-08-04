@@ -14,6 +14,7 @@
 #include <linux/io.h>
 #include <linux/iommufd.h>
 #include <linux/ktime.h>
+#include <linux/log2.h>
 #include <linux/overflow.h>
 #include <linux/string.h>
 
@@ -514,9 +515,11 @@ void amd_viommu_mig_abort(struct iommufd_viommu *viommu)
 
 /*
  * Head and tail hold a byte offset into the ring in bits 18:4, in all six of
- * these registers, so one mask serves them all.
+ * these registers, so one mask serves them all. The low four bits being absent
+ * is what makes an entry 16 bytes: a pointer cannot address anything finer.
  */
 #define AMD_VIOMMU_MIG_RING_PTR_MASK	GENMASK(18, 4)
+#define AMD_VIOMMU_MIG_RING_ENTRY_BYTES	16
 
 /**
  * struct amd_viommu_mig_reg_flag - One enable bit's two spellings
@@ -873,17 +876,331 @@ int amd_viommu_mig_save(struct iommufd_viommu *viommu,
 }
 
 /*
- * The core offers the migration ops only as a complete set, so the restore half
- * has to refuse itself rather than be left out while the save half is built up.
- * Userspace cannot reach it by accident either way: the capability that tells a
- * VMM migration is available is not advertised until the sequence is complete.
+ * Payload consumption.
+ *
+ * Everything below reads a buffer userspace supplied, so nothing in it may be
+ * believed: a length, a record count and an offset are all attacker-controlled
+ * until checked against the payload that carries them and the ring they claim
+ * to describe.
+ */
+
+static const struct amd_viommu_mig_ring_desc *
+amd_viommu_mig_desc_for(u32 type)
+{
+	unsigned int i;
+
+	for (i = 0; i < AMD_VIOMMU_MIG_HW_QUEUES; i++)
+		if (amd_viommu_mig_rings[i].type == type)
+			return &amd_viommu_mig_rings[i];
+
+	return NULL;
+}
+
+/* The ring as the destination's registers have it, whatever the payload says */
+static u64 amd_viommu_mig_live_ctrl(struct amd_iommu_viommu *aviommu,
+				    const struct amd_viommu_mig_ring_desc *desc)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+
+	return readq(vfctrl + desc->ctrl_off);
+}
+
+/*
+ * Put back one ring's pointers, having checked that the ring userspace
+ * allocated here is the ring the payload describes.
+ *
+ * Only head and tail are restored. The enables are deliberately left alone:
+ * userspace allocates with them masked off so that a ring is never armed
+ * against a stale pointer, and arming is COMMIT_RESTORE's job once every ring
+ * has been checked.
+ */
+static int amd_viommu_mig_restore_ring(struct amd_iommu_viommu *aviommu,
+				       const struct amd_viommu_mig_hw_queue *rec)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vf = VIOMMU_VF_MMIO_BASE(iommu, aviommu->gid);
+	const struct amd_viommu_mig_ring_desc *desc;
+	u32 bytes;
+	u64 ctrl;
+
+	desc = amd_viommu_mig_desc_for(rec->type);
+	if (!desc)
+		return -EINVAL;
+
+	ctrl = amd_viommu_mig_live_ctrl(aviommu, desc);
+
+	/*
+	 * A ring that was not programmed on the source must not be programmed
+	 * here either, and one that was has to have been allocated before the
+	 * restore. Either mismatch means the payload and the objects userspace
+	 * built disagree about what this vIOMMU is.
+	 */
+	if (!(rec->record_flags & AMD_VIOMMU_MIG_HW_QUEUE_PROGRAMMED))
+		return ctrl ? -EINVAL : 0;
+	if (!ctrl)
+		return -EINVAL;
+
+	if (field_get(desc->len_mask, ctrl) != rec->size_encoded)
+		return -EINVAL;
+	if ((u64)field_get(desc->base_mask, ctrl) << PAGE_SHIFT !=
+	    rec->base_gpa)
+		return -EINVAL;
+
+	/*
+	 * Pointers are byte offsets into the ring and index whole entries, so a
+	 * value past the end or inside an entry would leave hardware walking
+	 * from somewhere that is not the start of a command.
+	 */
+	bytes = VIOMMU_VFCTRL_LEN_TO_BYTES(rec->size_encoded);
+	if (rec->head >= bytes || rec->tail >= bytes)
+		return -EINVAL;
+	if (!IS_ALIGNED(rec->head, AMD_VIOMMU_MIG_RING_ENTRY_BYTES) ||
+	    !IS_ALIGNED(rec->tail, AMD_VIOMMU_MIG_RING_ENTRY_BYTES))
+		return -EINVAL;
+
+	writel(rec->head, vf + desc->head_off);
+	writel(rec->tail, vf + desc->tail_off);
+
+	return 0;
+}
+
+static int amd_viommu_mig_restore_hw_queues(struct amd_iommu_viommu *aviommu,
+					    const void *data, u32 length)
+{
+	const struct amd_viommu_mig_hw_queue_section *sec = data;
+	size_t need;
+	u32 i;
+
+	if (length < sizeof(*sec))
+		return -EINVAL;
+
+	/*
+	 * Accept a record larger than this build's, and stride by what the
+	 * source used: a later format may append fields without changing what
+	 * the ones here mean, which is the case min_reader_version admits.
+	 */
+	if (sec->record_size < sizeof(*sec->recs))
+		return -EINVAL;
+	if (sec->nr_records > AMD_VIOMMU_MIG_HW_QUEUES)
+		return -EINVAL;
+
+	need = size_mul(sec->record_size, sec->nr_records);
+	if (need > length - sizeof(*sec))
+		return -EINVAL;
+
+	for (i = 0; i < sec->nr_records; i++) {
+		const struct amd_viommu_mig_hw_queue *rec =
+			(const void *)sec->recs + (size_t)i * sec->record_size;
+		int ret = amd_viommu_mig_restore_ring(aviommu, rec);
+
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+/*
+ * Write one log ring's contents back into guest memory.
+ *
+ * This is why RESTORE has to run after guest RAM is in place and the nesting
+ * parent is mapped: the bytes go to the guest pages the ring points at, not
+ * into anything the kernel owns.
+ */
+static int amd_viommu_mig_restore_log(struct amd_iommu_viommu *aviommu,
+				      const struct iommufd_viommu_mig_ctx *ctx,
+				      const struct amd_viommu_mig_ring_desc *desc,
+				      const void *data, u32 length)
+{
+	const struct amd_viommu_mig_log_section *sec = data;
+	const u8 *bytes;
+	size_t hdr_len;
+	u32 ring_bytes, avail, i;
+	u64 base, ctrl;
+
+	if (length < sizeof(*sec))
+		return -EINVAL;
+
+	ctrl = amd_viommu_mig_live_ctrl(aviommu, desc);
+	if (!ctrl)
+		return -EINVAL;
+
+	ring_bytes = VIOMMU_VFCTRL_LEN_TO_BYTES(field_get(desc->len_mask, ctrl));
+	base = (u64)field_get(desc->base_mask, ctrl) << PAGE_SHIFT;
+
+	/*
+	 * The contents were laid out for a ring of the source's size. Copying
+	 * them into a different one would put entries at offsets that no longer
+	 * mean what they meant.
+	 */
+	if (sec->ring_bytes != ring_bytes)
+		return -EINVAL;
+
+	if (sec->nr_segments > ring_bytes / AMD_VIOMMU_MIG_RING_ENTRY_BYTES)
+		return -EINVAL;
+
+	hdr_len = struct_size(sec, segs, sec->nr_segments);
+	if (hdr_len > length)
+		return -EINVAL;
+
+	bytes = (const u8 *)data + hdr_len;
+	avail = length - hdr_len;
+
+	for (i = 0; i < sec->nr_segments; i++) {
+		const struct amd_viommu_mig_log_segment *seg = &sec->segs[i];
+		int ret;
+
+		/* The bytes must be in the payload and belong in the ring */
+		if (seg->length > avail)
+			return -EINVAL;
+		if (seg->offset > ring_bytes ||
+		    seg->length > ring_bytes - seg->offset)
+			return -EINVAL;
+
+		ret = iommufd_viommu_mig_write(ctx, base + seg->offset,
+					       (void *)bytes, seg->length);
+		if (ret)
+			return ret;
+
+		bytes += seg->length;
+		avail -= seg->length;
+	}
+
+	return 0;
+}
+
+/*
+ * The status bits cannot be put back. They are write-one-to-clear, so a write
+ * of a set bit clears it and a write of a clear bit does nothing; there is no
+ * way to hand the destination a pending overflow. Report one rather than
+ * discarding it silently, because it is the only trace that the guest lost log
+ * entries and the guest has no other way to find out.
+ */
+static void amd_viommu_mig_restore_status(struct amd_iommu_viommu *aviommu,
+					  const void *data, u32 length)
+{
+	const struct amd_viommu_mig_status *st = data;
+
+	if (length < sizeof(*st))
+		return;
+
+	if (st->sticky & (MMIO_STATUS_EVT_OVERFLOW_MASK |
+			  MMIO_STATUS_PPR_OVERFLOW_MASK))
+		pr_warn("%s: gid=%#x source had a log overflow pending, sticky=%#llx; it cannot be reinstated here\n",
+			__func__, aviommu->gid, st->sticky);
+}
+
+/**
+ * amd_viommu_mig_restore - Put a saved payload back onto this vIOMMU
+ * @viommu: vIOMMU to restore onto
+ * @ctx: Guest memory accessor, valid for this call only
+ * @hdr: Header saved alongside @payload
+ * @payload: Payload bytes as saved
+ * @payload_len: Bytes in @payload
+ *
+ * Return: 0 with the rings pointed where the source had them, or an error
+ * having armed nothing.
+ *
+ * Runs after userspace has allocated the rings with their enables masked off,
+ * and after guest RAM is in place, since the log contents are written back into
+ * it. Leaves every ring disabled: COMMIT_RESTORE arms them once the whole
+ * payload has been accepted.
  */
 int amd_viommu_mig_restore(struct iommufd_viommu *viommu,
 			   const struct iommufd_viommu_mig_ctx *ctx,
 			   const struct iommu_viommu_mig_header *hdr,
 			   const void *payload, size_t payload_len)
 {
-	return -EOPNOTSUPP;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	u64 seen = 0;
+	size_t off = 0;
+
+	lockdep_assert_held(&viommu->mig_lock);
+
+	/*
+	 * The source states the oldest reader its payload makes sense to. A
+	 * newer one means fields this build would skip are load-bearing, so
+	 * restoring the parts it does understand would build a half-configured
+	 * vIOMMU rather than fail.
+	 */
+	if (hdr->min_reader_version > AMD_VIOMMU_MIG_FORMAT_VERSION)
+		return -EOPNOTSUPP;
+
+	while (off < payload_len) {
+		const struct amd_viommu_mig_tlv *tlv;
+		const struct amd_viommu_mig_ring_desc *desc;
+		const void *data;
+		size_t end;
+		int ret = 0;
+
+		if (payload_len - off < sizeof(*tlv))
+			return -EINVAL;
+
+		tlv = payload + off;
+		data = payload + off + sizeof(*tlv);
+
+		if (tlv->length > payload_len - off - sizeof(*tlv))
+			return -EINVAL;
+
+		end = off + sizeof(*tlv) +
+		      ALIGN(tlv->length, AMD_VIOMMU_MIG_SECTION_ALIGN);
+		if (end > payload_len || end <= off)
+			return -EINVAL;
+
+		/*
+		 * A type is one bit of enum iommu_viommu_mig_section, and a
+		 * payload carries each section at most once. Two of a kind
+		 * would both be applied, leaving the vIOMMU in the state of
+		 * whichever came last, so the payload would not say what it
+		 * restores to. Same rule as the ring records within a section.
+		 */
+		if (!is_power_of_2(tlv->type) || (seen & tlv->type))
+			return -EINVAL;
+		seen |= tlv->type;
+
+		switch (tlv->type) {
+		case IOMMU_VIOMMU_MIG_SECTION_HW_QUEUE:
+			ret = amd_viommu_mig_restore_hw_queues(aviommu, data,
+							       tlv->length);
+			break;
+		case IOMMU_VIOMMU_MIG_SECTION_EVTLOG:
+			desc = &amd_viommu_mig_rings[AMD_VIOMMU_MIG_RING_EVT];
+			ret = amd_viommu_mig_restore_log(aviommu, ctx, desc,
+							 data, tlv->length);
+			break;
+		case IOMMU_VIOMMU_MIG_SECTION_PPRLOG:
+			desc = &amd_viommu_mig_rings[AMD_VIOMMU_MIG_RING_PPR];
+			ret = amd_viommu_mig_restore_log(aviommu, ctx, desc,
+							 data, tlv->length);
+			break;
+		case IOMMU_VIOMMU_MIG_SECTION_STATUS:
+			amd_viommu_mig_restore_status(aviommu, data,
+						      tlv->length);
+			break;
+		default:
+			/*
+			 * Skipping what this build does not know is the point
+			 * of the format; min_reader_version above is what says
+			 * whether skipping it is safe.
+			 */
+			break;
+		}
+
+		if (ret)
+			return ret;
+
+		off = end;
+	}
+
+	/* A payload that describes no rings has nothing to restore */
+	if (!(seen & IOMMU_VIOMMU_MIG_SECTION_HW_QUEUE))
+		return -EINVAL;
+
+	return 0;
 }
 
 int amd_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
