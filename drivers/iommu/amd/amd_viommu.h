@@ -39,6 +39,7 @@ struct iommufd_hw_queue;
 void amd_viommu_set_cmdbuf_flags(struct iommufd_hw_queue *hw_queue);
 void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue);
 void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue);
+void amd_viommu_clear_queue(struct iommufd_hw_queue *hw_queue);
 
 int amd_viommu_set_ext_int_remap_entry(struct iommufd_viommu *viommu,
 				       struct kvm *kvm,
@@ -91,6 +92,10 @@ static inline void amd_viommu_set_evtbuf_flags(struct iommufd_hw_queue *hw_queue
 }
 
 static inline void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
+{
+}
+
+static inline void amd_viommu_clear_queue(struct iommufd_hw_queue *hw_queue)
 {
 }
 

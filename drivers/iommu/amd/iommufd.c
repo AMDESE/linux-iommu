@@ -308,6 +308,14 @@ static int amd_iommufd_hw_queue_init(struct iommufd_hw_queue *hw_queue, u32 inde
 		ret = -EINVAL;
 	}
 
+	/*
+	 * Arming the ring above programmed hardware, so hand the core a way to
+	 * undo it. Otherwise a destroyed ring leaves its base and enable bit
+	 * live, aimed at guest memory nothing holds a reference to.
+	 */
+	if (!ret)
+		hw_queue->destroy = amd_viommu_clear_queue;
+
 	return ret;
 }
 

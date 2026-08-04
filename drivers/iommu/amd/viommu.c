@@ -742,6 +742,59 @@ void amd_viommu_set_pprbuf_flags(struct iommufd_hw_queue *hw_queue)
 		 hw_queue->base_addr, hw_queue->length, flags, val);
 }
 
+/**
+ * amd_viommu_clear_queue - Disarm a guest ring that is going away
+ * @hw_queue: Ring being destroyed
+ *
+ * Clears exactly the fields the matching set_*_flags() programmed, so that a
+ * ring's base, length and enables all go away together with the object that
+ * described them.
+ *
+ * Without this, destroying a ring leaves hardware holding its base with the
+ * enable bit still set, aimed at guest memory nothing holds a reference to:
+ * this driver registers hw_queue_init rather than hw_queue_init_phys, so the
+ * core pins no pages and takes no access on the ring. The object would be gone
+ * while hardware still believed it could write there.
+ */
+void amd_viommu_clear_queue(struct iommufd_hw_queue *hw_queue)
+{
+	struct iommufd_viommu *viommu = hw_queue->viommu;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu =
+		container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+	unsigned int off;
+	u64 mask, val;
+
+	/* The same fields each set_*_flags() clears before programming */
+	switch (hw_queue->type) {
+	case IOMMU_HW_QUEUE_TYPE_AMD_CMD:
+		off = VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET;
+		mask = VIOMMU_VFCTRL_CMD_BASE | VIOMMU_VFCTRL_CMD_COMWAIT_EN |
+		       VIOMMU_VFCTRL_CMD_EN | VIOMMU_VFCTRL_CMD_LEN;
+		break;
+	case IOMMU_HW_QUEUE_TYPE_AMD_EVT:
+		off = VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET;
+		mask = GENMASK_ULL(51, 0);
+		break;
+	case IOMMU_HW_QUEUE_TYPE_AMD_PPR:
+		off = VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET;
+		mask = GENMASK_ULL(55, 0);
+		break;
+	default:
+		return;
+	}
+
+	spin_lock(&aviommu->vfctrl_lock);
+	val = readq(vfctrl + off) & ~mask;
+	writeq(val, vfctrl + off);
+	spin_unlock(&aviommu->vfctrl_lock);
+
+	pr_debug("%s: iommu_devid=%#x, gid=%#x, type=%#x, val=%#llx\n",
+		 __func__, iommu->devid, aviommu->gid, hw_queue->type, val);
+}
+
 /*****************************************************
  * Extended interrupt remapping support
  */

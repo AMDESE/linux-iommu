@@ -521,6 +521,15 @@ extern bool amdr_ivrs_remap_support;
 #define VIOMMU_VFCTRL_MMIO_GUEST_EVENT_CONTROL_OFFSET	0x28
 #define VIOMMU_VFCTRL_MMIO_GUEST_PPR_CONTROL_OFFSET	0x30
 
+/* Fields of the guest command control register */
+#define VIOMMU_VFCTRL_CMD_LEN		GENMASK_ULL(3, 0)
+#define VIOMMU_VFCTRL_CMD_EN		BIT_ULL(8)
+#define VIOMMU_VFCTRL_CMD_COMWAIT_EN	BIT_ULL(9)
+#define VIOMMU_VFCTRL_CMD_BASE		GENMASK_ULL(51, 12)
+
+/* A ring of 2^VIOMMU_VFCTRL_CMD_LEN entries, each 16 bytes */
+#define VIOMMU_VFCTRL_CMD_LEN_TO_BYTES(len)	(16U << (len))
+
 struct amd_iommu;
 struct iommu_domain;
 struct irq_domain;
