@@ -146,6 +146,16 @@
 #define MMIO_STATUS_GALOG_OVERFLOW_MASK		BIT(9)
 #define MMIO_STATUS_GALOG_INT_MASK		BIT(10)
 
+/*
+ * The write-one-to-clear bits, as opposed to the run bits, which hardware owns
+ * and asserts from whether the corresponding ring is enabled.
+ */
+#define MMIO_STATUS_STICKY_MASK						\
+	(MMIO_STATUS_EVT_OVERFLOW_MASK | MMIO_STATUS_EVT_INT_MASK |	\
+	 MMIO_STATUS_COM_WAIT_INT_MASK | MMIO_STATUS_PPR_OVERFLOW_MASK |\
+	 MMIO_STATUS_PPR_INT_MASK | MMIO_STATUS_GALOG_OVERFLOW_MASK |	\
+	 MMIO_STATUS_GALOG_INT_MASK)
+
 /* event logging constants */
 #define EVENT_TYPE_SHIFT	28
 #define EVENT_TYPE_MASK		0xf
@@ -539,7 +549,8 @@ extern bool amdr_ivrs_remap_support;
 #define VIOMMU_VFCTRL_CMD_BASE		GENMASK_ULL(51, 12)
 
 /* A ring of 2^VIOMMU_VFCTRL_CMD_LEN entries, each 16 bytes */
-#define VIOMMU_VFCTRL_CMD_LEN_TO_BYTES(len)	(16U << (len))
+/* All three guest rings hold 16-byte entries, so one decode serves them all */
+#define VIOMMU_VFCTRL_LEN_TO_BYTES(len)		(16U << (len))
 
 /* Fields of the guest event control register */
 #define VIOMMU_VFCTRL_EVT_LEN		GENMASK_ULL(3, 0)
