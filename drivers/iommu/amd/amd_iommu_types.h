@@ -140,6 +140,16 @@
 #define MMIO_STATUS_GALOG_OVERFLOW_MASK		BIT(9)
 #define MMIO_STATUS_GALOG_INT_MASK		BIT(10)
 
+/*
+ * The write-one-to-clear bits, as opposed to the run bits, which hardware owns
+ * and asserts from whether the corresponding ring is enabled.
+ */
+#define MMIO_STATUS_STICKY_MASK						\
+	(MMIO_STATUS_EVT_OVERFLOW_MASK | MMIO_STATUS_EVT_INT_MASK |	\
+	 MMIO_STATUS_COM_WAIT_INT_MASK | MMIO_STATUS_PPR_OVERFLOW_MASK |\
+	 MMIO_STATUS_PPR_INT_MASK | MMIO_STATUS_GALOG_OVERFLOW_MASK |	\
+	 MMIO_STATUS_GALOG_INT_MASK)
+
 /* event logging constants */
 #define EVENT_TYPE_SHIFT	28
 #define EVENT_TYPE_MASK		0xf
@@ -541,8 +551,8 @@ extern bool amdr_ivrs_remap_support;
 
 /* Ring base address field of a control register is GPA bits 51:12 */
 #define VIOMMU_HWQ_GPA_MASK		GENMASK_ULL(51, 12)
-/* A ring of 2^len entries, each 16 bytes. */
-#define VIOMMU_VFCTRL_CMD_LEN_TO_BYTES(len)	(16U << (len))
+/* All three guest rings hold 16-byte entries, so one decode serves them all. */
+#define VIOMMU_VFCTRL_LEN_TO_BYTES(len)		(16U << (len))
 
 /* Fields of the guest command control register */
 #define VIOMMU_VFCTRL_CMD_LEN		GENMASK_ULL(3, 0)
@@ -601,6 +611,8 @@ struct amd_viommu_reg_flag {
  * struct amd_viommu_ring_desc - Where one guest ring keeps its state
  * @type: enum iommu_hw_queue_type value for this ring
  * @ctrl_off: Control register, within the vIOMMU's VFCTRL block
+ * @head_off: Head pointer, within the guest's register page
+ * @tail_off: Tail pointer, within the guest's register page
  * @len_mask: Size field of the control register
  * @base_mask: Base address field of the control register
  * @flags: Enable bits this ring has
@@ -612,6 +624,8 @@ struct amd_viommu_reg_flag {
 struct amd_viommu_ring_desc {
 	u32 type;
 	unsigned int ctrl_off;
+	unsigned int head_off;
+	unsigned int tail_off;
 	u64 len_mask;
 	u64 base_mask;
 	const struct amd_viommu_reg_flag *flags;

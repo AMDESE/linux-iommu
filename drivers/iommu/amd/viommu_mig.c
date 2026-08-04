@@ -32,8 +32,9 @@
  *
  * The two NULL cases are deliberately not distinguished. A caller fills a
  * section only when it is handed a pointer, which is what keeps a measuring
- * pass from touching hardware, and inspects @w->err once at the end instead
- * of after every section.
+ * pass out of guest memory, and inspects @w->err once at the end instead of
+ * after every section. Registers are fair game while measuring: a section
+ * whose size depends on one has to read it in both passes.
  */
 void *amd_viommu_mig_section(struct amd_viommu_mig_writer *w, u32 type,
 			     size_t length)
@@ -135,7 +136,7 @@ static void amd_viommu_mig_get_ring(struct amd_iommu *iommu, u16 gid,
 	val = readq(vfctrl + VIOMMU_VFCTRL_MMIO_GUEST_COMMAND_CONTROL_OFFSET);
 
 	ring->base_gpa = val & VIOMMU_VFCTRL_CMD_BASE;
-	ring->bytes = VIOMMU_VFCTRL_CMD_LEN_TO_BYTES(FIELD_GET(VIOMMU_VFCTRL_CMD_LEN, val));
+	ring->bytes = VIOMMU_VFCTRL_LEN_TO_BYTES(FIELD_GET(VIOMMU_VFCTRL_CMD_LEN, val));
 	ring->enabled = val & VIOMMU_VFCTRL_CMD_EN;
 }
 
@@ -508,28 +509,343 @@ void amd_viommu_mig_abort(struct iommufd_viommu *viommu)
 }
 
 /*
- * The core treats the migration ops as a set and offers none of them unless all
- * are present, so the parts of the sequence that are not written yet have to be
- * refused individually rather than left out. Quiescing a vIOMMU is useful on its
- * own for validating the drain and the freeze, which is why these are stubs
- * rather than the whole set waiting for the last one.
+ * Guest ring capture.
  *
- * Userspace cannot reach any of this by accident: the capability that tells a
- * VMM migration is available is not advertised until the sequence is complete.
+ * The three rings are described entirely by registers: base, size and enables
+ * live in the vIOMMU's VFCTRL block, and the pointers live in the page of IOMMU
+ * registers the guest sees. Nothing here consults the iommufd hardware queue
+ * objects, which are not tracked per vIOMMU and would need a lifetime of their
+ * own to reach safely, and which hold no state the registers do not.
+ *
+ * A consequence worth naming: a ring whose object exists but which the guest
+ * has since turned off is indistinguishable from one that was never programmed.
+ * Both restore to a disabled ring, which is what the guest asked for either way.
+ */
+
+/*
+ * Head and tail hold a byte offset into the ring in bits 18:4, in all six of
+ * these registers, so one mask serves them all.
+ */
+#define AMD_VIOMMU_MIG_RING_PTR_MASK	GENMASK(18, 4)
+
+/*
+ * The control register as the guest last programmed it.
+ *
+ * PREPARE_SAVE clears the event and PPR generation bits, so once the logs are
+ * frozen a live read of those two registers describes the freeze rather than the
+ * guest. The value captured before the freeze is the one to migrate, or else the
+ * destination would come up with the guest's logging silently turned off.
+ */
+static u64 amd_viommu_mig_ring_ctrl(struct amd_iommu_viommu *aviommu,
+				    const struct amd_viommu_ring_desc *desc,
+				    u8 __iomem *vfctrl)
+{
+	if (aviommu->mig.logs_frozen) {
+		if (desc->type == IOMMU_HW_QUEUE_TYPE_AMD_EVT)
+			return aviommu->mig.evt_ctrl;
+		if (desc->type == IOMMU_HW_QUEUE_TYPE_AMD_PPR)
+			return aviommu->mig.ppr_ctrl;
+	}
+
+	return readq(vfctrl + desc->ctrl_off);
+}
+
+static void amd_viommu_mig_read_ring(struct amd_iommu_viommu *aviommu,
+				     const struct amd_viommu_ring_desc *desc,
+				     struct amd_viommu_mig_hw_queue *rec)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+	u8 __iomem *vf = VIOMMU_VF_MMIO_BASE(iommu, aviommu->gid);
+	u64 ctrl;
+
+	ctrl = amd_viommu_mig_ring_ctrl(aviommu, desc, vfctrl);
+
+	rec->type = desc->type;
+
+	/*
+	 * An all-zero control register means the ring was never set up: a guest
+	 * that programmed one set either a base, a size or an enable. Leave the
+	 * rest of the record zeroed rather than reporting the 16-byte ring a
+	 * zero size field decodes to, or whatever the pointer registers happen
+	 * to have kept from an earlier life.
+	 */
+	if (!ctrl)
+		return;
+
+	rec->record_flags |= AMD_VIOMMU_MIG_HW_QUEUE_PROGRAMMED;
+	rec->size_encoded = field_get(desc->len_mask, ctrl);
+	rec->length_bytes = VIOMMU_VFCTRL_LEN_TO_BYTES(rec->size_encoded);
+
+	/*
+	 * Extract then shift, rather than masking in place, because the base is
+	 * not held at the same bit position in all three registers even though
+	 * it means the same thing in each. field_get() rather than FIELD_GET()
+	 * because the mask comes from the ring descriptor, not from a literal.
+	 */
+	rec->base_gpa = (u64)field_get(desc->base_mask, ctrl) << PAGE_SHIFT;
+
+	rec->queue_flags |= amd_viommu_ring_flags_from_reg(desc, ctrl);
+
+	rec->head = readl(vf + desc->head_off) & AMD_VIOMMU_MIG_RING_PTR_MASK;
+	rec->tail = readl(vf + desc->tail_off) & AMD_VIOMMU_MIG_RING_PTR_MASK;
+}
+
+static void amd_viommu_mig_save_hw_queues(struct amd_iommu_viommu *aviommu,
+					  struct amd_viommu_mig_writer *w)
+{
+	struct amd_viommu_mig_hw_queue_section *sec;
+	unsigned int i;
+
+	sec = amd_viommu_mig_section(w, IOMMU_VIOMMU_MIG_SECTION_HW_QUEUE,
+				     struct_size(sec, recs,
+						 AMD_VIOMMU_MIG_HW_QUEUES));
+	if (!sec)
+		return;
+
+	sec->record_size = sizeof(*sec->recs);
+	sec->nr_records = AMD_VIOMMU_MIG_HW_QUEUES;
+
+	for (i = 0; i < AMD_VIOMMU_MIG_HW_QUEUES; i++)
+		amd_viommu_mig_read_ring(aviommu, &amd_viommu_rings[i],
+					 &sec->recs[i]);
+}
+
+static void amd_viommu_mig_save_status(struct amd_iommu_viommu *aviommu,
+				       struct amd_viommu_mig_writer *w)
+{
+	struct amd_viommu_mig_status *st;
+
+	st = amd_viommu_mig_section(w, IOMMU_VIOMMU_MIG_SECTION_STATUS,
+				    sizeof(*st));
+	if (!st)
+		return;
+
+	/* Captured by PREPARE_SAVE, once nothing was generating entries */
+	st->raw = aviommu->mig.status;
+	st->sticky = aviommu->mig.status & MMIO_STATUS_STICKY_MASK;
+}
+
+/*
+ * Copy one log ring's contents, or account for them when measuring. @hdr_bytes
+ * receives what to report in the header, and is NULL while measuring because
+ * there is no header to fill in yet.
+ */
+static void amd_viommu_mig_save_log(struct amd_iommu_viommu *aviommu,
+				    const struct iommufd_viommu_mig_ctx *ctx,
+				    struct amd_viommu_mig_writer *w,
+				    const struct amd_viommu_ring_desc *desc,
+				    u32 section, u32 *hdr_bytes)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+	struct amd_viommu_mig_log_section *sec;
+	u32 ring_bytes;
+	u64 ctrl, base;
+	int ret;
+
+	ctrl = amd_viommu_mig_ring_ctrl(aviommu, desc, vfctrl);
+
+	/* A ring the guest never programmed has no contents to carry */
+	if (!ctrl)
+		return;
+
+	ring_bytes = VIOMMU_VFCTRL_LEN_TO_BYTES(field_get(desc->len_mask, ctrl));
+	base = (u64)field_get(desc->base_mask, ctrl) << PAGE_SHIFT;
+
+	sec = amd_viommu_mig_section(w, section,
+				     struct_size(sec, segs, 1) + ring_bytes);
+	if (hdr_bytes)
+		*hdr_bytes = ring_bytes;
+	if (!sec)
+		return;
+
+	sec->ring_bytes = ring_bytes;
+	sec->nr_segments = 1;
+	sec->segs[0].offset = 0;
+	sec->segs[0].length = ring_bytes;
+
+	/*
+	 * Guest memory, so this can fail on a ring the guest pointed somewhere
+	 * unmapped. Report that rather than shipping a section whose descriptors
+	 * promise bytes the payload does not contain.
+	 */
+	ret = iommufd_viommu_mig_read(ctx, base, &sec->segs[sec->nr_segments],
+				      ring_bytes);
+	if (ret)
+		w->err = ret;
+}
+
+/*
+ * Build a payload, or measure one when @w has no buffer. Both go through here so
+ * that a size query and a save cannot disagree about how large a payload is,
+ * which would leave a caller sizing its buffer from one and being told by the
+ * other that it is too small.
+ *
+ * @ctx and @hdr are NULL while measuring. Neither is reached in that case: every
+ * section that needs them does so only after being handed a buffer to fill.
+ */
+static void amd_viommu_mig_build(struct amd_iommu_viommu *aviommu,
+				 const struct iommufd_viommu_mig_ctx *ctx,
+				 struct amd_viommu_mig_writer *w,
+				 struct iommu_viommu_mig_header *hdr)
+{
+	amd_viommu_mig_save_hw_queues(aviommu, w);
+	amd_viommu_mig_save_status(aviommu, w);
+	amd_viommu_mig_save_log(aviommu, ctx, w,
+				&amd_viommu_rings[AMD_VIOMMU_RING_EVT],
+				IOMMU_VIOMMU_MIG_SECTION_EVTLOG,
+				hdr ? &hdr->evtlog_bytes : NULL);
+	amd_viommu_mig_save_log(aviommu, ctx, w,
+				&amd_viommu_rings[AMD_VIOMMU_RING_PPR],
+				IOMMU_VIOMMU_MIG_SECTION_PPRLOG,
+				hdr ? &hdr->pprlog_bytes : NULL);
+}
+
+/**
+ * amd_viommu_mig_get_size - Report the payload size for this vIOMMU
+ * @viommu: vIOMMU to size
+ * @out_size: Bytes of payload needed
+ *
+ * Return: 0, or an error if the sections could not be accounted for.
+ *
+ * Callable in any migration state, so this reads registers but never guest
+ * memory, and must not depend on the vIOMMU having been quiesced. The answer is
+ * exact for the ring sizes in force when it is asked: a guest that reprograms a
+ * log ring afterwards makes the payload a different size, which SAVE reports as
+ * -EMSGSIZE with the figure to retry with rather than silently truncating.
  */
 int amd_viommu_mig_get_size(struct iommufd_viommu *viommu, size_t *out_size)
 {
-	return -EOPNOTSUPP;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_viommu_mig_writer w;
+
+	amd_viommu_mig_writer_init(&w, NULL, 0);
+	amd_viommu_mig_build(aviommu, NULL, &w, NULL);
+	if (w.err)
+		return w.err;
+
+	*out_size = w.offset;
+
+	return 0;
 }
 
+/*
+ * Refuse a save whose event or PPR ring is no longer the one that was frozen.
+ *
+ * The payload is built from the registers PREPARE_SAVE stashed, because a
+ * live read of those two would describe the freeze rather than the guest.
+ * That holds only while base and length still match. Generation bits stay
+ * out of the compare: the stash has the enables the guest had, and the live
+ * register has had them cleared.
+ *
+ * A destroy in the window clears both fields, and an allocation in its place
+ * writes new ones. The payload would otherwise describe a ring the hardware
+ * no longer has, and copying its log succeeds whenever the old guest address
+ * is still mapped.
+ *
+ * The lock covers these reads only. Copying the logs reads guest memory and
+ * may sleep, so it cannot run under vfctrl_lock.
+ */
+static int amd_viommu_mig_check_frozen_rings(struct amd_iommu_viommu *aviommu)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+	const struct amd_viommu_ring_desc *evt =
+		&amd_viommu_rings[AMD_VIOMMU_RING_EVT];
+	const struct amd_viommu_ring_desc *ppr =
+		&amd_viommu_rings[AMD_VIOMMU_RING_PPR];
+	u64 evt_ident = evt->len_mask | evt->base_mask;
+	u64 ppr_ident = ppr->len_mask | ppr->base_mask;
+	u64 evt_live, ppr_live;
+
+	lockdep_assert_held(&aviommu->core.mig_lock);
+
+	if (!aviommu->mig.logs_frozen)
+		return 0;
+
+	spin_lock(&aviommu->vfctrl_lock);
+	evt_live = readq(vfctrl + evt->ctrl_off);
+	ppr_live = readq(vfctrl + ppr->ctrl_off);
+	spin_unlock(&aviommu->vfctrl_lock);
+
+	if ((evt_live & evt_ident) != (aviommu->mig.evt_ctrl & evt_ident) ||
+	    (ppr_live & ppr_ident) != (aviommu->mig.ppr_ctrl & ppr_ident))
+		return -EINVAL;
+
+	return 0;
+}
+
+/**
+ * amd_viommu_mig_save - Capture a quiesced vIOMMU into @payload
+ * @viommu: vIOMMU to capture
+ * @ctx: Guest memory accessor for this operation
+ * @hdr: Header to describe the payload in
+ * @payload: Where to build the payload
+ * @payload_len: Bytes available at @payload
+ *
+ * Return: 0 with @hdr and @payload filled in, -EINVAL if an event or PPR
+ * ring's base or length has changed since the freeze, or another error
+ * having written nothing the caller will use.
+ */
 int amd_viommu_mig_save(struct iommufd_viommu *viommu,
 			const struct iommufd_viommu_mig_ctx *ctx,
 			struct iommu_viommu_mig_header *hdr, void *payload,
 			size_t payload_len)
 {
-	return -EOPNOTSUPP;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	struct amd_iommu *iommu =
+		container_of(viommu->iommu_dev, struct amd_iommu, iommu);
+	struct amd_viommu_cmd_ring cmd_ring;
+	struct amd_viommu_mig_writer w;
+	int ret;
+
+	lockdep_assert_held(&viommu->mig_lock);
+
+	ret = amd_viommu_mig_check_frozen_rings(aviommu);
+	if (ret)
+		return ret;
+
+	amd_viommu_mig_writer_init(&w, payload, payload_len);
+
+	/* Fills in the log byte counts as it emits their sections */
+	amd_viommu_mig_build(aviommu, ctx, &w, hdr);
+	if (w.err)
+		return w.err;
+
+	hdr->blob_format_version = AMD_VIOMMU_MIG_FORMAT_VERSION;
+	hdr->min_reader_version = AMD_VIOMMU_MIG_MIN_READER_VERSION;
+	hdr->section_mask = w.section_mask;
+	hdr->payload_size = w.offset;
+
+	/*
+	 * Diagnostics only. A destination allocates its own guest ID and must
+	 * never program this one.
+	 */
+	hdr->source_gid = aviommu->gid;
+
+	/*
+	 * The command ring's extent, so that a destination can sanity-check the
+	 * ring it is asked to allocate before parsing the payload. Its contents
+	 * are guest memory and travel as guest RAM.
+	 */
+	amd_viommu_mig_get_ring(iommu, aviommu->gid, &cmd_ring);
+	hdr->cmdbuf_bytes = cmd_ring.enabled ? cmd_ring.bytes : 0;
+
+	return 0;
 }
 
+/*
+ * The core offers the migration ops only as a complete set, so the restore half
+ * has to refuse itself rather than be left out while the save half is built up.
+ * Userspace cannot reach it by accident either way: the capability that tells a
+ * VMM migration is available is not advertised until the sequence is complete.
+ */
 int amd_viommu_mig_restore(struct iommufd_viommu *viommu,
 			   const struct iommufd_viommu_mig_ctx *ctx,
 			   const struct iommu_viommu_mig_header *hdr,
