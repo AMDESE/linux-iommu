@@ -496,6 +496,7 @@ void amd_viommu_mig_abort(struct iommufd_viommu *viommu)
 		container_of(viommu, struct amd_iommu_viommu, core);
 
 	amd_viommu_mig_thaw_logs(aviommu);
+	memset(aviommu->mig.rings, 0, sizeof(aviommu->mig.rings));
 	aviommu->mig.status = 0;
 }
 
@@ -571,6 +572,13 @@ struct amd_viommu_mig_ring_desc {
 	const struct amd_viommu_mig_reg_flag *flags;
 	unsigned int nr_flags;
 };
+
+/*
+ * The payload carries one record per ring and the vIOMMU keeps one arming
+ * record per ring, so the two counts have to agree or an index into one would
+ * not index the other.
+ */
+static_assert(AMD_VIOMMU_MIG_HW_QUEUES == AMD_VIOMMU_GUEST_RINGS);
 
 /* Indices into the table below, so that a caller need not count entries */
 enum amd_viommu_mig_ring {
@@ -914,21 +922,18 @@ static u64 amd_viommu_mig_live_ctrl(struct amd_iommu_viommu *aviommu,
  * Only head and tail are restored. The enables are deliberately left alone:
  * userspace allocates with them masked off so that a ring is never armed
  * against a stale pointer, and arming is COMMIT_RESTORE's job once every ring
- * has been checked.
+ * has been checked. What it needs to do that is recorded here.
  */
 static int amd_viommu_mig_restore_ring(struct amd_iommu_viommu *aviommu,
-				       const struct amd_viommu_mig_hw_queue *rec)
+				       const struct amd_viommu_mig_ring_desc *desc,
+				       const struct amd_viommu_mig_hw_queue *rec,
+				       struct amd_viommu_ring_arm *arm)
 {
 	struct amd_iommu *iommu =
 		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
 	u8 __iomem *vf = VIOMMU_VF_MMIO_BASE(iommu, aviommu->gid);
-	const struct amd_viommu_mig_ring_desc *desc;
 	u32 bytes;
 	u64 ctrl;
-
-	desc = amd_viommu_mig_desc_for(rec->type);
-	if (!desc)
-		return -EINVAL;
 
 	ctrl = amd_viommu_mig_live_ctrl(aviommu, desc);
 
@@ -964,6 +969,13 @@ static int amd_viommu_mig_restore_ring(struct amd_iommu_viommu *aviommu,
 	writel(rec->head, vf + desc->head_off);
 	writel(rec->tail, vf + desc->tail_off);
 
+	*arm = (struct amd_viommu_ring_arm){
+		.base_gpa = rec->base_gpa,
+		.size_encoded = rec->size_encoded,
+		.queue_flags = rec->queue_flags,
+		.programmed = true,
+	};
+
 	return 0;
 }
 
@@ -971,6 +983,7 @@ static int amd_viommu_mig_restore_hw_queues(struct amd_iommu_viommu *aviommu,
 					    const void *data, u32 length)
 {
 	const struct amd_viommu_mig_hw_queue_section *sec = data;
+	u32 seen = 0;
 	size_t need;
 	u32 i;
 
@@ -994,8 +1007,26 @@ static int amd_viommu_mig_restore_hw_queues(struct amd_iommu_viommu *aviommu,
 	for (i = 0; i < sec->nr_records; i++) {
 		const struct amd_viommu_mig_hw_queue *rec =
 			(const void *)sec->recs + (size_t)i * sec->record_size;
-		int ret = amd_viommu_mig_restore_ring(aviommu, rec);
+		const struct amd_viommu_mig_ring_desc *desc;
+		unsigned int idx;
+		int ret;
 
+		desc = amd_viommu_mig_desc_for(rec->type);
+		if (!desc)
+			return -EINVAL;
+		idx = desc - amd_viommu_mig_rings;
+
+		/*
+		 * One record per ring. Two describing the same ring would both
+		 * be applied, leaving the ring in the state of whichever came
+		 * last, so the payload would not say what it restores to.
+		 */
+		if (seen & BIT(idx))
+			return -EINVAL;
+		seen |= BIT(idx);
+
+		ret = amd_viommu_mig_restore_ring(aviommu, desc, rec,
+						  &aviommu->mig.rings[idx]);
 		if (ret)
 			return ret;
 	}
@@ -1130,6 +1161,13 @@ int amd_viommu_mig_restore(struct iommufd_viommu *viommu,
 	if (hdr->min_reader_version > AMD_VIOMMU_MIG_FORMAT_VERSION)
 		return -EOPNOTSUPP;
 
+	/*
+	 * Nothing is armed for a ring this payload turns out not to describe,
+	 * so start from a clean slate rather than from whatever an earlier
+	 * attempt on this vIOMMU left behind.
+	 */
+	memset(aviommu->mig.rings, 0, sizeof(aviommu->mig.rings));
+
 	while (off < payload_len) {
 		const struct amd_viommu_mig_tlv *tlv;
 		const struct amd_viommu_mig_ring_desc *desc;
@@ -1203,8 +1241,141 @@ int amd_viommu_mig_restore(struct iommufd_viommu *viommu,
 	return 0;
 }
 
+/*
+ * Confirm a ring is still the one the restore checked.
+ *
+ * Userspace keeps its hardware queue objects across the restore sequence and
+ * may destroy one before committing. Destroying a ring clears its control
+ * register, so a ring that has since gone reads back as never programmed, and
+ * one replaced by another reads back a different base or size. Arming on that
+ * would point hardware at whatever the register holds now rather than at the
+ * ring whose pointers and contents were restored.
+ */
+static int amd_viommu_mig_recheck_ring(struct amd_iommu_viommu *aviommu,
+				       const struct amd_viommu_mig_ring_desc *desc,
+				       const struct amd_viommu_ring_arm *arm)
+{
+	u64 ctrl = amd_viommu_mig_live_ctrl(aviommu, desc);
+
+	if (!arm->programmed)
+		return ctrl ? -EINVAL : 0;
+	if (!ctrl)
+		return -EINVAL;
+
+	if (field_get(desc->len_mask, ctrl) != arm->size_encoded)
+		return -EINVAL;
+	if ((u64)field_get(desc->base_mask, ctrl) << PAGE_SHIFT !=
+	    arm->base_gpa)
+		return -EINVAL;
+
+	return 0;
+}
+
+/*
+ * Drop the host translation caches that could still describe this guest, before
+ * anything is allowed to translate through them.
+ *
+ * One flush of the nesting parent covers what matters here: it invalidates the
+ * parent's own entries, every host domain ID mapped for this vIOMMU's guest
+ * domains, and the device IOTLB of each ATS-capable device attached to the
+ * parent, and waits for all of it.
+ *
+ * Device table and interrupt remapping entries are deliberately left out. Every
+ * path that writes one of those already invalidates it: update_dte256() and
+ * amd_iommu_update_dte_ir() for the device table, and the modify_irte family for
+ * interrupt remapping, which is what the destination's ext-IR replay goes
+ * through just before this runs. Flushing them again would repeat work already
+ * done, and the only granularity available for it is the whole IOMMU, which
+ * would take every other guest's caches with it.
+ */
+static void amd_viommu_mig_invalidate(struct amd_iommu_viommu *aviommu)
+{
+	struct protection_domain *parent = aviommu->parent;
+	unsigned long flags;
+
+	spin_lock_irqsave(&parent->lock, flags);
+	amd_iommu_domain_flush_pages(parent, 0, U64_MAX,
+				     CMD_INV_IOMMU_PAGES_PDE_MASK);
+	spin_unlock_irqrestore(&parent->lock, flags);
+}
+
+/*
+ * Set the enable bits the guest had, and only those.
+ *
+ * Read-modify-write rather than rebuilding the register, because base and
+ * length are already in it from the allocation and have just been checked
+ * against the payload. Deriving them again here would be a second chance to get
+ * them wrong, and this time nothing would catch it.
+ *
+ * A queue flag with no bit in this ring's register is ignored rather than
+ * refused, on the same forward-compatibility grounds as an unknown section: a
+ * later format may define flags this build has no register bit for.
+ */
+static void amd_viommu_mig_arm_ring(struct amd_iommu_viommu *aviommu,
+				    const struct amd_viommu_mig_ring_desc *desc,
+				    const struct amd_viommu_ring_arm *arm)
+{
+	struct amd_iommu *iommu =
+		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
+	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, aviommu->gid);
+	u64 set = 0;
+	unsigned int i;
+
+	if (!arm->programmed)
+		return;
+
+	for (i = 0; i < desc->nr_flags; i++)
+		if (arm->queue_flags & desc->flags[i].queue)
+			set |= desc->flags[i].reg;
+
+	if (!set)
+		return;
+
+	spin_lock(&aviommu->vfctrl_lock);
+	writeq(readq(vfctrl + desc->ctrl_off) | set, vfctrl + desc->ctrl_off);
+	spin_unlock(&aviommu->vfctrl_lock);
+}
+
+/**
+ * amd_viommu_mig_commit_restore - Bring a restored vIOMMU into service
+ * @viommu: vIOMMU whose payload has been restored
+ * @ctx: Guest memory accessor for this operation, unused here
+ *
+ * Return: 0 with the guest's rings live, or an error having armed none of them.
+ *
+ * The last step of a restore, and the first point at which hardware may act on
+ * anything the payload described. Runs after the destination's interrupt
+ * remapping routes are in place, so that a log ring cannot take an entry with
+ * nowhere to report it.
+ */
 int amd_viommu_mig_commit_restore(struct iommufd_viommu *viommu,
 				  const struct iommufd_viommu_mig_ctx *ctx)
 {
-	return -EOPNOTSUPP;
+	struct amd_iommu_viommu *aviommu =
+		container_of(viommu, struct amd_iommu_viommu, core);
+	unsigned int i;
+	int ret;
+
+	lockdep_assert_held(&viommu->mig_lock);
+
+	/*
+	 * Check all three rings before arming any of them. Arming as we went
+	 * would leave a guest running against a half-committed vIOMMU when a
+	 * later ring turned out not to match.
+	 */
+	for (i = 0; i < AMD_VIOMMU_MIG_HW_QUEUES; i++) {
+		ret = amd_viommu_mig_recheck_ring(aviommu,
+						  &amd_viommu_mig_rings[i],
+						  &aviommu->mig.rings[i]);
+		if (ret)
+			return ret;
+	}
+
+	amd_viommu_mig_invalidate(aviommu);
+
+	for (i = 0; i < AMD_VIOMMU_MIG_HW_QUEUES; i++)
+		amd_viommu_mig_arm_ring(aviommu, &amd_viommu_mig_rings[i],
+					&aviommu->mig.rings[i]);
+
+	return 0;
 }

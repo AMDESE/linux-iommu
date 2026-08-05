@@ -578,6 +578,28 @@ extern bool amdr_ivrs_remap_support;
 					 VIOMMU_VFCTRL_PPRINT_EN | \
 					 VIOMMU_VFCTRL_PPR_EN)
 
+/* The three rings a vIOMMU presents its guest: command, event log, PPR log */
+#define AMD_VIOMMU_GUEST_RINGS		3
+
+/**
+ * struct amd_viommu_ring_arm - What a restore may arm one guest ring with
+ * @base_gpa: Ring base as the restored payload described it
+ * @size_encoded: Ring size as the restored payload described it
+ * @queue_flags: Enable bits to apply, a mask of enum iommu_hw_queue_flags_amd
+ * @programmed: Whether the source had this ring set up at all
+ *
+ * Filled in by a restore once it has checked the payload's description of a
+ * ring against the control register userspace programmed, and consumed by the
+ * commit that arms the ring.  @base_gpa and @size_encoded are kept so that the
+ * commit can confirm the register still holds the ring that was checked.
+ */
+struct amd_viommu_ring_arm {
+	u64 base_gpa;
+	u32 size_encoded;
+	u32 queue_flags;
+	bool programmed;
+};
+
 struct amd_iommu;
 struct iommu_domain;
 struct irq_domain;
@@ -665,6 +687,14 @@ struct amd_iommu_viommu {
 
 		/* Guest status register as read once the vIOMMU was quiesced */
 		u64 status;
+
+		/*
+		 * What RESTORE accepted for each guest ring, so that
+		 * COMMIT_RESTORE can arm it, and the identity it accepted it
+		 * against, so that COMMIT_RESTORE can tell the ring is still
+		 * there.  Cleared when a migration starts or is abandoned.
+		 */
+		struct amd_viommu_ring_arm rings[AMD_VIOMMU_GUEST_RINGS];
 	} mig;
 };
 
