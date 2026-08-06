@@ -3217,6 +3217,16 @@ static bool amd_iommu_capable(struct device *dev, enum iommu_cap cap)
 		return amd_iommu_iotlb_sup &&
 			 (dev_data->flags & AMD_IOMMU_DEVICE_FLAG_ATS_SUP);
 	}
+	case IOMMU_CAP_VIOMMU_MIGRATION: {
+		struct amd_iommu *iommu = get_amd_iommu_from_dev(dev);
+
+		/*
+		 * Answers for this IOMMU, not for the driver: a vIOMMU can only
+		 * be allocated where amd_viommu_init() fully succeeded, and each
+		 * of its error paths clears viommu_dev_data again.
+		 */
+		return iommu->viommu_dev_data != NULL;
+	}
 	default:
 		break;
 	}
