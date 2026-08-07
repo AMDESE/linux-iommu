@@ -3725,7 +3725,8 @@ static int amd_iommu_domain_ops_for_each_rmp_smash_fn(struct iommu_domain *domai
 						      u64 pte, size_t size, bool leaf, u64 *ppte)
 {
 	struct pt_iommu *iommu_table = container_of(domain, struct pt_iommu, domain);
-	int ret, level;
+	u64 pte1;
+	int ret, level, i;
 	bool assigned;
 
 	if (!leaf)
@@ -3735,9 +3736,34 @@ static int amd_iommu_domain_ops_for_each_rmp_smash_fn(struct iommu_domain *domai
 	if (ret)
 		return ret; // Or 0?
 
-	if (!assigned)
-		return 0;
+	if (!assigned) {
+		/* Skip < 2M ptes */
+		if (pte & (SZ_2M - 1))
+			return 0;
 
+		pr_debug("%s: 2M pte (0x%llx), running RMP check for each sub page\n",
+			 __func__, pte);
+
+		pte1 = pte;
+		/* RMP check for first page is done, walk remaining pages */
+		for (i = 0; i < 511; i++) {
+			pte1 += 0x1000;
+			ret = snp_lookup_rmpentry((pte1 & 0x000ffffffffff000ULL) >> PAGE_SHIFT, &assigned, &level);
+			if (ret)
+				return ret;
+
+			/*
+			 * Some of the sub pages are assigned to guest,
+			 * split 2MB page into sub pages
+			 */
+			if (assigned)
+				goto cut_pgtbl;
+		}
+
+		return 0;
+	}
+
+cut_pgtbl:
 	if (level == PG_LEVEL_2M && size < SZ_2M) {
 		/* We need PSMASH here but that is up to KVM to handle */
 		pr_err("RMP sz mismatch - RMP is 2M: @%llx: pte=%03llx_%010llx_%03llx ps=%ld\n",
