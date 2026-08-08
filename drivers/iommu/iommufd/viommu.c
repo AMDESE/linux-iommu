@@ -642,16 +642,13 @@ int iommufd_vdevice_tsm_guest_request_ioctl(struct iommufd_ucmd *ucmd)
 	case IOMMU_VDEVICE_TSM_SCOPE_REQ_DEBUG_WRITE:
 		scope = PCI_TSM_REQ_DEBUG_WRITE;
 		break;
+	case IOMMU_VDEVICE_TSM_SCOPE_REQ_ENABLE_DTE:
+		rc = domain->ops->tsm_enable(domain, idev->dev);
+		goto out_put_vdev;
 	default:
 		rc = -EINVAL;
 		goto out_put_vdev;
 	}
-
-	// FIXME: have a "enable IOMMU" flag or something vs. counting that
-	// tsm_enable() checkes if it is already enabled
-	rc = domain->ops->tsm_enable(domain, idev->dev);
-	if (rc)
-		goto out_put_vdev;
 
 	rsp_len = pci_tsm_guest_req(to_pci_dev(idev->dev), scope,
 				    USER_SOCKPTR(cmd->req), cmd->req_len,
