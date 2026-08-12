@@ -338,9 +338,23 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 		goto out_err;
 
 	/*
+	 * The device translates through the nest parent's v1 table, so that
+	 * domain has to know about this IOMMU or its invalidations reach
+	 * nothing. attach_device() does this for a device that came in through
+	 * the parent, but a device can be attached to a nested domain without
+	 * ever having been attached to its parent, or while attached to a
+	 * different one. Taken before anything is torn down, so that failing
+	 * here leaves the previous attachment intact.
+	 */
+	ret = amd_iommu_pdom_bind_iommu(iommu, ndom->viommu->parent);
+	if (ret)
+		goto out_err;
+
+	/*
 	 * Past the last failure, so the device can leave its old parent and
 	 * that parent's device list. The old parent may be a different domain
-	 * from the one it is joining below.
+	 * from the one it is joining below, and the unlink drops the reference
+	 * this device holds on it.
 	 */
 	amd_iommu_nested_dev_unlink(dev_data);
 	amd_iommu_dev_list_remove(dev_data);

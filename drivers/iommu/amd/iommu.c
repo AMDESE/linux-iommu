@@ -3378,16 +3378,22 @@ void amd_iommu_nested_dev_link(struct protection_domain *parent,
 void amd_iommu_nested_dev_unlink(struct iommu_dev_data *dev_data)
 {
 	struct protection_domain *parent = dev_data->nested_parent;
+	struct amd_iommu *iommu;
 	unsigned long flags;
 
 	if (!parent)
 		return;
+
+	iommu = get_amd_iommu_from_dev_data(dev_data);
 
 	spin_lock_irqsave(&parent->lock, flags);
 	list_del_init(&dev_data->nested_list);
 	dev_data->nested_parent = NULL;
 	dev_data->nested_dom = NULL;
 	spin_unlock_irqrestore(&parent->lock, flags);
+
+	/* Balances the reference the nested attach took, and takes its own lock */
+	amd_iommu_pdom_unbind_iommu(iommu, parent);
 }
 
 static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
