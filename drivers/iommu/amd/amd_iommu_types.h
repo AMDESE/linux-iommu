@@ -651,6 +651,16 @@ struct protection_domain {
 	 * This will be used to look up host domain ID when flushing this domain.
 	 */
 	struct list_head viommu_list;
+
+	/*
+	 * Devices whose DTE was last programmed by set_dte_nested() against
+	 * this domain as the nest parent. A nested attach does not go through
+	 * attach_device(), so a device can reach this list without ever having
+	 * joined @dev_list, and anything that has to reach every DTE
+	 * translating through this domain's v1 table has to walk it as well.
+	 * Protected by @lock.
+	 */
+	struct list_head nested_dev_list;
 };
 PT_IOMMU_CHECK_DOMAIN(struct protection_domain, iommu, domain);
 PT_IOMMU_CHECK_DOMAIN(struct protection_domain, amdv1.iommu, domain);
@@ -946,6 +956,12 @@ struct iommu_dev_data {
 	struct list_head list;		  /* For domain->dev_list */
 	struct llist_node dev_data_list;  /* For global dev_data_list */
 	struct protection_domain *domain; /* Domain the device is bound to */
+
+	/* For nested_parent->nested_dev_list, empty when not nest-attached */
+	struct list_head nested_list;
+	/* Nest parent of the nested domain this device is attached to */
+	struct protection_domain *nested_parent;
+
 	struct gcr3_tbl_info gcr3_info;   /* Per-device GCR3 table */
 	struct device *dev;
 	u16 devid;			  /* PCI Device ID */

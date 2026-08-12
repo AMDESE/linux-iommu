@@ -276,7 +276,19 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 	if (ret)
 		goto out_err;
 
+	/*
+	 * Past the last failure, so the device can leave its old parent. That
+	 * parent may be a different domain from the one it is joining below.
+	 */
+	amd_iommu_nested_dev_unlink(dev_data);
 	amd_iommu_update_dte(iommu, dev_data, &new);
+
+	/*
+	 * set_dte_nested() sampled the parent's dirty tracking to build the DTE
+	 * above; joining the list re-reads it under the parent's lock so a
+	 * toggle racing the attach cannot leave the two disagreeing.
+	 */
+	amd_iommu_nested_dev_link(ndom->viommu->parent, dev_data);
 
 	ret = amd_viommu_domain_id_update(iommu, ndom->viommu->gid,
 					  ndom->gdom_info->hdom_id, ndom->gdom_id);

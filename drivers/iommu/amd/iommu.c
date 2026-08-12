@@ -409,6 +409,7 @@ struct iommu_dev_data *amd_iommu_alloc_dev_data(struct amd_iommu *iommu, u16 dev
 
 	mutex_init(&dev_data->mutex);
 	spin_lock_init(&dev_data->dte_lock);
+	INIT_LIST_HEAD(&dev_data->nested_list);
 	dev_data->devid = devid;
 	ratelimit_default_init(&dev_data->rs);
 
@@ -2517,6 +2518,9 @@ static int attach_device(struct device *dev,
 	list_add(&dev_data->list, &domain->dev_list);
 	spin_unlock_irqrestore(&domain->lock, flags);
 
+	/* The DTE below replaces anything set_dte_nested() wrote */
+	amd_iommu_nested_dev_unlink(dev_data);
+
 	/* Update device table */
 	dev_update_dte(dev_data, true);
 
@@ -2555,6 +2559,8 @@ static void detach_device(struct device *dev)
 
 	if (dev_is_pci(dev))
 		pdev_disable_caps(to_pci_dev(dev));
+
+	amd_iommu_nested_dev_unlink(dev_data);
 
 	/* Clear DTE and flush the entry */
 	dev_update_dte(dev_data, false);
@@ -2679,6 +2685,7 @@ static void protection_domain_init(struct protection_domain *domain)
 	INIT_LIST_HEAD(&domain->dev_list);
 	INIT_LIST_HEAD(&domain->dev_data_list);
 	INIT_LIST_HEAD(&domain->viommu_list);
+	INIT_LIST_HEAD(&domain->nested_dev_list);
 	xa_init(&domain->iommu_array);
 }
 
@@ -3026,6 +3033,7 @@ void amd_iommu_domain_free(struct iommu_domain *dom)
 	struct protection_domain *domain = to_pdomain(dom);
 
 	WARN_ON(!list_empty(&domain->dev_list));
+	WARN_ON(!list_empty(&domain->nested_dev_list));
 	pt_iommu_deinit(&domain->iommu);
 	amd_iommu_pdom_id_free(domain->id);
 	kfree(domain);
@@ -3042,6 +3050,7 @@ static int blocked_domain_attach_device(struct iommu_domain *domain,
 
 	/* Clear DTE and flush the entry */
 	mutex_lock(&dev_data->mutex);
+	amd_iommu_nested_dev_unlink(dev_data);
 	dev_update_dte(dev_data, false);
 	mutex_unlock(&dev_data->mutex);
 
@@ -3261,6 +3270,74 @@ static void set_dirty_tracking_viommus(struct protection_domain *pdomain,
 		sync_translate_dte_had(aviommu, enable);
 }
 
+/*
+ * A device attached to a nested domain takes its HAD bit from the nest parent,
+ * sampled by amd_iommu_set_dte_v1() while set_dte_nested() builds the DTE.
+ *
+ * Reaching such a device cannot rely on @pdomain->dev_list, because a nested
+ * attach does not go through attach_device() and so never adds it there. Left
+ * out, the guest's own DMA through the stage-2 table goes unrecorded, which is
+ * precisely what a migration needs to see.
+ */
+static void set_dirty_tracking_nested_devs(struct protection_domain *pdomain,
+					   bool enable)
+{
+	struct iommu_dev_data *dev_data;
+
+	lockdep_assert_held(&pdomain->lock);
+
+	list_for_each_entry(dev_data, &pdomain->nested_dev_list, nested_list)
+		sync_dev_dte_had(get_amd_iommu_from_dev_data(dev_data),
+				 dev_data, enable);
+}
+
+/*
+ * Record @dev_data as translating through @parent's v1 table, and bring the
+ * HAD bit of its DTE into line with the domain.
+ *
+ * Called once the nested DTE is live. Doing the sync inside the critical
+ * section that adds to the list closes the window between set_dte_nested()
+ * sampling dirty_tracking and the device becoming visible to the walk above:
+ * a toggle landing in that window would be overwritten by the DTE the attach
+ * goes on to write, and nothing would revisit it.
+ *
+ * @dev_data->nested_parent is written here and read unlocked by the unlink,
+ * which is safe because both run under @dev_data->mutex.
+ */
+void amd_iommu_nested_dev_link(struct protection_domain *parent,
+			       struct iommu_dev_data *dev_data)
+{
+	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
+	unsigned long flags;
+
+	spin_lock_irqsave(&parent->lock, flags);
+	if (list_empty(&dev_data->nested_list))
+		list_add(&dev_data->nested_list, &parent->nested_dev_list);
+	dev_data->nested_parent = parent;
+	sync_dev_dte_had(iommu, dev_data, parent->dirty_tracking);
+	spin_unlock_irqrestore(&parent->lock, flags);
+}
+
+/*
+ * Stop tracking @dev_data as nest-attached. Call this from every path that
+ * reprograms the DTE away from the one set_dte_nested() wrote, or a toggle on
+ * the old parent would go on flipping HAD in a DTE that no longer translates
+ * through it. A device that was never nest-attached is a no-op.
+ */
+void amd_iommu_nested_dev_unlink(struct iommu_dev_data *dev_data)
+{
+	struct protection_domain *parent = dev_data->nested_parent;
+	unsigned long flags;
+
+	if (!parent)
+		return;
+
+	spin_lock_irqsave(&parent->lock, flags);
+	list_del_init(&dev_data->nested_list);
+	dev_data->nested_parent = NULL;
+	spin_unlock_irqrestore(&parent->lock, flags);
+}
+
 static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					bool enable)
 {
@@ -3283,6 +3360,11 @@ static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 
 	if (!list_empty(&pdomain->viommu_list)) {
 		set_dirty_tracking_viommus(pdomain, enable);
+		domain_flush = true;
+	}
+
+	if (!list_empty(&pdomain->nested_dev_list)) {
+		set_dirty_tracking_nested_devs(pdomain, enable);
 		domain_flush = true;
 	}
 

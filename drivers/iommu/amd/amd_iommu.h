@@ -254,6 +254,9 @@ amd_iommu_pci_seg_trans_devid_fini(struct amd_iommu_pci_seg *pci_seg) { }
 #endif
 
 void amd_iommu_sync_translate_dte_dirty(struct amd_iommu_viommu *aviommu);
+void amd_iommu_nested_dev_link(struct protection_domain *parent,
+			       struct iommu_dev_data *dev_data);
+void amd_iommu_nested_dev_unlink(struct iommu_dev_data *dev_data);
 int amd_iommu_set_translate_dte(struct iommufd_viommu *viommu);
 void amd_iommu_clear_translate_dte(struct amd_iommu *iommu, u32 trans_devid);
 void amd_iommu_update_vfctrl_mmio_translate_devid(struct amd_iommu *iommu,
