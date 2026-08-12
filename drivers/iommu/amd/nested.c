@@ -188,16 +188,24 @@ out_err:
 	return ERR_PTR(ret);
 }
 
-static int set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
-			  struct iommu_dev_data *dev_data, struct dev_table_entry *new)
+/*
+ * Build the nested DTE for @dev_data. @gDevId is passed in rather than looked
+ * up so that this can run under the nest parent's lock, and @top_paddr with
+ * @top_level likewise let the caller name a stage-2 top the pagetable API is
+ * not reporting yet, as set_dte_v1() does for a plain entry. Zero means take
+ * whichever top the parent currently has.
+ */
+static int build_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
+			    struct iommu_dev_data *dev_data,
+			    unsigned long gDevId, phys_addr_t top_paddr,
+			    unsigned int top_level,
+			    struct dev_table_entry *new)
 {
-	int ret;
 	u16 gid;
 	struct protection_domain *parent;
 	struct nested_domain *ndom = to_ndomain(dom);
 	struct iommu_hwpt_amd_guest *gdte = &ndom->gdte;
 	struct pt_iommu_amdv1_hw_info pt_info;
-	unsigned long gDevId;
 
 	/*
 	 * The nest parent domain is attached during the call to the
@@ -210,14 +218,15 @@ static int set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 	gid = ndom->viommu->gid;
 	parent = ndom->viommu->parent;
 
-	ret = iommufd_viommu_get_vdev_id(&ndom->viommu->core, dev_data->dev, &gDevId);
-	if (ret)
-		return ret;
-
 	amd_iommu_make_clear_dte(iommu, dev_data->devid, new);
 
-	/* Retrieve the current pagetable info via the IOMMU PT API. */
-	pt_iommu_amdv1_hw_info(&parent->amdv1, &pt_info);
+	if (top_paddr) {
+		pt_info.host_pt_root = top_paddr;
+		pt_info.mode = top_level + 1;
+	} else {
+		/* Retrieve the current pagetable info via the IOMMU PT API. */
+		pt_iommu_amdv1_hw_info(&parent->amdv1, &pt_info);
+	}
 
 	/*
 	 * Use domain ID from nested domain to program DTE.
@@ -254,10 +263,62 @@ static int set_dte_nested(struct amd_iommu *iommu, struct iommu_domain *dom,
 	return 0;
 }
 
+/*
+ * Resolve what building the nested DTE needs and cache it on the device. Kept
+ * separate from building so that an attach which cannot resolve the guest
+ * device ID fails before any existing state has been torn down, and so that
+ * the build itself can run under the nest parent's lock.
+ */
+static int nested_prepare_dev(struct iommu_domain *dom,
+			      struct iommu_dev_data *dev_data)
+{
+	struct nested_domain *ndom = to_ndomain(dom);
+	unsigned long gDevId;
+	int ret;
+
+	if (WARN_ON(!ndom->viommu || !ndom->viommu->parent))
+		return -EINVAL;
+
+	ret = iommufd_viommu_get_vdev_id(&ndom->viommu->core, dev_data->dev,
+					 &gDevId);
+	if (ret)
+		return ret;
+
+	dev_data->nested_gdevid = (u16)gDevId;
+	return 0;
+}
+
+/*
+ * Rewrite a nest-attached device's DTE against a new stage-2 top.
+ *
+ * The nested DTE embeds the nest parent's page table root and mode, so growing
+ * that table has to reach these devices too. It cannot go through
+ * set_dte_entry(), which would rebuild the entry from the parent domain and
+ * drop everything the guest DTE contributed, leaving the device translating
+ * guest addresses directly against stage 2.
+ *
+ * Runs under the nest parent's lock, so it only uses what the attach cached.
+ */
+void amd_iommu_update_nested_dte(struct iommu_dev_data *dev_data,
+				 phys_addr_t top_paddr, unsigned int top_level)
+{
+	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
+	struct dev_table_entry new = {0};
+
+	if (WARN_ON(!dev_data->nested_dom))
+		return;
+
+	if (build_dte_nested(iommu, dev_data->nested_dom, dev_data,
+			     dev_data->nested_gdevid, top_paddr, top_level,
+			     &new))
+		return;
+
+	amd_iommu_update_dte(iommu, dev_data, &new);
+}
+
 static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 				struct iommu_domain *old)
 {
-	struct dev_table_entry new = {0};
 	struct nested_domain *ndom = to_ndomain(dom);
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
@@ -272,23 +333,25 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 
 	mutex_lock(&dev_data->mutex);
 
-	ret = set_dte_nested(iommu, dom, dev_data, &new);
+	ret = nested_prepare_dev(dom, dev_data);
 	if (ret)
 		goto out_err;
 
 	/*
-	 * Past the last failure, so the device can leave its old parent. That
-	 * parent may be a different domain from the one it is joining below.
+	 * Past the last failure, so the device can leave its old parent and
+	 * that parent's device list. The old parent may be a different domain
+	 * from the one it is joining below.
 	 */
 	amd_iommu_nested_dev_unlink(dev_data);
-	amd_iommu_update_dte(iommu, dev_data, &new);
+	amd_iommu_dev_list_remove(dev_data);
 
 	/*
-	 * set_dte_nested() sampled the parent's dirty tracking to build the DTE
-	 * above; joining the list re-reads it under the parent's lock so a
-	 * toggle racing the attach cannot leave the two disagreeing.
+	 * Writes the DTE, under the new parent's lock and from the page table
+	 * top and dirty tracking state that hold there. Building it outside
+	 * would race a concurrent change of either: the attach would write
+	 * back what it sampled first, and nothing would revisit it.
 	 */
-	amd_iommu_nested_dev_link(ndom->viommu->parent, dev_data);
+	amd_iommu_nested_dev_link(ndom->viommu->parent, dom, dev_data);
 
 	ret = amd_viommu_domain_id_update(iommu, ndom->viommu->gid,
 					  ndom->gdom_info->hdom_id, ndom->gdom_id);

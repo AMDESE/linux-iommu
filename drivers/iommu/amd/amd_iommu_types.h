@@ -654,11 +654,11 @@ struct protection_domain {
 
 	/*
 	 * Devices whose DTE was last programmed by set_dte_nested() against
-	 * this domain as the nest parent. A nested attach does not go through
-	 * attach_device(), so a device can reach this list without ever having
-	 * joined @dev_list, and anything that has to reach every DTE
-	 * translating through this domain's v1 table has to walk it as well.
-	 * Protected by @lock.
+	 * this domain as the nest parent. A device is on this list or on
+	 * @dev_list, never both, so that the two carry the same meaning: the
+	 * entry a rebuild has to write. Both sets translate through this
+	 * domain's v1 table, so anything reaching every such DTE, or flushing
+	 * every device behind them, walks both. Protected by @lock.
 	 */
 	struct list_head nested_dev_list;
 };
@@ -961,6 +961,14 @@ struct iommu_dev_data {
 	struct list_head nested_list;
 	/* Nest parent of the nested domain this device is attached to */
 	struct protection_domain *nested_parent;
+	/* The nested domain itself, NULL when not nest-attached */
+	struct iommu_domain *nested_dom;
+	/*
+	 * Guest device ID, resolved once at attach. Rebuilding the DTE happens
+	 * under nested_parent->lock, where iommufd_viommu_get_vdev_id() would
+	 * mean taking the vdevs xarray lock underneath it.
+	 */
+	u16 nested_gdevid;
 
 	struct gcr3_tbl_info gcr3_info;   /* Per-device GCR3 table */
 	struct device *dev;
