@@ -3185,6 +3185,23 @@ static bool amd_iommu_capable(struct device *dev, enum iommu_cap cap)
 	return false;
 }
 
+/* Apply @enable to the HAD bit of one DTE, leaving the rest of it alone. */
+static void sync_dev_dte_had(struct amd_iommu *iommu,
+			     struct iommu_dev_data *dev_data, bool enable)
+{
+	struct dev_table_entry *dte;
+	u64 new;
+
+	spin_lock(&dev_data->dte_lock);
+	dte = &get_dev_table(iommu)[dev_data->devid];
+	new = dte->data[0];
+	new = (enable ? new | DTE_FLAG_HAD : new & ~DTE_FLAG_HAD);
+	dte->data[0] = new;
+	spin_unlock(&dev_data->dte_lock);
+
+	device_flush_dte(iommu, dev_data);
+}
+
 /*
  * A vIOMMU reaches its guest's buffers through a translate DTE of its own
  * rather than through any assigned device's, so that DTE has to follow the
@@ -3204,8 +3221,6 @@ static void sync_translate_dte_had(struct amd_iommu_viommu *aviommu,
 	struct amd_iommu *iommu = container_of(aviommu->core.iommu_dev,
 					       struct amd_iommu, iommu);
 	struct iommu_dev_data *dev_data;
-	struct dev_table_entry *dte;
-	u64 new;
 
 	/*
 	 * Allocated by amd_iommu_set_translate_dte() before the vIOMMU became
@@ -3216,14 +3231,7 @@ static void sync_translate_dte_had(struct amd_iommu_viommu *aviommu,
 	if (WARN_ON_ONCE(!dev_data))
 		return;
 
-	spin_lock(&dev_data->dte_lock);
-	dte = &get_dev_table(iommu)[dev_data->devid];
-	new = dte->data[0];
-	new = (enable ? new | DTE_FLAG_HAD : new & ~DTE_FLAG_HAD);
-	dte->data[0] = new;
-	spin_unlock(&dev_data->dte_lock);
-
-	device_flush_dte(iommu, dev_data);
+	sync_dev_dte_had(iommu, dev_data, enable);
 }
 
 /*
@@ -3257,12 +3265,9 @@ static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					bool enable)
 {
 	struct protection_domain *pdomain = to_pdomain(domain);
-	struct dev_table_entry *dte;
 	struct iommu_dev_data *dev_data;
 	bool domain_flush = false;
-	struct amd_iommu *iommu;
 	unsigned long flags;
-	u64 new;
 
 	spin_lock_irqsave(&pdomain->lock, flags);
 	if (!(pdomain->dirty_tracking ^ enable)) {
@@ -3271,16 +3276,8 @@ static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 	}
 
 	list_for_each_entry(dev_data, &pdomain->dev_list, list) {
-		spin_lock(&dev_data->dte_lock);
-		iommu = get_amd_iommu_from_dev_data(dev_data);
-		dte = &get_dev_table(iommu)[dev_data->devid];
-		new = dte->data[0];
-		new = (enable ? new | DTE_FLAG_HAD : new & ~DTE_FLAG_HAD);
-		dte->data[0] = new;
-		spin_unlock(&dev_data->dte_lock);
-
-		/* Flush device DTE */
-		device_flush_dte(iommu, dev_data);
+		sync_dev_dte_had(get_amd_iommu_from_dev_data(dev_data),
+				 dev_data, enable);
 		domain_flush = true;
 	}
 
