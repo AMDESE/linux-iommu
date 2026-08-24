@@ -939,6 +939,9 @@ retry:
 		goto retry;
 	}
 
+	dev_err_ratelimited(dev, "Raw event: evt[0]=0x%08x, evt[1]=0x%08x, evt[2]=0x%08x, evt[3]=0x%08x\n",
+			    event[0], event[1], event[2], event[3]);
+
 	if (type == EVENT_TYPE_IO_FAULT) {
 		amd_iommu_report_page_fault(iommu, devid, pasid, address, flags);
 		goto out;
