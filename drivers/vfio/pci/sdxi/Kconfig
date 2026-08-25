@@ -18,5 +18,15 @@ config SDXI_VFIO_PCI
 	  to restart the VF's contexts so the guest can resume DMA
 	  without explicit cooperation.
 
+	  P2P migration (VFIO_MIGRATION_P2P) enables QEMU live migration
+	  when multiple SDXI VFs are assigned to one VM. SDXI cannot
+	  quiesce peer DMA independently, so RUNNING_P2P uses the same
+	  function stop (GSV_STOP) as STOP; see main.h for the FSM design.
+
+	  PRE_COPY migration (VFIO_MIGRATION_PRE_COPY) keeps the function
+	  active during the precopy phase; guest RAM dirtiness is tracked
+	  via IOMMU dirty pages. The device migration stream carries the
+	  MMIO blob only at STOP_COPY.
+
 	  To compile this driver as a module, choose M here; the module
 	  will be called sdxi-vfio-pci.

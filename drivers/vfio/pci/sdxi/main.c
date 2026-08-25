@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * VFIO variant driver for AMD SDXI PCI devices supporting
- * VFIO_MIGRATION_STOP_COPY.
+ * VFIO_MIGRATION_STOP_COPY, VFIO_MIGRATION_P2P, and VFIO_MIGRATION_PRE_COPY.
+ *
+ * Migration FSM and P2P quiesce model: see main.h.
  *
  * Copyright (C) 2026 Advanced Micro Devices, Inc.
  */
@@ -75,7 +77,7 @@ static int sdxi_stop(struct sdxi_vfio_pci_device *s)
 static int sdxi_start(struct sdxi_vfio_pci_device *s)
 {
 	struct pci_dev *vf = s->core_dev.pdev;
-	u64 cap1;
+	u64 cap1, cxt_l2;
 	u32 max_cxt;
 	int vf_id;
 	int ret;
@@ -96,6 +98,19 @@ static int sdxi_start(struct sdxi_vfio_pci_device *s)
 	 * own again. A VF admin context is a legal P2V target because the
 	 * descriptor is issued by the PF, not by the context being started.
 	 *
+	 * QEMU drives RUNNING_P2P then RUNNING at every vm_start, so this is
+	 * also reached on a cold boot. Without a context table nothing was
+	 * parked at CXTV_STOP_FN, and the descriptor would fail and leave the
+	 * PF admin context at CXTV_ERROR, breaking later restarts (MIG-D3).
+	 */
+	cxt_l2 = sdxi_read64(s, SDXI_MMIO_CXT_L2);
+	if (!FIELD_GET(SDXI_MMIO_CXT_L2_PTR, cxt_l2)) {
+		dev_dbg(sdxi_dev(s),
+			"start: no context table, skipping P2V restart\n");
+		return 0;
+	}
+
+	/*
 	 * P2V.DSC_CXT_START_RS is only meaningful for a VF: it is issued by
 	 * the owning PF on the VF's behalf. vf_num is the 0-based VF index
 	 * within that PF.
@@ -230,6 +245,16 @@ static ssize_t sdxi_save_read(struct file *filp, char __user *buf,
 	size_t n;
 
 	mutex_lock(&m->lock);
+	if (m->precopy && !m->finalized) {
+		int early = m->pos == 0 ? -ENOMSG : 0;
+
+		mutex_unlock(&m->lock);
+		return early;
+	}
+	if (!m->finalized) {
+		mutex_unlock(&m->lock);
+		return -EINVAL;
+	}
 	if (m->pos < 0) {
 		mutex_unlock(&m->lock);
 		return -EINVAL;
@@ -255,10 +280,43 @@ static ssize_t sdxi_save_read(struct file *filp, char __user *buf,
 	return missed == n ? -EFAULT : n - missed;
 }
 
+static long sdxi_save_precopy_ioctl(struct file *filp, unsigned int cmd,
+				    unsigned long arg)
+{
+	struct sdxi_mig_file *m = filp->private_data;
+	struct sdxi_vfio_pci_device *s = m->sdev;
+	struct vfio_precopy_info info;
+	int ret;
+
+	ret = vfio_check_precopy_ioctl(&s->core_dev.vdev, cmd, arg, &info);
+	if (ret)
+		return ret;
+
+	scoped_guard(mutex, &s->state_mutex) {
+		if (s->state != VFIO_DEVICE_STATE_PRE_COPY &&
+		    s->state != VFIO_DEVICE_STATE_PRE_COPY_P2P)
+			return -EINVAL;
+
+		scoped_guard(mutex, &m->lock) {
+			info.dirty_bytes = 0;
+			if (m->finalized)
+				info.initial_bytes = sizeof(m->blob) - m->pos;
+			else
+				info.initial_bytes = 0;
+		}
+	}
+
+	return copy_to_user((void __user *)arg, &info,
+			    offsetofend(struct vfio_precopy_info, dirty_bytes)) ?
+		-EFAULT : 0;
+}
+
 static const struct file_operations sdxi_save_fops = {
-	.owner   = THIS_MODULE,
-	.read    = sdxi_save_read,
-	.release = sdxi_mig_release,
+	.owner          = THIS_MODULE,
+	.read           = sdxi_save_read,
+	.unlocked_ioctl = sdxi_save_precopy_ioctl,
+	.compat_ioctl   = compat_ptr_ioctl,
+	.release        = sdxi_mig_release,
 };
 
 static ssize_t sdxi_restore_write(struct file *filp, const char __user *buf,
@@ -309,7 +367,9 @@ static const struct file_operations sdxi_restore_fops = {
 };
 
 static struct sdxi_mig_file *
-sdxi_mig_file_alloc(const struct file_operations *fops, int flags)
+sdxi_mig_file_alloc(struct sdxi_vfio_pci_device *s,
+		    const struct file_operations *fops, int flags,
+		    bool precopy)
 {
 	struct sdxi_mig_file *m;
 
@@ -317,6 +377,8 @@ sdxi_mig_file_alloc(const struct file_operations *fops, int flags)
 	if (!m)
 		return ERR_PTR(-ENOMEM);
 
+	m->sdev = s;
+	m->precopy = precopy;
 	mutex_init(&m->lock);
 	m->filp = anon_inode_getfile("sdxi_vfio_mig", fops, m, flags);
 	if (IS_ERR(m->filp)) {
@@ -336,6 +398,40 @@ static void sdxi_mig_file_put(struct sdxi_mig_file *m)
 		fput(m->filp);
 }
 
+static struct sdxi_mig_file *
+sdxi_save_open(struct sdxi_vfio_pci_device *s, bool precopy)
+{
+	struct sdxi_mig_file *m;
+
+	m = sdxi_mig_file_alloc(s, &sdxi_save_fops, O_RDONLY, precopy);
+	if (IS_ERR(m))
+		return m;
+
+	get_file(m->filp);
+	s->save_file = m;
+	return m;
+}
+
+static int sdxi_save_finalize(struct sdxi_vfio_pci_device *s)
+{
+	struct sdxi_mig_file *m = s->save_file;
+
+	if (!m)
+		return -EINVAL;
+
+	sdxi_save_regs(s, &m->blob);
+	m->finalized = true;
+	m->precopy = false;
+	m->pos = 0;
+	return 0;
+}
+
+static void sdxi_save_close(struct sdxi_vfio_pci_device *s)
+{
+	sdxi_mig_file_put(s->save_file);
+	s->save_file = NULL;
+}
+
 static struct file *
 sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 {
@@ -351,27 +447,81 @@ sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 		return err ? ERR_PTR(err) : NULL;
 	}
 
+	/*
+	 * P2P quiesce (QAT-style): SDXI cannot stop peer DMA alone, so
+	 * RUNNING_P2P uses the same function stop as STOP (GSV_STOP). MMIO
+	 * remains usable; all DMA including cross-function RKey is off.
+	 */
+	if (cur == VFIO_DEVICE_STATE_RUNNING &&
+	    next == VFIO_DEVICE_STATE_RUNNING_P2P)
+		return sdxi_stop(s) ? ERR_PTR(-EIO) : NULL;
+
+	if (cur == VFIO_DEVICE_STATE_RUNNING_P2P &&
+	    next == VFIO_DEVICE_STATE_RUNNING) {
+		err = sdxi_start(s);
+		return err ? ERR_PTR(err) : NULL;
+	}
+
+	if ((cur == VFIO_DEVICE_STATE_RUNNING_P2P &&
+	     next == VFIO_DEVICE_STATE_STOP) ||
+	    (cur == VFIO_DEVICE_STATE_STOP &&
+	     next == VFIO_DEVICE_STATE_RUNNING_P2P))
+		return NULL;
+
+	if ((cur == VFIO_DEVICE_STATE_RUNNING &&
+	     next == VFIO_DEVICE_STATE_PRE_COPY) ||
+	    (cur == VFIO_DEVICE_STATE_RUNNING_P2P &&
+	     next == VFIO_DEVICE_STATE_PRE_COPY_P2P)) {
+		m = sdxi_save_open(s, true);
+		return IS_ERR(m) ? ERR_CAST(m) : m->filp;
+	}
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY &&
+	    next == VFIO_DEVICE_STATE_PRE_COPY_P2P)
+		return sdxi_stop(s) ? ERR_PTR(-EIO) : NULL;
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
+	    next == VFIO_DEVICE_STATE_PRE_COPY) {
+		err = sdxi_start(s);
+		return err ? ERR_PTR(err) : NULL;
+	}
+
+	if ((cur == VFIO_DEVICE_STATE_PRE_COPY &&
+	     next == VFIO_DEVICE_STATE_RUNNING) ||
+	    (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
+	     next == VFIO_DEVICE_STATE_RUNNING_P2P)) {
+		sdxi_save_close(s);
+		return NULL;
+	}
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
+	    next == VFIO_DEVICE_STATE_STOP_COPY) {
+		err = sdxi_save_finalize(s);
+		return err ? ERR_PTR(err) : NULL;
+	}
+
 	if (cur == VFIO_DEVICE_STATE_STOP &&
 	    next == VFIO_DEVICE_STATE_STOP_COPY) {
-		m = sdxi_mig_file_alloc(&sdxi_save_fops, O_RDONLY);
+		m = sdxi_save_open(s, false);
 		if (IS_ERR(m))
 			return ERR_CAST(m);
-		sdxi_save_regs(s, &m->blob);
-		get_file(m->filp);
-		s->save_file = m;
+		err = sdxi_save_finalize(s);
+		if (err) {
+			sdxi_save_close(s);
+			return ERR_PTR(err);
+		}
 		return m->filp;
 	}
 
 	if (cur == VFIO_DEVICE_STATE_STOP_COPY &&
 	    next == VFIO_DEVICE_STATE_STOP) {
-		sdxi_mig_file_put(s->save_file);
-		s->save_file = NULL;
+		sdxi_save_close(s);
 		return NULL;
 	}
 
 	if (cur == VFIO_DEVICE_STATE_STOP &&
 	    next == VFIO_DEVICE_STATE_RESUMING) {
-		m = sdxi_mig_file_alloc(&sdxi_restore_fops, O_WRONLY);
+		m = sdxi_mig_file_alloc(s, &sdxi_restore_fops, O_WRONLY, false);
 		if (IS_ERR(m))
 			return ERR_CAST(m);
 		get_file(m->filp);
@@ -471,7 +621,9 @@ static int sdxi_vfio_init_device(struct vfio_device *vdev)
 		return err;
 
 	mutex_init(&s->state_mutex);
-	vdev->migration_flags = VFIO_MIGRATION_STOP_COPY;
+	vdev->migration_flags = VFIO_MIGRATION_STOP_COPY |
+				VFIO_MIGRATION_P2P |
+				VFIO_MIGRATION_PRE_COPY;
 	vdev->mig_ops = &sdxi_vfio_mig_ops;
 	return 0;
 }
@@ -514,17 +666,20 @@ static int sdxi_vfio_open_device(struct vfio_device *vdev)
 	return 0;
 }
 
+static void sdxi_drop_mig_files(struct sdxi_vfio_pci_device *s)
+{
+	sdxi_save_close(s);
+	sdxi_mig_file_put(s->restore_file);
+	s->restore_file = NULL;
+}
+
 static void sdxi_vfio_close_device(struct vfio_device *vdev)
 {
 	struct sdxi_vfio_pci_device *s =
 		container_of(vdev, struct sdxi_vfio_pci_device, core_dev.vdev);
 
-	scoped_guard(mutex, &s->state_mutex) {
-		sdxi_mig_file_put(s->save_file);
-		s->save_file = NULL;
-		sdxi_mig_file_put(s->restore_file);
-		s->restore_file = NULL;
-	}
+	scoped_guard(mutex, &s->state_mutex)
+		sdxi_drop_mig_files(s);
 
 	pci_iounmap(s->core_dev.pdev, s->bar0);
 	s->bar0 = NULL;
@@ -639,13 +794,36 @@ static const struct pci_device_id sdxi_vfio_pci_table[] = {
 };
 MODULE_DEVICE_TABLE(pci, sdxi_vfio_pci_table);
 
+static void sdxi_vfio_reset_done(struct pci_dev *pdev)
+{
+	struct vfio_pci_core_device *core = dev_get_drvdata(&pdev->dev);
+	struct sdxi_vfio_pci_device *s =
+		container_of(core, struct sdxi_vfio_pci_device, core_dev);
+
+	guard(mutex)(&s->state_mutex);
+	/*
+	 * Open's FLR also lands here, before bar0 is mapped, and
+	 * open_device() then overwrites s->state from the function's GSV.
+	 * A reset QEMU issues while the device is open must match the
+	 * uAPI: device_state returns to RUNNING. The function itself
+	 * stays at GSV_STOP until the next sdxi_start().
+	 */
+	sdxi_drop_mig_files(s);
+	s->state = VFIO_DEVICE_STATE_RUNNING;
+}
+
+static const struct pci_error_handlers sdxi_vfio_err_handlers = {
+	.error_detected = vfio_pci_core_aer_err_detected,
+	.reset_done = sdxi_vfio_reset_done,
+};
+
 static struct pci_driver sdxi_vfio_pci_driver = {
 	.name			= KBUILD_MODNAME,
 	.id_table		= sdxi_vfio_pci_table,
 	.probe			= sdxi_vfio_pci_probe,
 	.remove			= sdxi_vfio_pci_remove,
 	.sriov_configure	= sdxi_vfio_pci_sriov_configure,
-	.err_handler		= &vfio_pci_core_err_handlers,
+	.err_handler		= &sdxi_vfio_err_handlers,
 	.driver_managed_dma	= true,
 };
 module_pci_driver(sdxi_vfio_pci_driver);
