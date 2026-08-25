@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * VFIO variant driver for AMD SDXI PCI devices supporting
- * VFIO_MIGRATION_STOP_COPY.
+ * VFIO_MIGRATION_STOP_COPY, VFIO_MIGRATION_P2P, and VFIO_MIGRATION_PRE_COPY.
+ *
+ * Migration FSM and P2P quiesce model: see main.h.
  *
  * Copyright (C) 2026 Advanced Micro Devices, Inc.
  */
@@ -235,14 +237,59 @@ static ssize_t sdxi_save_read(struct file *filp, char __user *buf,
 	ssize_t ret;
 
 	guard(mutex)(&m->lock);
-	ret = simple_read_from_buffer(buf, len, &m->pos, &m->blob, sizeof(m->blob));
+
+	if (m->precopy && !m->finalized) {
+		if (m->pos == 0)
+			return -ENOMSG;
+		return 0;
+	}
+
+	if (!m->finalized)
+		return -EINVAL;
+
+	ret = simple_read_from_buffer(buf, len, &m->pos, &m->blob,
+				      sizeof(m->blob));
 	return ret;
 }
 
+static long sdxi_save_precopy_ioctl(struct file *filp, unsigned int cmd,
+				    unsigned long arg)
+{
+	struct sdxi_mig_file *m = filp->private_data;
+	struct sdxi_vfio_pci_device *s = m->sdev;
+	struct vfio_precopy_info info;
+	enum vfio_device_mig_state state;
+	int ret;
+
+	ret = vfio_check_precopy_ioctl(&s->core_dev.vdev, cmd, arg, &info);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&s->state_mutex);
+	state = s->state;
+	if (state != VFIO_DEVICE_STATE_PRE_COPY &&
+	    state != VFIO_DEVICE_STATE_PRE_COPY_P2P)
+		return -EINVAL;
+
+	guard(mutex)(&m->lock);
+
+	info.dirty_bytes = 0;
+	if (m->finalized)
+		info.initial_bytes = sizeof(m->blob) - m->pos;
+	else
+		info.initial_bytes = 0;
+
+	return copy_to_user((void __user *)arg, &info,
+			    offsetofend(struct vfio_precopy_info, dirty_bytes)) ?
+		-EFAULT : 0;
+}
+
 static const struct file_operations sdxi_save_fops = {
-	.owner   = THIS_MODULE,
-	.read    = sdxi_save_read,
-	.release = sdxi_mig_release,
+	.owner          = THIS_MODULE,
+	.read           = sdxi_save_read,
+	.unlocked_ioctl = sdxi_save_precopy_ioctl,
+	.compat_ioctl   = compat_ptr_ioctl,
+	.release        = sdxi_mig_release,
 };
 
 static ssize_t sdxi_restore_write(struct file *filp, const char __user *buf,
@@ -265,7 +312,9 @@ static const struct file_operations sdxi_restore_fops = {
 };
 
 static struct sdxi_mig_file *
-sdxi_mig_file_alloc(const struct file_operations *fops, int flags)
+sdxi_mig_file_alloc(struct sdxi_vfio_pci_device *s,
+		    const struct file_operations *fops, int flags,
+		    bool precopy)
 {
 	struct sdxi_mig_file *m;
 
@@ -273,6 +322,8 @@ sdxi_mig_file_alloc(const struct file_operations *fops, int flags)
 	if (!m)
 		return ERR_PTR(-ENOMEM);
 
+	m->sdev = s;
+	m->precopy = precopy;
 	mutex_init(&m->lock);
 	m->filp = anon_inode_getfile("sdxi_vfio_mig", fops, m, flags);
 	if (IS_ERR(m->filp)) {
@@ -292,6 +343,40 @@ static void sdxi_mig_file_put(struct sdxi_mig_file *m)
 		fput(m->filp);
 }
 
+static struct sdxi_mig_file *
+sdxi_save_open(struct sdxi_vfio_pci_device *s, bool precopy)
+{
+	struct sdxi_mig_file *m;
+
+	m = sdxi_mig_file_alloc(s, &sdxi_save_fops, O_RDONLY, precopy);
+	if (IS_ERR(m))
+		return m;
+
+	get_file(m->filp);
+	s->save_file = m;
+	return m;
+}
+
+static int sdxi_save_finalize(struct sdxi_vfio_pci_device *s)
+{
+	struct sdxi_mig_file *m = s->save_file;
+
+	if (!m)
+		return -EINVAL;
+
+	sdxi_save_regs(s, &m->blob);
+	m->finalized = true;
+	m->precopy = false;
+	m->pos = 0;
+	return 0;
+}
+
+static void sdxi_save_close(struct sdxi_vfio_pci_device *s)
+{
+	sdxi_mig_file_put(s->save_file);
+	s->save_file = NULL;
+}
+
 static struct file *
 sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 {
@@ -307,27 +392,81 @@ sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 		return err ? ERR_PTR(err) : NULL;
 	}
 
+	/*
+	 * P2P quiesce (QAT-style): SDXI cannot stop peer DMA alone, so
+	 * RUNNING_P2P uses the same function stop as STOP (GSV_STOP). MMIO
+	 * remains usable; all DMA including cross-function RKey is off.
+	 */
+	if (cur == VFIO_DEVICE_STATE_RUNNING &&
+	    next == VFIO_DEVICE_STATE_RUNNING_P2P)
+		return sdxi_stop(s) ? ERR_PTR(-EIO) : NULL;
+
+	if (cur == VFIO_DEVICE_STATE_RUNNING_P2P &&
+	    next == VFIO_DEVICE_STATE_RUNNING) {
+		err = sdxi_start(s);
+		return err ? ERR_PTR(err) : NULL;
+	}
+
+	if ((cur == VFIO_DEVICE_STATE_RUNNING_P2P &&
+	     next == VFIO_DEVICE_STATE_STOP) ||
+	    (cur == VFIO_DEVICE_STATE_STOP &&
+	     next == VFIO_DEVICE_STATE_RUNNING_P2P))
+		return NULL;
+
+	if ((cur == VFIO_DEVICE_STATE_RUNNING &&
+	     next == VFIO_DEVICE_STATE_PRE_COPY) ||
+	    (cur == VFIO_DEVICE_STATE_RUNNING_P2P &&
+	     next == VFIO_DEVICE_STATE_PRE_COPY_P2P)) {
+		m = sdxi_save_open(s, true);
+		return IS_ERR(m) ? ERR_CAST(m) : m->filp;
+	}
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY &&
+	    next == VFIO_DEVICE_STATE_PRE_COPY_P2P)
+		return sdxi_stop(s) ? ERR_PTR(-EIO) : NULL;
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
+	    next == VFIO_DEVICE_STATE_PRE_COPY) {
+		err = sdxi_start(s);
+		return err ? ERR_PTR(err) : NULL;
+	}
+
+	if ((cur == VFIO_DEVICE_STATE_PRE_COPY &&
+	     next == VFIO_DEVICE_STATE_RUNNING) ||
+	    (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
+	     next == VFIO_DEVICE_STATE_RUNNING_P2P)) {
+		sdxi_save_close(s);
+		return NULL;
+	}
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
+	    next == VFIO_DEVICE_STATE_STOP_COPY) {
+		err = sdxi_save_finalize(s);
+		return err ? ERR_PTR(err) : NULL;
+	}
+
 	if (cur == VFIO_DEVICE_STATE_STOP &&
 	    next == VFIO_DEVICE_STATE_STOP_COPY) {
-		m = sdxi_mig_file_alloc(&sdxi_save_fops, O_RDONLY);
+		m = sdxi_save_open(s, false);
 		if (IS_ERR(m))
 			return ERR_CAST(m);
-		sdxi_save_regs(s, &m->blob);
-		get_file(m->filp);
-		s->save_file = m;
+		err = sdxi_save_finalize(s);
+		if (err) {
+			sdxi_save_close(s);
+			return ERR_PTR(err);
+		}
 		return m->filp;
 	}
 
 	if (cur == VFIO_DEVICE_STATE_STOP_COPY &&
 	    next == VFIO_DEVICE_STATE_STOP) {
-		sdxi_mig_file_put(s->save_file);
-		s->save_file = NULL;
+		sdxi_save_close(s);
 		return NULL;
 	}
 
 	if (cur == VFIO_DEVICE_STATE_STOP &&
 	    next == VFIO_DEVICE_STATE_RESUMING) {
-		m = sdxi_mig_file_alloc(&sdxi_restore_fops, O_WRONLY);
+		m = sdxi_mig_file_alloc(s, &sdxi_restore_fops, O_WRONLY, false);
 		if (IS_ERR(m))
 			return ERR_CAST(m);
 		get_file(m->filp);
@@ -427,7 +566,9 @@ static int sdxi_vfio_init_device(struct vfio_device *vdev)
 		return err;
 
 	mutex_init(&s->state_mutex);
-	vdev->migration_flags = VFIO_MIGRATION_STOP_COPY;
+	vdev->migration_flags = VFIO_MIGRATION_STOP_COPY |
+				VFIO_MIGRATION_P2P |
+				VFIO_MIGRATION_PRE_COPY;
 	vdev->mig_ops = &sdxi_vfio_mig_ops;
 	return 0;
 }
@@ -476,8 +617,7 @@ static void sdxi_vfio_close_device(struct vfio_device *vdev)
 		container_of(vdev, struct sdxi_vfio_pci_device, core_dev.vdev);
 
 	scoped_guard(mutex, &s->state_mutex) {
-		sdxi_mig_file_put(s->save_file);
-		s->save_file = NULL;
+		sdxi_save_close(s);
 		sdxi_mig_file_put(s->restore_file);
 		s->restore_file = NULL;
 	}
