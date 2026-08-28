@@ -27,11 +27,19 @@ void __iowrite64_copy(void __iomem *to, const void *from, size_t count);
 #ifdef CONFIG_MMU
 int ioremap_page_range(unsigned long addr, unsigned long end,
 		       phys_addr_t phys_addr, pgprot_t prot);
+int ioremap_map_page_range(unsigned long vaddr, phys_addr_t phys_addr,
+			   unsigned long size, pgprot_t prot);
 int vmap_page_range(unsigned long addr, unsigned long end,
 		    phys_addr_t phys_addr, pgprot_t prot);
 #else
 static inline int ioremap_page_range(unsigned long addr, unsigned long end,
 				     phys_addr_t phys_addr, pgprot_t prot)
+{
+	return 0;
+}
+static inline int ioremap_map_page_range(unsigned long vaddr,
+					 phys_addr_t phys_addr,
+					 unsigned long size, pgprot_t prot)
 {
 	return 0;
 }

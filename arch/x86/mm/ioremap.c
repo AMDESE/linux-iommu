@@ -316,7 +316,7 @@ __ioremap_caller(resource_size_t phys_addr, unsigned long size,
 	if (memtype_kernel_map_sync(phys_addr, size, pcm))
 		goto err_free_area;
 
-	if (ioremap_page_range(vaddr, vaddr + size, phys_addr, prot))
+	if (ioremap_map_page_range(vaddr, phys_addr, size, prot))
 		goto err_free_area;
 
 	ret_addr = (void __iomem *) (vaddr + offset);

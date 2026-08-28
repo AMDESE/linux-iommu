@@ -26,6 +26,8 @@
 #include <linux/mm.h>
 #include <linux/mount.h>
 #include <linux/resource_ext.h>
+#include <linux/cc_platform.h>
+#include <linux/io.h>
 #include <uapi/linux/magic.h>
 #include <linux/string.h>
 #include <linux/vmalloc.h>
@@ -47,6 +49,14 @@ struct resource iomem_resource = {
 	.flags	= IORESOURCE_MEM,
 };
 EXPORT_SYMBOL(iomem_resource);
+
+struct resource encrypted_iomem_resource = {
+	.name	= "Encrypted MMIO",
+	.start	= 0,
+	.end	= -1,
+	.desc	= IORES_DESC_ENCRYPTED,
+	.flags	= IORESOURCE_MEM,
+};
 
 static DEFINE_RWLOCK(resource_lock);
 
@@ -321,13 +331,14 @@ static bool is_type_match(struct resource *p, unsigned long flags, unsigned long
 }
 
 /**
- * find_next_iomem_res - Finds the lowest iomem resource that covers part of
- *			 [@start..@end].
+ * find_next_res - Finds the lowest resource that covers part of
+ *		   [@start..@end].
  *
  * If a resource is found, returns 0 and @*res is overwritten with the part
  * of the resource that's within [@start..@end]; if none is found, returns
  * -ENODEV.  Returns -EINVAL for invalid parameters.
  *
+ * @parent:	resource tree root to search
  * @start:	start address of the resource searched for
  * @end:	end address of same resource
  * @flags:	flags which the resource must have
@@ -337,9 +348,9 @@ static bool is_type_match(struct resource *p, unsigned long flags, unsigned long
  * The caller must specify @start, @end, @flags, and @desc
  * (which may be IORES_DESC_NONE).
  */
-static int find_next_iomem_res(resource_size_t start, resource_size_t end,
-			       unsigned long flags, unsigned long desc,
-			       struct resource *res)
+static int find_next_res(struct resource *parent, resource_size_t start,
+			 resource_size_t end, unsigned long flags,
+			 unsigned long desc, struct resource *res)
 {
 	/* Skip children until we find a top level range that matches */
 	bool skip_children = true;
@@ -353,7 +364,7 @@ static int find_next_iomem_res(resource_size_t start, resource_size_t end,
 
 	read_lock(&resource_lock);
 
-	for_each_resource(&iomem_resource, p, skip_children) {
+	for_each_resource(parent, p, skip_children) {
 		/* If we passed the resource we are looking for, stop */
 		if (p->start > end) {
 			p = NULL;
@@ -376,8 +387,6 @@ static int find_next_iomem_res(resource_size_t start, resource_size_t end,
 	}
 
 	if (p) {
-//		pr_err("___K___ %s %u: %llx found r=%lx\n", __func__, __LINE__,	start, (ulong)p);
-
 		/* copy data */
 		*res = (struct resource) {
 			.start = max(start, p->start),
@@ -392,16 +401,40 @@ static int find_next_iomem_res(resource_size_t start, resource_size_t end,
 	return p ? 0 : -ENODEV;
 }
 
-static int __walk_iomem_res_desc(resource_size_t start, resource_size_t end,
-				 unsigned long flags, unsigned long desc,
-				 void *arg,
-				 int (*func)(struct resource *, void *))
+/**
+ * find_next_iomem_res - Finds the lowest iomem resource that covers part of
+ *			 [@start..@end].
+ *
+ * If a resource is found, returns 0 and @*res is overwritten with the part
+ * of the resource that's within [@start..@end]; if none is found, returns
+ * -ENODEV.  Returns -EINVAL for invalid parameters.
+ *
+ * @start:	start address of the resource searched for
+ * @end:	end address of same resource
+ * @flags:	flags which the resource must have
+ * @desc:	descriptor the resource must have
+ * @res:	return ptr, if resource found
+ *
+ * The caller must specify @start, @end, @flags, and @desc
+ * (which may be IORES_DESC_NONE).
+ */
+static int find_next_iomem_res(resource_size_t start, resource_size_t end,
+			       unsigned long flags, unsigned long desc,
+			       struct resource *res)
+{
+	return find_next_res(&iomem_resource, start, end, flags, desc, res);
+}
+
+static int walk_res_desc(struct resource *parent, resource_size_t start,
+			 resource_size_t end, unsigned long flags,
+			 unsigned long desc, void *arg,
+			 int (*func)(struct resource *, void *))
 {
 	struct resource res;
 	int ret = -EINVAL;
 
 	while (start < end &&
-	       !find_next_iomem_res(start, end, flags, desc, &res)) {
+	       !find_next_res(parent, start, end, flags, desc, &res)) {
 		ret = (*func)(&res, arg);
 		if (ret)
 			break;
@@ -410,6 +443,14 @@ static int __walk_iomem_res_desc(resource_size_t start, resource_size_t end,
 	}
 
 	return ret;
+}
+
+static int __walk_iomem_res_desc(resource_size_t start, resource_size_t end,
+				 unsigned long flags, unsigned long desc,
+				 void *arg,
+				 int (*func)(struct resource *, void *))
+{
+	return walk_res_desc(&iomem_resource, start, end, flags, desc, arg, func);
 }
 
 /**
@@ -657,6 +698,67 @@ int region_intersects(resource_size_t start, size_t size, unsigned long flags,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(region_intersects);
+
+/*
+ * Walk encrypted MMIO ranges registered for TDISP/TSM private device
+ * regions (see encrypted_iomem_resource).
+ */
+int walk_encrypted_mem_res(u64 start, u64 end, void *arg,
+			   int (*func)(struct resource *, void *))
+{
+	return walk_res_desc(&encrypted_iomem_resource, start, end,
+			     IORESOURCE_MEM, IORES_DESC_ENCRYPTED, arg, func);
+}
+EXPORT_SYMBOL_GPL(walk_encrypted_mem_res);
+
+int region_intersects_encrypted(resource_size_t start, size_t size)
+{
+	guard(read_lock)(&resource_lock);
+	return __region_intersects(&encrypted_iomem_resource, start, size,
+				   IORESOURCE_MEM, IORES_DESC_ENCRYPTED);
+}
+EXPORT_SYMBOL_GPL(region_intersects_encrypted);
+
+#ifdef CONFIG_MMU
+/*
+ * Map @size bytes at @vaddr to @phys_addr using @prot, splitting the mapping
+ * when TDISP/TSM has registered only part of the range in
+ * encrypted_iomem_resource and per-page encryption attributes are required.
+ */
+int ioremap_map_page_range(unsigned long vaddr, phys_addr_t phys_addr,
+			   unsigned long size, pgprot_t prot)
+{
+	if (!cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT) ||
+	    region_intersects_encrypted(phys_addr, size) == REGION_DISJOINT)
+		return ioremap_page_range(vaddr, vaddr + size, phys_addr, prot);
+
+	while (size) {
+		bool enc = region_intersects_encrypted(phys_addr, PAGE_SIZE) ==
+			   REGION_INTERSECTS;
+		unsigned long run = PAGE_SIZE;
+		pgprot_t run_prot = enc ? pgprot_encrypted(prot) : prot;
+
+		phys_addr += PAGE_SIZE;
+		vaddr += PAGE_SIZE;
+		size -= PAGE_SIZE;
+
+		while (size &&
+		       (region_intersects_encrypted(phys_addr, PAGE_SIZE) ==
+			REGION_INTERSECTS) == enc) {
+			run += PAGE_SIZE;
+			phys_addr += PAGE_SIZE;
+			vaddr += PAGE_SIZE;
+			size -= PAGE_SIZE;
+		}
+
+		if (vmap_page_range(vaddr - run, vaddr, phys_addr - run, run_prot))
+			return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(ioremap_map_page_range);
+#endif /* CONFIG_MMU */
 
 void __weak arch_remove_reservations(struct resource *avail)
 {
