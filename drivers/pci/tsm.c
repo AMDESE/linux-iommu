@@ -629,7 +629,7 @@ int pci_tsm_mmio_setup(struct pci_dev *pdev, struct pci_tsm_mmio *mmio)
 		if (j >= PCI_NUM_RESOURCES)
 			break;
 
-		if (insert_resource(&iomem_resource, res) != 0)
+		if (insert_resource(&encrypted_iomem_resource, res) != 0)
 			break;
 	}
 
