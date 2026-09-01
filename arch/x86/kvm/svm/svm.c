@@ -1185,11 +1185,21 @@ static void __svm_vcpu_reset(struct kvm_vcpu *vcpu)
 static void svm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
+	struct kvm_svm *kvm_svm = to_kvm_svm(vcpu->kvm);
 
 	svm->spec_ctrl = 0;
 	svm->virt_spec_ctrl = 0;
 
 	init_vmcb(vcpu, init_event);
+
+	if (init_event) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&kvm_svm->ext_ir_lock, flags);
+		if (kvm_svm->ext_ir_active)
+			kvm_svm->ext_ir_rebind_pending = true;
+		spin_unlock_irqrestore(&kvm_svm->ext_ir_lock, flags);
+	}
 
 	if (!init_event)
 		__svm_vcpu_reset(vcpu);
@@ -4979,6 +4989,8 @@ static void svm_vm_destroy(struct kvm *kvm)
 static int svm_vm_init(struct kvm *kvm)
 {
 	int type = kvm->arch.vm_type;
+
+	spin_lock_init(&to_kvm_svm(kvm)->ext_ir_lock);
 
 	if (type != KVM_X86_DEFAULT_VM &&
 	    type != KVM_X86_SW_PROTECTED_VM) {
