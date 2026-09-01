@@ -67,6 +67,8 @@
 
 static_assert(__AVIC_GATAG(AVIC_VM_ID_MASK, AVIC_VCPU_IDX_MASK) == -1u);
 
+static void avic_flush_all_ext_ir_affinity(struct kvm *kvm);
+
 #define AVIC_AUTO_MODE -1
 
 static int avic_param_set(const char *val, const struct kernel_param *kp)
@@ -376,8 +378,18 @@ int avic_vcpu_precreate(struct kvm *kvm)
 void avic_vm_pre_destroy(struct kvm *kvm)
 {
 	struct kvm_svm *kvm_svm = to_kvm_svm(kvm);
+	unsigned long flags;
 
-	if (WARN_ON_ONCE(!enable_apicv) || !kvm_svm->avic_vm_id)
+	if (WARN_ON_ONCE(!enable_apicv))
+		return;
+
+	avic_flush_all_ext_ir_affinity(kvm);
+	spin_lock_irqsave(&kvm_svm->ext_ir_lock, flags);
+	kvm_svm->ext_ir_active = false;
+	kvm_svm->ext_ir_rebind_pending = false;
+	spin_unlock_irqrestore(&kvm_svm->ext_ir_lock, flags);
+
+	if (!kvm_svm->avic_vm_id)
 		return;
 
 	guard(spinlock_irqsave)(&svm_vm_data_hash_lock);
@@ -988,6 +1000,64 @@ struct svm_ext_ir_entry {
 	void *ir_data;
 };
 
+/* Caller must hold kvm_svm->ext_ir_lock with IRQs disabled. */
+static void avic_flush_all_ext_ir_affinity_locked(struct kvm *kvm)
+{
+	struct kvm_svm *kvm_svm = to_kvm_svm(kvm);
+	struct kvm_vcpu *vcpu;
+	unsigned long idx;
+
+	lockdep_assert_held(&kvm_svm->ext_ir_lock);
+
+	kvm_for_each_vcpu(idx, vcpu, kvm) {
+		struct vcpu_svm *svm = to_svm(vcpu);
+
+		raw_spin_lock(&svm->ir_list_lock);
+		while (!list_empty(&svm->ext_ir_list)) {
+			struct svm_ext_ir_entry *entry;
+
+			entry = list_first_entry(&svm->ext_ir_list,
+						 struct svm_ext_ir_entry, node);
+			list_del(&entry->node);
+			raw_spin_unlock(&svm->ir_list_lock);
+			WARN_ON_ONCE(amd_iommu_deactivate_guest_mode(entry->ir_data));
+			kfree(entry);
+			raw_spin_lock(&svm->ir_list_lock);
+		}
+		raw_spin_unlock(&svm->ir_list_lock);
+	}
+
+	/*
+	 * list_add() also takes ext_ir_lock, so no new entry can appear
+	 * while the flush holds it. Multiple vIOMMUs can share the VM.
+	 */
+	kvm_svm->ext_ir_active = false;
+}
+
+static void avic_flush_all_ext_ir_affinity(struct kvm *kvm)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&to_kvm_svm(kvm)->ext_ir_lock, flags);
+	avic_flush_all_ext_ir_affinity_locked(kvm);
+	spin_unlock_irqrestore(&to_kvm_svm(kvm)->ext_ir_lock, flags);
+}
+
+static void avic_prepare_ext_ir_rebind(struct kvm *kvm)
+{
+	struct kvm_svm *kvm_svm = to_kvm_svm(kvm);
+	unsigned long flags;
+
+	spin_lock_irqsave(&kvm_svm->ext_ir_lock, flags);
+	if (!kvm_svm->ext_ir_rebind_pending) {
+		spin_unlock_irqrestore(&kvm_svm->ext_ir_lock, flags);
+		return;
+	}
+	kvm_svm->ext_ir_rebind_pending = false;
+	avic_flush_all_ext_ir_affinity_locked(kvm);
+	spin_unlock_irqrestore(&kvm_svm->ext_ir_lock, flags);
+}
+
 static void svm_ext_ir_list_del(struct kvm *kvm, void *ir_data)
 {
 	struct kvm_vcpu *vcpu;
@@ -1425,13 +1495,26 @@ static int avic_set_ext_ir_affinity(struct kvm *kvm, u32 vcpu_id,
 				    struct amd_iommu_pi_data *pi)
 {
 	struct vcpu_svm *svm = get_vcpu_svm(kvm, vcpu_id);
+	struct kvm_svm *kvm_svm = to_kvm_svm(kvm);
 	struct svm_ext_ir_entry *ext_ir;
+	unsigned long flags;
 	u64 entry;
 	int cpu, ret;
 	bool ga_log_intr = false;
 
 	if (IS_ERR(svm))
 		return PTR_ERR(svm);
+
+	/*
+	 * Catch an INIT that armed rebind after prepare_ext_ir_rebind()
+	 * already ran for this ioctl.
+	 */
+	spin_lock_irqsave(&kvm_svm->ext_ir_lock, flags);
+	if (kvm_svm->ext_ir_rebind_pending) {
+		kvm_svm->ext_ir_rebind_pending = false;
+		avic_flush_all_ext_ir_affinity_locked(kvm);
+	}
+	spin_unlock_irqrestore(&kvm_svm->ext_ir_lock, flags);
 
 	/*
 	 * If the IRTE was affined to a different vCPU, remove it from the
@@ -1446,7 +1529,8 @@ static int avic_set_ext_ir_affinity(struct kvm *kvm, u32 vcpu_id,
 
 	ext_ir->ir_data = pi->ir_data;
 
-	guard(raw_spinlock_irqsave)(&svm->ir_list_lock);
+	guard(spinlock_irqsave)(&kvm_svm->ext_ir_lock);
+	guard(raw_spinlock)(&svm->ir_list_lock);
 
 	entry = svm->avic_physical_id_entry;
 	if (entry & AVIC_PHYSICAL_ID_ENTRY_IS_RUNNING_MASK) {
@@ -1463,7 +1547,7 @@ static int avic_set_ext_ir_affinity(struct kvm *kvm, u32 vcpu_id,
 	}
 
 	list_add(&ext_ir->node, &svm->ext_ir_list);
-	to_kvm_svm(kvm)->ext_ir_active = true;
+	kvm_svm->ext_ir_active = true;
 	return 0;
 }
 
@@ -1472,6 +1556,7 @@ static const struct amd_iommu_svm_ops avic_svm_ops = {
 	.get_ga_tag = avic_get_ga_tag,
 	.get_apic_backing_page = avic_get_apic_backing_page,
 	.set_ext_ir_affinity = avic_set_ext_ir_affinity,
+	.prepare_ext_ir_rebind = avic_prepare_ext_ir_rebind,
 	.kvm_from_fd = svm_kvm_from_fd,
 	.put_kvm = svm_put_kvm,
 };
