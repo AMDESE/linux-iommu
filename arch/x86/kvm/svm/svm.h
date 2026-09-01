@@ -133,6 +133,7 @@ struct kvm_svm {
 	u64 *avic_physical_id_table;
 	struct hlist_node hnode;
 	bool ext_ir_active;
+	bool ext_ir_rebind_pending;
 
 #ifdef CONFIG_KVM_AMD_SEV
 	struct kvm_sev_info sev_info;

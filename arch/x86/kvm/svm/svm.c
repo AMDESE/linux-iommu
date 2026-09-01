@@ -1296,11 +1296,15 @@ static void __svm_vcpu_reset(struct kvm_vcpu *vcpu)
 static void svm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
+	struct kvm_svm *kvm_svm = to_kvm_svm(vcpu->kvm);
 
 	svm->spec_ctrl = 0;
 	svm->virt_spec_ctrl = 0;
 
 	init_vmcb(vcpu, init_event);
+
+	if (init_event && kvm_svm->ext_ir_active)
+		kvm_svm->ext_ir_rebind_pending = true;
 
 	if (!init_event)
 		__svm_vcpu_reset(vcpu);
