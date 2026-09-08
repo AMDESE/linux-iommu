@@ -390,9 +390,14 @@ static struct amd_iommu *rlookup_amd_iommu(struct device *dev)
 	return __rlookup_amd_iommu(seg, PCI_SBDF_TO_DEVID(devid));
 }
 
+/*
+ * Allocate an immortal per-devid object stored in pci_seg->dev_data_xa.
+ * These are never erased: amd_iommu_release_device() keeps them for
+ * replug, and IRQ/DTE paths look them up locklessly via xa_load().
+ */
 static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
 {
-	struct iommu_dev_data *dev_data;
+	struct iommu_dev_data *dev_data, *old;
 	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
 
 	dev_data = kzalloc_obj(*dev_data);
@@ -404,26 +409,23 @@ static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
 	dev_data->devid = devid;
 	ratelimit_default_init(&dev_data->rs);
 
-	llist_add(&dev_data->dev_data_list, &pci_seg->dev_data_list);
+	old = xa_cmpxchg(&pci_seg->dev_data_xa, devid, NULL, dev_data,
+			 GFP_KERNEL);
+	if (xa_is_err(old)) {
+		kfree(dev_data);
+		return NULL;
+	}
+	if (old) {
+		kfree(dev_data);
+		return old;
+	}
+
 	return dev_data;
 }
 
 struct iommu_dev_data *search_dev_data(struct amd_iommu *iommu, u16 devid)
 {
-	struct iommu_dev_data *dev_data;
-	struct llist_node *node;
-	struct amd_iommu_pci_seg *pci_seg = iommu->pci_seg;
-
-	if (llist_empty(&pci_seg->dev_data_list))
-		return NULL;
-
-	node = pci_seg->dev_data_list.first;
-	llist_for_each_entry(dev_data, node, dev_data_list) {
-		if (dev_data->devid == devid)
-			return dev_data;
-	}
-
-	return NULL;
+	return xa_load(&iommu->pci_seg->dev_data_xa, devid);
 }
 
 static int clone_alias(struct pci_dev *pdev_origin, u16 alias, void *data)
