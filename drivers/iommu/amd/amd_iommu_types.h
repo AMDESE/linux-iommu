@@ -22,6 +22,7 @@
 #include <linux/irqreturn.h>
 #include <linux/generic_pt/iommu.h>
 #include <linux/idr.h>
+#include <linux/xarray.h>
 
 #include <uapi/linux/iommufd.h>
 
@@ -605,8 +606,8 @@ struct amd_iommu_pci_seg {
 	/* List with all PCI segments in the system */
 	struct list_head list;
 
-	/* List of all available dev_data structures */
-	struct llist_head dev_data_list;
+	/* Immortal iommu_dev_data objects keyed by devid */
+	struct xarray dev_data_xa;
 
 	/* PCI segment number */
 	u16 id;
@@ -861,7 +862,6 @@ struct iommu_dev_data {
 	spinlock_t dte_lock;              /* DTE lock for 256-bit access */
 
 	struct list_head list;		  /* For domain->dev_list */
-	struct llist_node dev_data_list;  /* For global dev_data_list */
 	struct protection_domain *domain; /* Domain the device is bound to */
 	struct gcr3_tbl_info gcr3_info;   /* Per-device GCR3 table */
 	struct device *dev;
