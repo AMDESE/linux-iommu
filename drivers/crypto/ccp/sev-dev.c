@@ -2537,17 +2537,14 @@ e_free_pdh:
 	return ret;
 }
 
-static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
+static int __sev_do_snp_platform_status(struct sev_user_data_snp_status *status,
+					int *error)
 {
 	struct sev_device *sev = psp_master->sev_data;
-	bool shutdown_required = false;
 	struct sev_data_snp_addr buf;
 	struct page *status_page;
-	int ret, error;
+	int ret;
 	void *data;
-
-	if (!argp->data)
-		return -EINVAL;
 
 	status_page = alloc_page(GFP_KERNEL_ACCOUNT);
 	if (!status_page)
@@ -2555,45 +2552,69 @@ static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
 
 	data = page_address(status_page);
 
-	if (!sev->snp_initialized) {
-		ret = snp_move_to_init_state(argp, &shutdown_required);
-		if (ret)
-			goto cleanup;
-	}
-
 	/*
-	 * Firmware expects status page to be in firmware-owned state, otherwise
-	 * it will report firmware error code INVALID_PAGE_STATE (0x1A).
+	 * Once SNP is initialized the firmware expects the status page to be in
+	 * firmware-owned state, otherwise it will report firmware error code
+	 * INVALID_PAGE_STATE (0x1A).
 	 */
-	if (rmp_mark_pages_firmware(__pa(data), 1, true)) {
+	if (sev->snp_initialized &&
+	    rmp_mark_pages_firmware(__pa(data), 1, true)) {
 		ret = -EFAULT;
 		goto cleanup;
 	}
 
 	buf.address = __psp_pa(data);
-	ret = __sev_do_cmd_locked(SEV_CMD_SNP_PLATFORM_STATUS, &buf, &argp->error);
+	ret = __sev_do_cmd_locked(SEV_CMD_SNP_PLATFORM_STATUS, &buf, error);
 
 	/*
 	 * Status page will be transitioned to Reclaim state upon success, or
 	 * left in Firmware state in failure. Use snp_reclaim_pages() to
 	 * transition either case back to Hypervisor-owned state.
 	 */
-	int ret1 = snp_reclaim_pages(__pa(data), 1, true);
-	if (ret1 && !ret)
-		ret = ret1;
+	if (sev->snp_initialized) {
+		int ret1 = snp_reclaim_pages(__pa(data), 1, true);
+
+		if (ret1 && !ret)
+			ret = ret1;
+	}
 
 	if (ret)
 		goto cleanup;
 
-	if (copy_to_user((void __user *)argp->data, data,
-			 sizeof(struct sev_user_data_snp_status)))
-		ret = -EFAULT;
+	memcpy(status, data, sizeof(*status));
 
 cleanup:
+	__free_pages(status_page, 0);
+	return ret;
+}
+
+static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
+{
+	struct sev_device *sev = psp_master->sev_data;
+	struct sev_user_data_snp_status status;
+	bool shutdown_required = false;
+	int ret, error;
+
+	if (!argp->data)
+		return -EINVAL;
+
+	if (!sev->snp_initialized) {
+		ret = snp_move_to_init_state(argp, &shutdown_required);
+		if (ret)
+			return ret;
+	}
+
+	ret = __sev_do_snp_platform_status(&status, &argp->error);
+
 	if (shutdown_required)
 		__sev_snp_shutdown_locked(&error, false);
 
-	__free_pages(status_page, 0);
+	if (ret)
+		return ret;
+
+	if (copy_to_user((void __user *)argp->data, &status, sizeof(status)))
+		ret = -EFAULT;
+
 	return ret;
 }
 
