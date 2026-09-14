@@ -84,7 +84,6 @@ struct tio_tdi {
 	struct pci_tdi tdi;
 	struct tsm_tdi_tio data;
 	struct sev_device *sev;
-	bool needs_unbind;
 };
 
 /* Data object IDs */

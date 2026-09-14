@@ -538,15 +538,30 @@ static void tdi_unbind(struct pci_tdi *tdi)
 	struct tsm_dsm_tio *dev_data = &dsm->data;
 	struct tsm_tdi_tio *tdi_data = &ttdi->data;
 	enum tsm_tdisp_state state = TDISP_STATE_CONFIG_UNLOCKED;
+	struct resource *res;
 	int ret;
 
-	if (ttdi->needs_unbind) {
-		ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, false);
-		ret = sev_tio_spdm_cmd(dsm, ret);
-		if (ret) {
-			ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, true);
-			sev_tio_spdm_cmd(dsm, ret);
-		}
+	/*
+	 * This is here and not in IOMMU as soon this will require SNP page
+	 * reclaim call into the PSP and it is in this module.
+	 * Do it before TDI_UNBIND as the PSP requires either Immutable to be set
+	 * or Validated to be clear.
+	 */
+	pci_dev_for_each_resource(pdev, res) {
+		if (!res || (res->end - res->start == 0))
+			continue;
+
+		pci_notice(pdev, "Sharing %s %llx..%llx\n",
+			   res->name ? res->name : "(null)", res->start, res->end);
+		for (resource_size_t off = res->start; off < res->end; off += PAGE_SIZE)
+			rmp_make_shared_mmio(off >> PAGE_SHIFT);
+	}
+
+	ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, false);
+	ret = sev_tio_spdm_cmd(dsm, ret);
+	if (ret) {
+		ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, true);
+		sev_tio_spdm_cmd(dsm, ret);
 	}
 
 	/* The hunk to verify transitioning to CONFIG_UNLOCKED */
@@ -584,21 +599,6 @@ static void tdi_unbind(struct pci_tdi *tdi)
 
 	tsm_blob_free(pdev->tsm->report);
 	pdev->tsm->report = NULL;
-
-	/*
-	 * This is here and not in IOMMU as soon this will require SNP page
-	 * reclaim call into the PSP and it is in this module.
-	 */
-	struct resource *res;
-	pci_dev_for_each_resource(pdev, res) {
-		if (!res || (res->end - res->start == 0))
-			continue;
-
-		pci_notice(pdev, "Sharing %s %llx..%llx\n",
-			   res->name ? res->name : "(null)", res->start, res->end);
-		for (resource_size_t off = res->start; off < res->end; off += PAGE_SIZE)
-			rmp_make_shared_mmio(off >> PAGE_SHIFT);
-	}
 
 	kfree(ttdi);
 
@@ -655,8 +655,6 @@ static struct pci_tdi *tdi_bind(struct pci_dev *pdev, struct kvm *kvm, u32 tdi_i
 	ret = sev_tio_tdi_status_fin(dev_data, tdi_data, &state);
 	if (ret)
 		goto error_exit;
-
-	ttdi->needs_unbind = true;
 
 	pr_ide_states(pdev, dev_data->ide);
 
@@ -749,13 +747,9 @@ static ssize_t guest_request(struct pci_tdi *tdi, enum pci_tsm_req_scope scope,
 		if (!tdi->kvm)
 			return -ENOSYS;
 
-		/* Do not force UNBIND just yet */
-		ret = sev_tio_tdi_unbind(pdev, dev_data, tdi_data, false);
-		ret = sev_tio_spdm_cmd(dsm, ret);
+		tdi_unbind(tdi);
 
-		ttdi->needs_unbind = ret != 0;
-		/* Or resplen? It is expected to be zero here anyway though */
-		return ret;
+		return 0;
 	}
 
 	BUILD_BUG_ON(sizeof(dsm->tsm.base_tsm.nonce) < sizeof(reqh.authtag));
