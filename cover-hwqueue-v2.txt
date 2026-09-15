@@ -1,0 +1,102 @@
+Subject: [PATCH 0/4] iommufd: Add AMD vIOMMU HW queue support
+
+Notes:
+
+* This series depends on the "[PATCH v5 00/24] iommu/amd: Introduce
+  AMD Hardware-accelerated Virtualized IOMMU (vIOMMU) Support"
+  (https://lore.kernel.org/linux-iommu/20260914184750.222939-1-suravee.suthikulpanit@amd.com/)
+
+* Previously, this series was part of the AMD HW vIOMMU series,
+  and now is being split into its own series to make it easier to
+  review.
+
+Overview:
+
+AMD HW-accelerated Virtualized IOMMU (vIOMMU) guests own command, event,
+and PPR queues in guest physical address space. The existing iommufd
+HW queue path pins host pages and passes a physical address to the driver
+via hw_queue_init_phys(). vIOMMU hardware instead consumes guest queue
+GPAs supplied by userspace through IOMMU_HW_QUEUE_ALLOC.
+
+This series adds a guest-address initialization path in the iommufd
+core and wires AMD vIOMMU VFCTRL programming for command, event, and
+PPR queues. It also restarts the host command buffer after a guest
+event fault, and arms the event interrupt before event logging starts.
+
+Patch 1 restarts the command buffer after GUEST_EVENT_FAULT. Hardware
+stops fetching the same way it does on ILLEGAL_COMMAND_ERROR.
+INSERT_GUEST_EVENT occupies two slots and head stays on the faulting
+command. The handler waits until Status[CmdBufRun] reads as 0, drops
+CmdBufEn, advances head past both slots without passing tail, and sets
+CmdBufEn again. A buffer that is still running is left alone.
+
+Patch 2 enables the event interrupt before event logging. The log used
+to start in IOMMU_ENABLED while EventIntEn was set later in
+iommu_init_irq(). An event in that window sets EventLogInt with the
+interrupt masked, and the IOMMU only signals on the zero-to-one
+transition, so later events never interrupt. Buffer setup is now
+separate from starting the log. iommu_enable_event_logging() clears
+stale EventLogInt and EventOverflow, arms EventIntEn, then sets
+EventLogEn. iommu_disable_event_logging() clears both bits, including
+on the kdump path.
+
+Patch 3 introduces hw_queue_init in iommufd_viommu_ops. Drivers that
+implement hw_queue_init receive the queue GPA in hw_queue->base_addr.
+Pin guest queue pages for both init paths so IOAS_UNMAP cannot
+remove the mapping while hardware can access it. Contiguous host pages
+are required only for hw_queue_init_phys. Nonzero ioctl flags are
+rejected unless the driver implements get_hw_queue_flags and the
+bits are in that mask.
+
+Patch 4 extends the IOMMU_HW_QUEUE_ALLOC UAPI with AMD queue types
+and per-queue enable flags, stores flags on iommufd_hw_queue, and
+programs guest command, event, and PPR control registers in VFCTRL
+during hw_queue_init. Length is a byte count; the driver converts it
+to the 4-bit hardware encoding. Require a 4K-aligned GPA with no bits
+above bit 51, a power-of-two size from 4K to 512K, and at least one
+enable flag. Reject a nonzero queue index and a second alloc per
+type. Serialize VFCTRL RMWs with vfctrl_lock. Destroy disables the
+queue, waits for enable bits to clear, then clears the register.
+
+CHANGES FROM V1
+===============
+
+* Patch 3: Pin the nest-parent mapping for hw_queue_init as well as
+  hw_queue_init_phys. Rename iommufd_hw_queue_alloc_phys() to
+  iommufd_hw_queue_alloc_access(). Add get_hw_queue_flags; reject
+  flags the driver does not advertise.
+
+* Patch 4: Program VFCTRL base, length, and enable bits together.
+  Convert the ioctl byte length to the hardware encoding. Reject a
+  GPA that is not 4K-aligned or has bits above bit 51, a zero
+  enable-flag set, a nonzero index, and a duplicate alloc per type.
+  Destroy waits for enable bits to clear before unpinning.
+
+* CommandBuf, EventLog, and PPRLog are allocated when the
+  corresponding enable bits in the guest IOMMU Control MMIO
+  register are set, not when base-address/size are programmed.
+
+Changes since https://github.com/AMDESE/linux-iommu/tree/wip/v7.3.0-rc3-viommu_20260916
+
+  * New patch 1: Restart the command buffer after GUEST_EVENT_FAULT
+    without discarding commands queued behind the fault.
+  * New patch 2: Program the event-log buffer during IOMMU_ENABLED,
+    and set EventIntEn before EventLogEn in iommu_init_irq().
+  * Patches 3-4 are the previous 0/2 series, unchanged.
+
+  Debugfs, not part of this series. The guest-eventlog injection WIP
+  is replaced by per-IOMMU files under /sys/kernel/debug/iommu/amd/:
+
+    guest_event        valid INSERT_GUEST_EVENT plus an IO_PAGE_FAULT
+    guest_event_fault  same input, cmd[0] = 0xdeadbeef, so hardware
+                       logs GUEST_EVENT_FAULT
+    reset_vmmio        RESET_VMMIO for one guest id, clearing a
+                       latched EventOverflow
+    cmdbuf_reset       restart a halted command buffer
+
+  cmdbuf stays read-only. Input is gid:addr:devid or keyword form
+  (gid, addr, devid, domid, flags). amd_iommu_inject_event() is
+  removed; the fault path uses amd_iommu_queue_cmd_pair().
+
+Thanks,
+Suravee
