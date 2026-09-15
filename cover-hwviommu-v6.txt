@@ -1,0 +1,92 @@
+Subject: [PATCH v6 00/24] iommu/amd: Introduce AMD Hardware-accelerated Virtualized IOMMU (vIOMMU) Support
+
+OVERVIEW
+========
+
+AMD IOMMU introduces the vIOMMU feature, which provides partial hardware
+acceleration when implementing Guest IOMMUs. This feature provides
+acceleration for guest Command Buffer, Event Log, and PPR Log. This
+eliminates the CPU overhead needed for the supporting HV intercepts and
+reduces the latency of these operations.
+
+When a guest attempts to access guest IOMMU MMIO registers with offsets
+between 8KB and 12KB (i.e. the 3rd 4K region) such as the Command Buffer,
+Event Log and PPR Log head and tail pointer registers, this is serviced
+directly by the IOMMU. When the IOMMU accesses a Command Buffer, PPR Log
+or a COMPLETION_WAIT store location in memory, it directly accesses guest
+physical memory. The HV/VMM continues to trap and emulate the IOMMU
+configuration MMIO registers between 0KB and 4KB (i.e. the 1st 4K
+region), which are primarily used during initialization.
+
+Additionally, the HV must initialize the vIOMMU feature, map MMIO resources
+between the VMs and the IOMMU, manage additional supporting data structures
+in memory (e.g. GPA->SPA translation DTE, Device ID and Domain ID mapping
+tables), and allocate/map vIOMMU Private Address region used as backing
+storage memory for the IOMMU. Support for new IOMMU command and events
+specifically for vIOMMU are also added.
+
+Guest IOMMUs are IOMMUs exposed to VMs with additional support from VMM
+(QEMU) to generate guest ACPI IVRS table and define guest PCI topology for
+IOMMU and pass-through VFIO devices, which are not covered by this series.
+
+For more detail, please see the vIOMMU section of the AMD IOMMU
+Specification[1].
+
+ABOUT SERIES V6
+===============
+
+This is version 6 of the AMD HW-vIOMMU series [2]. It is implemented on top
+of the IOMMUFD vIOMMU, vDevice, and nested-domain framework in Linux
+v7.3.0-rc3 (base 704340f1cd0d).
+
+Note: This series is a partial implementation of AMD hardware-accelerated
+vIOMMU. Subsequent series will add hardware-queue and extended interrupt
+remapping support, which are needed to fully support AMD IOMMU
+virtualization in the guest VM. The fully supported version is available
+in a GitHub repository [3].
+
+The series is organized into the following subsets:
+
+  Patch 1-3   : Events and vIOMMU feature detect/init
+  Patch 4-8   : Introduce IOMMUFD vIOMMU support and VF MMIO setup
+  Patch 9-14  : Introduce and map vIOMMU Private Address (IPA) region
+  Patch 15-18 : IOMMUFD vDevice, DevID/DomID maps, and nested attach
+  Patch 19-24 : Translate-device-ID pool, per-vIOMMU translation DTE, and
+                PCI-reserve relocation
+
+CHANGES FROM V5
+===============
+
+V5: (https://lore.kernel.org/linux-iommu/20260914184750.222939-1-suravee.suthikulpanit@amd.com/)
+
+IOMMUFD vIOMMU and VF MMIO (patches 4-8):
+  * Patch 6: In iommu_unmap_mmio_space(), release the host MMIO
+    reservation only when mmio_base is set. iommu_map_mmio_space()
+    already drops the reservation when ioremap() fails, so a failed
+    map is not released twice.
+
+IPA / DTE infrastructure (patches 9-14):
+  * Patch 13: Clear the self DTE only while CONTROL_CMDBUF_EN is
+    set. disable_iommus() clears that bit before teardown, and
+    INV_DTE would time out. dev_data is still freed.
+
+IOMMUFD vDevice and DevID/DomID maps (patches 15-18):
+  * Patch 16: Program QueueID (bits 45:30) in the DevID table entry.
+    Callers pass 0. QueueID is not supported yet.
+  * Patch 17: Drop amd_viommu_domain_id_update(). Callers hold
+    vfctrl_lock and use amd_viommu_domain_id_update_locked().
+  * Patch 18: Prefill each gdev_id with hdev_id 0 and QueueID 0.
+
+Translate device ID (patches 19-24):
+  * Patch 19: Reserve the IOMMU function devid from
+    init_iommu_one_late(). Clearing rlookup keeps that function off
+    probe_device(), while the vIOMMU self DTE still occupies the slot.
+  * Patch 23: Destroy trans_devid_lock on init error and on vIOMMU
+    destroy, after the last unlock, the same way as vfctrl_lock.
+
+[1] IOMMU Specification: https://docs.amd.com/v/u/en-US/48882_3.11_IOMMU_PUB
+[2] Series v6 tree: https://github.com/AMDESE/linux-iommu/tree/linux-7.3.0-rc3-amd-viommu_upstream_v6
+[3] Fully supported tree (work-in-progress): https://github.com/AMDESE/linux-iommu/tree/wip/v7.3.0-rc3-viommu_20260930
+
+Thank you,
+Suravee
