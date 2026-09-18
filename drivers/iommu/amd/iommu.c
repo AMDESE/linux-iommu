@@ -1203,7 +1203,7 @@ static void iommu_restart_cmd_buffer(struct amd_iommu *iommu)
 
 	raw_spin_lock_irqsave(&iommu->lock, flags);
 
-	for (i = 0; i < LOOP_TIMEOUT; i++) {
+	for (i = 0; i < AMD_IOMMU_CMDBUF_TIMEOUT; i++) {
 		status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
 		if (!(status & MMIO_STATUS_CMDBUF_RUN_MASK))
 			break;
@@ -1323,7 +1323,7 @@ retry:
 
 	if (type == 0) {
 		/* Did we hit the erratum? */
-		if (++count == LOOP_TIMEOUT) {
+		if (++count == AMD_IOMMU_INTR_TIMEOUT) {
 			pr_err("No event written to event log\n");
 			return 1;
 		}
@@ -1418,7 +1418,7 @@ retry:
 			if (evtlog_used(head, live_tail) >=
 			    2 * EVTLOG_ENTRY_SIZE)
 				break;
-			if (++wait == LOOP_TIMEOUT) {
+			if (++wait == AMD_IOMMU_INTR_TIMEOUT) {
 				dev_err_ratelimited(dev, "Event logged [GUEST_EVENT_FAULT invalid guest-event (does not exist)]\n");
 				if (!amd_iommu_snp_en)
 					memset(__evt, 0, EVTLOG_ENTRY_SIZE);
@@ -1434,7 +1434,7 @@ retry:
 			guest_type = (w1 >> EVENT_TYPE_SHIFT) & EVENT_TYPE_MASK;
 			if (guest_type)
 				break;
-			if (++wait == LOOP_TIMEOUT) {
+			if (++wait == AMD_IOMMU_INTR_TIMEOUT) {
 				w0 = READ_ONCE(guest[0]);
 				w2 = READ_ONCE(guest[2]);
 				w3 = READ_ONCE(guest[3]);
@@ -1709,12 +1709,12 @@ static int wait_on_sem(struct amd_iommu *iommu, u64 data)
 	 * number.
 	 */
 	while ((__s64)(READ_ONCE(*iommu->cmd_sem) - data) < 0 &&
-	       i < LOOP_TIMEOUT) {
+	       i < AMD_IOMMU_CMDBUF_TIMEOUT) {
 		udelay(1);
 		i += 1;
 	}
 
-	if (i == LOOP_TIMEOUT) {
+	if (i == AMD_IOMMU_CMDBUF_TIMEOUT) {
 
 		pr_alert("IOMMU %04x:%02x:%02x.%01x: Completion-Wait loop timed out\n",
 			 iommu->pci_seg->id, PCI_BUS_NUM(iommu->devid),
@@ -2025,7 +2025,7 @@ again:
 	if (left <= 0x20) {
 		/* Skip udelay() the first time around */
 		if (count++) {
-			if (count == LOOP_TIMEOUT) {
+			if (count == AMD_IOMMU_CMDBUF_TIMEOUT) {
 				pr_err("Command buffer timeout\n");
 				return -EIO;
 			}

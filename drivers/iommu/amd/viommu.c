@@ -619,7 +619,7 @@ static void vfctrl_wait_write_clear(struct amd_iommu *iommu, u16 gid,
 	u8 __iomem *reg = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid) + offset;
 	int i;
 
-	for (i = 0; i < LOOP_TIMEOUT; i++) {
+	for (i = 0; i < AMD_IOMMU_INTR_TIMEOUT; i++) {
 		if (!(readq(reg) & DEVID_ENTRY_WRITE))
 			return;
 		udelay(1);
@@ -918,7 +918,7 @@ static void amd_viommu_hw_queue_disable_wait(struct amd_iommu_viommu *aviommu,
 	val &= ~cfg->enable_mask;
 	writeq(val, vfctrl + cfg->offset);
 
-	for (i = 0; i < LOOP_TIMEOUT; i++) {
+	for (i = 0; i < AMD_IOMMU_INTR_TIMEOUT; i++) {
 		val = readq(vfctrl + cfg->offset);
 		if (!(val & cfg->enable_mask))
 			return;
