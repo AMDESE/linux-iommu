@@ -205,7 +205,7 @@ void amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
 		 * written to memory. If this happens we need to wait for the
 		 * entry to arrive.
 		 */
-		for (i = 0; i < LOOP_TIMEOUT; ++i) {
+		for (i = 0; i < AMD_IOMMU_INTR_TIMEOUT; ++i) {
 			if (PPR_REQ_TYPE(raw[0]) != 0)
 				break;
 			udelay(1);

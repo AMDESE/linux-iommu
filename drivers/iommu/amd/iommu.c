@@ -1179,7 +1179,7 @@ retry:
 
 	if (type == 0) {
 		/* Did we hit the erratum? */
-		if (++count == LOOP_TIMEOUT) {
+		if (++count == AMD_IOMMU_INTR_TIMEOUT) {
 			pr_err("No event written to event log\n");
 			return;
 		}
@@ -1544,12 +1544,12 @@ static int wait_on_sem(struct amd_iommu *iommu, u64 data)
 	 * number.
 	 */
 	while ((__s64)(READ_ONCE(*iommu->cmd_sem) - data) < 0 &&
-	       i < LOOP_TIMEOUT) {
+	       i < AMD_IOMMU_CMDBUF_TIMEOUT) {
 		udelay(1);
 		i += 1;
 	}
 
-	if (i == LOOP_TIMEOUT) {
+	if (i == AMD_IOMMU_CMDBUF_TIMEOUT) {
 
 		pr_alert("IOMMU %04x:%02x:%02x.%01x: Completion-Wait loop timed out\n",
 			 iommu->pci_seg->id, PCI_BUS_NUM(iommu->devid),
@@ -1847,7 +1847,7 @@ again:
 	if (left <= 0x20) {
 		/* Skip udelay() the first time around */
 		if (count++) {
-			if (count == LOOP_TIMEOUT) {
+			if (count == AMD_IOMMU_CMDBUF_TIMEOUT) {
 				pr_err("Command buffer timeout\n");
 				return -EIO;
 			}

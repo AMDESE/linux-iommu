@@ -467,8 +467,9 @@
 #define VIOMMU_PRIV_SUBREGION_SIZE	(0x200000)  /* 2MB */
 
 /* Timeout stuff */
-#define LOOP_TIMEOUT		100000
-#define MMIO_STATUS_TIMEOUT	2000000
+#define AMD_IOMMU_INTR_TIMEOUT		100000
+#define AMD_IOMMU_CMDBUF_TIMEOUT	(USEC_PER_SEC)
+#define MMIO_STATUS_TIMEOUT		2000000
 
 extern bool amd_iommu_dump;
 #define DUMP_printk(format, arg...)				\
