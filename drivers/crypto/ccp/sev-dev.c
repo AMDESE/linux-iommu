@@ -401,6 +401,9 @@ static int sev_write_init_ex_file_if_required(int cmd_id)
 int snp_reclaim_pages(unsigned long paddr, unsigned int npages, bool locked)
 {
 	int ret, err, i;
+	bool mmio = (paddr & 0x1) ? true : false;
+
+	paddr = paddr & ~0x1;
 
 	paddr = __sme_clr(ALIGN_DOWN(paddr, PAGE_SIZE));
 
@@ -417,7 +420,10 @@ int snp_reclaim_pages(unsigned long paddr, unsigned int npages, bool locked)
 		if (ret)
 			goto cleanup;
 
-		ret = rmp_make_shared(__phys_to_pfn(paddr), PG_LEVEL_4K);
+		if (mmio)
+			ret = rmp_make_shared_mmio(__phys_to_pfn(paddr));
+		else
+			ret = rmp_make_shared(__phys_to_pfn(paddr), PG_LEVEL_4K);
 		if (ret)
 			goto cleanup;
 	}
