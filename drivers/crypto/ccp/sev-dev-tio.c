@@ -2166,7 +2166,7 @@ static int sev_tio_viommu_guest_init(struct amd_sviommu_guest *sg)
 
 	/* VFMMIO is always 4K */
 	pa = (sg->vfmmio_addr);
-	ret = rmp_make_private_mmio(pa >> PAGE_SHIFT, 0, 0);
+	ret = rmp_make_private_mmio(pa >> PAGE_SHIFT, 0, sev->asid);
 	if (ret) {
 		goto err_out_domid;
 	}
@@ -2214,6 +2214,7 @@ struct sev_data_tio_viommu_guest_shutdown {
 
 static int sev_tio_viommu_guest_shutdown(struct amd_sviommu_guest *sg)
 {
+	u64 pa;
 	int ret, psp_ret;
 	struct kvm_sev_info *sev;
 	struct sev_data_tio_viommu_guest_shutdown g = {
@@ -2241,6 +2242,21 @@ static int sev_tio_viommu_guest_shutdown(struct amd_sviommu_guest *sg)
 	pr_debug("%s: segid=%#x, devid=%#x, ctx_paddr=%#llx, "
 		 "asid=%#x\n", __func__, g.pci_segid,
 		 g.iommu_devid, g.gctx_paddr, sev->asid);
+
+	/* Reclaim VFMMIO */
+	pa = sg->vfmmio_addr;
+	ret = rmp_make_shared_mmio(pa >> PAGE_SHIFT);
+	/* Most likely guest failed to boot */
+	if (ret) {
+		pr_notice("%s: Failed to change VFMMIO (0x%llx) state to shared, "
+			  "trying SNP reclaim\n", __func__, pa);
+
+		ret = snp_reclaim_pages(pa + 1, 1, false);
+		if (ret) {
+			pr_notice("%s: Failed to reclaim VFMMIO (0x%llx) page\n",
+				  __func__, pa);
+		}
+	}
 
 	ret = sev_do_cmd(SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN, &g, &psp_ret);
 	if (ret || WARN_ON(!ret && psp_ret != SEV_RET_SUCCESS)) {
