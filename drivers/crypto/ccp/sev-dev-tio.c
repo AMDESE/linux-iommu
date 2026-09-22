@@ -43,17 +43,6 @@ static void *__prep_data_pg(struct tsm_dsm_tio *dev_data, size_t len)
 
 #define DATA_PG(type, tdev) ((type *) __prep_data_pg((tdev), sizeof(type)))
 
-#define SLA_PAGE_TYPE_DATA	0
-#define SLA_PAGE_TYPE_SCATTER	1
-#define SLA_PAGE_SIZE_4K	0
-#define SLA_PAGE_SIZE_2M	1
-#define SLA_SZ(s)		((s).page_size == SLA_PAGE_SIZE_2M ? SZ_2M : SZ_4K)
-#define SLA_SCATTER_LEN(s)	(SLA_SZ(s) / sizeof(struct sla_addr_t))
-#define SLA_EOL			((struct sla_addr_t) { .pfn = ((1UL << 40) - 1) })
-#define SLA_NULL		((struct sla_addr_t) { 0 })
-#define IS_SLA_NULL(s)		((s).sla == SLA_NULL.sla)
-#define IS_SLA_EOL(s)		((s).sla == SLA_EOL.sla)
-
 static phys_addr_t sla_to_pa(struct sla_addr_t sla)
 {
 	u64 pfn = sla.pfn;
