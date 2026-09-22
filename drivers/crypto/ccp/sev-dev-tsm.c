@@ -530,16 +530,18 @@ static int dsm_measurements(struct pci_dev *pdev)
 	return 0;
 }
 
-static void tdi_unbind(struct pci_tdi *tdi)
+static void tdi_do_unbind(struct tio_tdi *ttdi)
 {
-	struct tio_tdi *ttdi = container_of(tdi, struct tio_tdi, tdi);
-	struct pci_dev *pdev = tdi->pdev;
+	struct pci_dev *pdev = ttdi->tdi.pdev;
 	struct tio_dsm *dsm = pdev_to_tio_dsm(pdev->tsm->dsm_dev);
 	struct tsm_dsm_tio *dev_data = &dsm->data;
 	struct tsm_tdi_tio *tdi_data = &ttdi->data;
 	enum tsm_tdisp_state state = TDISP_STATE_CONFIG_UNLOCKED;
 	struct resource *res;
 	int ret;
+
+	if (IS_SLA_NULL(tdi_data->tdi_ctx))
+		return;
 
 	/*
 	 * This is here and not in IOMMU as soon this will require SNP page
@@ -600,9 +602,16 @@ static void tdi_unbind(struct pci_tdi *tdi)
 	tsm_blob_free(pdev->tsm->report);
 	pdev->tsm->report = NULL;
 
-	kfree(ttdi);
-
 	pr_ide_states(pdev, dev_data->ide);
+}
+
+static void tdi_unbind(struct pci_tdi *tdi)
+{
+	struct tio_tdi *ttdi = container_of(tdi, struct tio_tdi, tdi);
+
+	tdi_do_unbind(ttdi);
+
+	kfree(ttdi);
 }
 
 static struct pci_tdi *tdi_bind(struct pci_dev *pdev, struct kvm *kvm, u32 tdi_id)
@@ -661,7 +670,7 @@ static struct pci_tdi *tdi_bind(struct pci_dev *pdev, struct kvm *kvm, u32 tdi_i
 	return &(ttdi->tdi);
 
 error_exit:
-	tdi_unbind(&ttdi->tdi);
+	tdi_unbind(&ttdi->tdi); /* This will kfree(ttdi) */
 	return ERR_PTR(ret);
 }
 
@@ -747,7 +756,7 @@ static ssize_t guest_request(struct pci_tdi *tdi, enum pci_tsm_req_scope scope,
 		if (!tdi->kvm)
 			return -ENOSYS;
 
-		tdi_unbind(tdi);
+		tdi_do_unbind(ttdi);
 
 		return 0;
 	}
