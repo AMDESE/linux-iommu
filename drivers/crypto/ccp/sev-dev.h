@@ -76,6 +76,8 @@ int sev_dev_init(struct psp_device *psp);
 void sev_dev_destroy(struct psp_device *psp);
 
 int __sev_do_cmd_locked(int cmd, void *data, int *psp_ret);
+int __snp_get_cmd_version_locked(u8 cmd);
+int snp_get_cmd_version(u8 cmd);
 
 void sev_pci_init(void);
 void sev_pci_exit(void);
