@@ -171,6 +171,8 @@ enum sev_cmd {
 	SEV_CMD_TIO_VIOMMU_GUEST_INIT		= 0x0E8,
 	SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN	= 0x0E9,
 
+	SEV_CMD_SNP_GET_COMMAND_INFO		= 0x0F4,
+
 	SEV_CMD_MAX,
 };
 
@@ -919,6 +921,42 @@ struct sev_data_download_firmware_ex {
  */
 struct sev_data_snp_commit {
 	u32 len;
+} __packed;
+
+/**
+ * struct sev_data_snp_get_command_info - SNP_GET_COMMAND_INFO command
+ *
+ * @length: Length of this command buffer in bytes
+ * @command_code: Command code to be queried
+ * @rsvd: reserved
+ * @version: Version of the SNP_GET_COMMAND_INFO command
+ * @command_info_paddr: System physical address of the COMMAND_INFO structure
+ */
+struct sev_data_snp_get_command_info {
+	u32 length;
+	u8 command_code;
+	u8 rsvd[2];
+	u8 version;
+	u64 command_info_paddr;
+} __packed;
+
+/**
+ * struct snp_command_info - COMMAND_INFO structure
+ *
+ * @length: Length of this structure in bytes, written by firmware
+ * @version: Version of this structure
+ * @command_code: Command code this structure describes
+ * @min_version: Lowest version of @command_code supported by firmware
+ * @max_version: Highest version of @command_code supported by firmware
+ * @rsvd: reserved
+ */
+struct snp_command_info {
+	u32 length;
+	u8 version;
+	u8 command_code;
+	u8 min_version;
+	u8 max_version;
+	u64 rsvd;
 } __packed;
 
 /**

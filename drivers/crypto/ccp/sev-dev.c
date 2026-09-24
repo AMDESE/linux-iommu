@@ -269,6 +269,7 @@ static int sev_cmd_buffer_len(int cmd)
 	case SEV_CMD_SNP_COMMIT:		return sizeof(struct sev_data_snp_commit);
 	case SEV_CMD_SNP_FEATURE_INFO:		return sizeof(struct sev_data_snp_feature_info);
 	case SEV_CMD_SNP_VLEK_LOAD:		return sizeof(struct sev_user_data_snp_vlek_load);
+	case SEV_CMD_SNP_GET_COMMAND_INFO:	return sizeof(struct sev_data_snp_get_command_info);
 	default:				return sev_tio_cmd_buffer_len(cmd);
 	}
 
@@ -1362,6 +1363,69 @@ bool sev_is_snp_ciphertext_hiding_supported(void)
 		 sev->snp_plat_status.ciphertext_hiding_cap);
 }
 EXPORT_SYMBOL_GPL(sev_is_snp_ciphertext_hiding_supported);
+
+static int __snp_get_command_info_locked(u8 cmd, struct snp_command_info *out,
+					 int *error)
+{
+	struct sev_data_snp_get_command_info data = {
+		.length = sizeof(data),
+		.command_code = cmd,
+	};
+	struct snp_command_info *ci;
+	struct page *page;
+	int rc;
+
+	/* Firmware-owned once SNP is initialized: the host must not write it */
+	page = __snp_alloc_firmware_pages(GFP_KERNEL_ACCOUNT | __GFP_ZERO, 0, true);
+	if (!page)
+		return -ENOMEM;
+
+	ci = page_address(page);
+	data.command_info_paddr = __psp_pa(ci);
+
+	rc = __sev_do_cmd_locked(SEV_CMD_SNP_GET_COMMAND_INFO, &data, error);
+	if (!rc)
+		*out = *ci;
+
+	__snp_free_firmware_pages(page, 0, true);
+
+	return rc;
+}
+
+/**
+ * __snp_get_cmd_version_locked - query the version to issue a command with
+ * @cmd: command code
+ *
+ * Return: the highest version of @cmd supported by firmware, or a negative
+ * errno if the query failed.
+ */
+int __snp_get_cmd_version_locked(u8 cmd)
+{
+	struct snp_command_info ci;
+	int rc, error = 0;
+
+	rc = __snp_get_command_info_locked(cmd, &ci, &error);
+	if (rc) {
+		/* Default to version 0 */
+		pr_err("SNP_GET_COMMAND_INFO cmd: %#x failed ret:%d\n", cmd, rc);
+		return 0;
+	}
+
+	pr_info("GET_COMMAND_INFO: max_version: %d\n",ci.max_version);
+
+	return ci.max_version;
+}
+
+int snp_get_cmd_version(u8 cmd)
+{
+	int ret;
+
+	mutex_lock(&sev_cmd_mutex);
+	ret = __snp_get_cmd_version_locked(cmd);
+	mutex_unlock(&sev_cmd_mutex);
+
+	return ret;
+}
 
 static int snp_get_platform_data(struct sev_device *sev, int *error)
 {

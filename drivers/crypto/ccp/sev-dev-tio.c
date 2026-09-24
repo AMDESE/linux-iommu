@@ -553,8 +553,6 @@ struct sev_data_tio_tdi_reclaim {
 
 #define TIO_TDI_BIND_RUN_FORCE		BIT(0)
 
-#define TIO_TDI_BIND_CMD_VERSION                0x01
-
 struct sev_data_tio_tdi_bind {
 	u32 length;
 	u8 reserved[3];
@@ -698,7 +696,8 @@ struct sev_data_tio_guest_request {
 
 struct sev_data_tio_roll_key {
 	u32 length;				/* In */
-	u32 reserved;
+	u8 reserved[3];
+	u8 version;
 	struct spdm_ctrl spdm_ctrl;		/* In */
 	struct sla_addr_t dev_ctx_sla;			/* In */
 } __packed;
@@ -1270,6 +1269,7 @@ int sev_tio_init_locked(void *tio_status_page)
 	};
 	int ret, psp_ret;
 
+	data_status.version = __snp_get_cmd_version_locked(SEV_CMD_TIO_STATUS);
 	data_status.status_paddr = __psp_pa(tio_status_page);
 	ret = __sev_do_cmd_locked(SEV_CMD_TIO_STATUS, &data_status, &psp_ret);
 	if (ret)
@@ -1289,6 +1289,8 @@ int sev_tio_init_locked(void *tio_status_page)
 		return -EBUSY;
 
 	struct sev_data_tio_init ti = { .length = sizeof(ti) };
+
+	ti.version = __snp_get_cmd_version_locked(SEV_CMD_TIO_INIT);
 
 	ret = __sev_do_cmd_locked(SEV_CMD_TIO_INIT, &ti, &psp_ret);
 	if (ret)
@@ -1322,6 +1324,8 @@ int sev_tio_dev_create(struct tsm_dsm_tio *dev_data, u16 device_id,
 	};
 	void *data_pg;
 	int ret;
+
+	create.version = snp_get_cmd_version(SEV_CMD_TIO_DEV_CREATE);
 
 	dev_data->dev_ctx = sla_alloc(tio_status->devctx_size, true);
 	if (IS_SLA_NULL(dev_data->dev_ctx))
@@ -1366,6 +1370,7 @@ int sev_tio_dev_reclaim(struct tsm_dsm_tio *dev_data)
 	if (IS_SLA_NULL(dev_data->dev_ctx))
 		return 0;
 
+	r.version = snp_get_cmd_version(SEV_CMD_TIO_DEV_RECLAIM);
 	ret = sev_do_cmd(SEV_CMD_TIO_DEV_RECLAIM, &r, &dev_data->psp_ret);
 
 	sla_free(dev_data->dev_ctx, tio_status->devctx_size, true);
@@ -1395,6 +1400,8 @@ int sev_tio_dev_connect(struct tsm_dsm_tio *dev_data, u8 tc_mask, u8 ids[8], u8 
 	if (!(tc_mask & 1))
 		return -EINVAL;
 
+	connect.version = snp_get_cmd_version(SEV_CMD_TIO_DEV_CONNECT);
+
 	ret = spdm_ctrl_alloc(dev_data);
 	if (ret)
 		return ret;
@@ -1422,6 +1429,8 @@ int sev_tio_dev_disconnect(struct tsm_dsm_tio *dev_data, bool force)
 	if (WARN_ON_ONCE(IS_SLA_NULL(dev_data->dev_ctx)))
 		return -EFAULT;
 
+	dc.version = snp_get_cmd_version(SEV_CMD_TIO_DEV_DISCONNECT);
+
 	spdm_ctrl_init(&dc.spdm_ctrl, dev_data);
 
 	return sev_tio_do_cmd(SEV_CMD_TIO_DEV_DISCONNECT, &dc, sizeof(dc),
@@ -1439,6 +1448,8 @@ int sev_tio_dev_measurements(struct tsm_dsm_tio *dev_data,
 	if (WARN_ON(IS_SLA_NULL(dev_data->dev_ctx)))
 		return -EFAULT;
 
+	meas.version = snp_get_cmd_version(SEV_CMD_TIO_DEV_MEASUREMENTS);
+
 	spdm_ctrl_init(&meas.spdm_ctrl, dev_data);
 	meas.dev_ctx_sla = dev_data->dev_ctx;
 	memcpy(meas.meas_nonce, nonce, sizeof(meas.meas_nonce));
@@ -1455,6 +1466,8 @@ int sev_tio_dev_certificates(struct tsm_dsm_tio *dev_data)
 
 	if (WARN_ON(IS_SLA_NULL(dev_data->dev_ctx)))
 		return -EFAULT;
+
+	c.version = snp_get_cmd_version(SEV_CMD_TIO_DEV_CERTIFICATES);
 
 	spdm_ctrl_init(&c.spdm_ctrl, dev_data);
 	c.dev_ctx_sla = dev_data->dev_ctx;
@@ -1480,6 +1493,8 @@ int sev_tio_dev_status(struct tsm_dsm_tio *dev_data, struct tsm_dsm_status *s)
 	if (IS_SLA_NULL(dev_data->dev_ctx))
 		return -ENXIO;
 
+	data_status.version = snp_get_cmd_version(SEV_CMD_TIO_DEV_STATUS);
+
 	ret = sev_do_cmd(SEV_CMD_TIO_DEV_STATUS, &data_status, &dev_data->psp_ret);
 	if (ret)
 		return ret;
@@ -1504,6 +1519,8 @@ int sev_tio_ide_refresh(struct tsm_dsm_tio *dev_data)
 	if (WARN_ON(IS_SLA_NULL(dev_data->dev_ctx)))
 		return -EFAULT;
 
+	rk.version = snp_get_cmd_version(SEV_CMD_TIO_ROLL_KEY);
+
 	spdm_ctrl_init(&rk.spdm_ctrl, dev_data);
 
 	return sev_tio_do_cmd(SEV_CMD_TIO_ROLL_KEY, &rk, sizeof(rk),
@@ -1524,6 +1541,8 @@ int sev_tio_tdi_create(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_dat
 
 	if (WARN_ON_ONCE(IS_SLA_NULL(dev_data->dev_ctx) || !IS_SLA_NULL(tdi_data->tdi_ctx)))
 		return -EFAULT;
+
+	c.version = snp_get_cmd_version(SEV_CMD_TIO_TDI_CREATE);
 
 	tdi_data->tdi_ctx = sla_alloc(tio_status->tdictx_size, true);
 	if (IS_SLA_NULL(tdi_data->tdi_ctx))
@@ -1566,6 +1585,7 @@ void sev_tio_tdi_reclaim(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_d
 	r.dev_ctx_sla = dev_data->dev_ctx;
 	r.tdi_ctx_sla = tdi_data->tdi_ctx;
 
+	r.version = snp_get_cmd_version(SEV_CMD_TIO_TDI_RECLAIM);
 	ret = sev_do_cmd(SEV_CMD_TIO_TDI_RECLAIM, &r, &dev_data->psp_ret);
 
 	if (!ret)
@@ -1580,13 +1600,14 @@ int sev_tio_tdi_bind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
 {
 	struct sev_data_tio_tdi_bind b = {
 		.length = sizeof(b),
-		.version = TIO_TDI_BIND_CMD_VERSION,
 	};
 	int ret;
 	int domid;
 
 	if (WARN_ON_ONCE(IS_SLA_NULL(dev_data->dev_ctx) || IS_SLA_NULL(tdi_data->tdi_ctx)))
 		return -EFAULT;
+
+	b.version = snp_get_cmd_version(SEV_CMD_TIO_TDI_BIND);
 
 	tdi_data->gctx_paddr = gctx_paddr;
 	tdi_data->asid = asid;
@@ -1597,7 +1618,10 @@ int sev_tio_tdi_bind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
 	b.guest_device_id = guest_rid;
 	b.gctx_paddr = tdi_data->gctx_paddr;
 	b.run_flags = force_run ? TIO_TDI_BIND_RUN_FORCE : 0;
-	b.mmio_reporting_offset = tdi_data->mmio_reporting_offset;
+	if (b.version >= 1)
+		b.mmio_reporting_offset = tdi_data->mmio_reporting_offset;
+	else
+		tdi_data->mmio_reporting_offset = 0;
 
 	/* TODO: queue_id update */
 	domid = amd_iommu_get_dev_domid(pdev);
@@ -1625,6 +1649,8 @@ int sev_tio_tdi_unbind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
 	if (WARN_ON(!tdi_data->gctx_paddr))
 		return -EFAULT;
 
+	ub.version = snp_get_cmd_version(SEV_CMD_TIO_TDI_UNBIND);
+
 	spdm_ctrl_init(&ub.spdm_ctrl, dev_data);
 	ub.dev_ctx_sla = dev_data->dev_ctx;
 	ub.tdi_ctx_sla = tdi_data->tdi_ctx;
@@ -1648,6 +1674,8 @@ int sev_tio_tdi_report(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_dat
 	if (WARN_ON_ONCE(IS_SLA_NULL(dev_data->dev_ctx) || IS_SLA_NULL(tdi_data->tdi_ctx)))
 		return -EFAULT;
 
+	r.version = snp_get_cmd_version(SEV_CMD_TIO_TDI_REPORT);
+
 	spdm_ctrl_init(&r.spdm_ctrl, dev_data);
 
 	return sev_tio_do_cmd(SEV_CMD_TIO_TDI_REPORT, &r, sizeof(r),
@@ -1661,6 +1689,8 @@ int sev_tio_asid_fence_clear(struct sla_addr_t dev_ctx, u64 gctx_paddr, int *psp
 		.dev_ctx_paddr = dev_ctx,
 		.gctx_paddr = gctx_paddr,
 	};
+
+	c.version = snp_get_cmd_version(SEV_CMD_TIO_ASID_FENCE_CLEAR);
 
 	return sev_do_cmd(SEV_CMD_TIO_ASID_FENCE_CLEAR, &c, psp_ret);
 }
@@ -1676,6 +1706,8 @@ int sev_tio_asid_fence_status(struct tsm_dsm_tio *dev_data, u16 device_id, u8 se
 		.status_pa = __psp_pa(status),
 	};
 	int ret;
+
+	s.version = snp_get_cmd_version(SEV_CMD_TIO_ASID_FENCE_STATUS);
 
 	ret = sev_do_cmd(SEV_CMD_TIO_ASID_FENCE_STATUS, &s, &dev_data->psp_ret);
 
@@ -1733,6 +1765,8 @@ int sev_tio_guest_request(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_
 	if (WARN_ON(!tdi_data || !dev_data))
 		return -EINVAL;
 
+	gr.version = snp_get_cmd_version(SEV_CMD_TIO_GUEST_REQUEST);
+
 	spdm_ctrl_init(&gr.spdm_ctrl, dev_data);
 
 	return sev_tio_do_cmd(SEV_CMD_TIO_GUEST_REQUEST, &gr, sizeof(gr),
@@ -1781,7 +1815,6 @@ int sev_tio_tdi_info(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
 		DATA_PG(struct sev_tio_tdi_info_data, dev_data);
 	struct sev_data_tio_tdi_info info = {
 		.length = sizeof(info),
-		.version = 1,
 		.dev_ctx_sla = dev_data->dev_ctx,
 		.tdi_ctx_sla = tdi_data->tdi_ctx,
 		.status_paddr = __psp_pa(data),
@@ -1790,6 +1823,8 @@ int sev_tio_tdi_info(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_data,
 
 	if (IS_SLA_NULL(dev_data->dev_ctx) || IS_SLA_NULL(tdi_data->tdi_ctx))
 		return -ENXIO;
+
+	info.version = snp_get_cmd_version(SEV_CMD_TIO_TDI_INFO);
 
 	ret = sev_do_cmd(SEV_CMD_TIO_TDI_INFO, &info, &dev_data->psp_ret);
 	if (ret)
@@ -1888,6 +1923,8 @@ int sev_tio_tdi_status(struct tsm_dsm_tio *dev_data, struct tsm_tdi_tio *tdi_dat
 
 	if (IS_SLA_NULL(dev_data->dev_ctx) || IS_SLA_NULL(tdi_data->tdi_ctx))
 		return -ENXIO;
+
+	status.version = snp_get_cmd_version(SEV_CMD_TIO_TDI_STATUS);
 
 	spdm_ctrl_init(&status.spdm_ctrl, dev_data);
 
@@ -1988,6 +2025,8 @@ static int sev_tio_viommu_init_locked(struct amd_sviommu *sv)
 		pr_notice("Platform doesn't support secure vIOMMU\n");
 		return -EOPNOTSUPP;
 	}
+
+	v.version = __snp_get_cmd_version_locked(SEV_CMD_TIO_VIOMMU_INIT);
 
 	v.pci_segid = sv->segid;
 	v.iommu_devid = sv->devid;
@@ -2108,6 +2147,8 @@ static int sev_tio_viommu_guest_init(struct amd_sviommu_guest *sg)
 	if (!sev)
 		return -EBADF;
 
+	g.version = snp_get_cmd_version(SEV_CMD_TIO_VIOMMU_GUEST_INIT);
+
 	g.gctx_paddr = __psp_pa((u64) sev->snp_context);
 	g.pci_segid = sg->segid;
 	g.iommu_devid = sg->devid;
@@ -2193,6 +2234,8 @@ static int sev_tio_viommu_guest_shutdown(struct amd_sviommu_guest *sg)
 
 	if (WARN_ON(!sg))
 		return -EINVAL;
+
+	g.version = snp_get_cmd_version(SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN);
 
 	/*
 	 * Use the cached kvm pointer rather than fdget(kvmfd): shutdown runs
