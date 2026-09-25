@@ -231,6 +231,7 @@ static enum iommu_init_state init_state = IOMMU_START_STATE;
 
 static int amd_iommu_enable_interrupts(void);
 static void init_device_table_dma(struct amd_iommu_pci_seg *pci_seg);
+static void iommu_disable_event_logging(struct amd_iommu *iommu);
 
 static bool amd_iommu_pre_enabled = true;
 
@@ -437,8 +438,7 @@ static void iommu_disable(struct amd_iommu *iommu)
 	iommu_feature_disable(iommu, CONTROL_CMDBUF_EN);
 
 	/* Disable event logging and event interrupts */
-	iommu_feature_disable(iommu, CONTROL_EVT_INT_EN);
-	iommu_feature_disable(iommu, CONTROL_EVT_LOG_EN);
+	iommu_disable_event_logging(iommu);
 
 	/* Disable IOMMU GA_LOG */
 	iommu_feature_disable(iommu, CONTROL_GALOG_EN);
@@ -877,7 +877,11 @@ static int __init alloc_event_buffer(void)
 	return 0;
 }
 
-static void iommu_enable_event_buffer(void)
+/*
+ * Program the event log buffer. Logging itself is started later by
+ * iommu_enable_event_logging(), once the event interrupt is armed.
+ */
+static void iommu_setup_event_buffer(void)
 {
 	struct amd_iommu *iommu;
 	u64 entry;
@@ -901,16 +905,33 @@ static void iommu_enable_event_buffer(void)
 		/* set head and tail to zero manually */
 		writel(0x00, iommu->mmio_base + MMIO_EVT_HEAD_OFFSET);
 		writel(0x00, iommu->mmio_base + MMIO_EVT_TAIL_OFFSET);
-
-		iommu_feature_enable(iommu, CONTROL_EVT_LOG_EN);
 	}
 }
 
 /*
- * This function disables the event log buffer
+ * This function starts event logging.
+ *
+ * EventIntEn must be set before EventLogEn. The IOMMU signals the event
+ * interrupt when EventLogInt transitions from zero to one. An event
+ * logged while EventIntEn is clear leaves the status bit set, and no
+ * interrupt is generated for any subsequent event.
  */
-static void iommu_disable_event_buffer(struct amd_iommu *iommu)
+static void iommu_enable_event_logging(struct amd_iommu *iommu)
 {
+	/* Discard status left behind by firmware or a previous kernel */
+	writel(MMIO_STATUS_EVT_INT_MASK | MMIO_STATUS_EVT_OVERFLOW_MASK,
+	       iommu->mmio_base + MMIO_STATUS_OFFSET);
+
+	iommu_feature_enable(iommu, CONTROL_EVT_INT_EN);
+	iommu_feature_enable(iommu, CONTROL_EVT_LOG_EN);
+}
+
+/*
+ * This function stops event logging
+ */
+static void iommu_disable_event_logging(struct amd_iommu *iommu)
+{
+	iommu_feature_disable(iommu, CONTROL_EVT_INT_EN);
 	iommu_feature_disable(iommu, CONTROL_EVT_LOG_EN);
 }
 
@@ -2674,7 +2695,7 @@ enable_faults:
 	if (amd_iommu_xt_mode == IRQ_REMAP_X2APIC_MODE)
 		iommu_feature_enable(iommu, CONTROL_INTCAPXT_EN);
 
-	iommu_feature_enable(iommu, CONTROL_EVT_INT_EN);
+	iommu_enable_event_logging(iommu);
 
 	return 0;
 }
@@ -3022,7 +3043,7 @@ static void early_enable_iommus(void)
 
 		for_each_iommu(iommu) {
 			iommu_disable_command_buffer(iommu);
-			iommu_disable_event_buffer(iommu);
+			iommu_disable_event_logging(iommu);
 			iommu_disable_irtcachedis(iommu);
 			iommu_enable_command_buffer(iommu);
 			iommu_enable_ga(iommu);
@@ -3139,7 +3160,7 @@ static void amd_iommu_resume(void *data)
 	for_each_iommu(iommu)
 		early_enable_iommu(iommu);
 
-	iommu_enable_event_buffer();
+	iommu_setup_event_buffer();
 	amd_iommu_enable_interrupts();
 }
 
@@ -3587,7 +3608,7 @@ static int __init state_next(void)
 
 		amd_iommu_apply_erratum_snp();
 
-		/* Allocate/enable event log buffer */
+		/* Allocate/program event log buffer */
 		if (is_kdump_kernel())
 			ret = remap_event_buffer();
 		else
@@ -3597,7 +3618,7 @@ static int __init state_next(void)
 			init_state = IOMMU_INIT_ERROR;
 			break;
 		}
-		iommu_enable_event_buffer();
+		iommu_setup_event_buffer();
 
 		ret = amd_iommu_init_pci();
 		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_PCI_INIT;
