@@ -1003,6 +1003,74 @@ static u32 evtlog_used(u32 head, u32 tail)
 }
 
 /*
+ * Hardware stops fetching on GUEST_EVENT_FAULT the same way it stops on
+ * ILLEGAL_COMMAND_ERROR. Restart without discarding commands queued
+ * behind the fault.
+ *
+ * INSERT_GUEST_EVENT occupies two slots: the command and the following
+ * guest-event payload. Head is left on the faulting command, so advance
+ * it past both slots and leave the tail pointer unchanged.
+ *
+ * Hardware clears Status[CmdBufRun] when it stops fetching. Clear
+ * CmdBufEn only after that bit reads as 0, then write the head pointer
+ * and set CmdBufEn again. A buffer that is still running is left alone.
+ */
+static void iommu_restart_cmd_buffer(struct amd_iommu *iommu)
+{
+	struct device *dev = iommu->iommu.dev;
+	u32 status = 0, head, tail, used, new_head;
+	const u32 skip = 2 * sizeof(struct iommu_cmd);
+	unsigned long flags;
+	int i;
+
+	raw_spin_lock_irqsave(&iommu->lock, flags);
+
+	for (i = 0; i < LOOP_TIMEOUT; i++) {
+		status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
+		if (!(status & MMIO_STATUS_CMDBUF_RUN_MASK))
+			break;
+		udelay(1);
+	}
+
+	if (status & MMIO_STATUS_CMDBUF_RUN_MASK) {
+		raw_spin_unlock_irqrestore(&iommu->lock, flags);
+		return;
+	}
+
+	iommu_feature_disable(iommu, CONTROL_CMDBUF_EN);
+
+	head = readl(iommu->mmio_base + MMIO_CMD_HEAD_OFFSET) &
+	       (u32)MMIO_CMD_HEAD_MASK;
+	tail = readl(iommu->mmio_base + MMIO_CMD_TAIL_OFFSET) &
+	       (u32)MMIO_CMD_TAIL_MASK;
+	used = (tail + CMD_BUFFER_SIZE - head) % CMD_BUFFER_SIZE;
+
+	/*
+	 * Do not advance past tail. A short remainder is the faulting
+	 * entry alone; dropping it leaves no later command behind.
+	 */
+	if (used >= skip)
+		new_head = (head + skip) % CMD_BUFFER_SIZE;
+	else
+		new_head = tail;
+
+	writel(new_head, iommu->mmio_base + MMIO_CMD_HEAD_OFFSET);
+	iommu->cmd_buf_head = new_head;
+
+	iommu_feature_enable(iommu, CONTROL_CMDBUF_EN);
+
+	raw_spin_unlock_irqrestore(&iommu->lock, flags);
+
+	/*
+	 * Print after dropping iommu->lock. dev_warn takes console_owner,
+	 * and that lock is already on a chain that acquires iommu->lock.
+	 */
+	dev_warn_ratelimited(dev,
+			     "Restart command buffer (head=%u tail=%u new_head=%u).\n",
+			     head, tail, new_head);
+}
+
+/*
  * Decode one event-log slot (or a GUEST_EVENT_FAULT pair).
  * Returns the number of slots consumed.
  */
@@ -1095,6 +1163,8 @@ retry:
 		u32 *guest;
 		u32 live_tail, w0, w1, w2, w3;
 		int guest_type, wait;
+
+		iommu_restart_cmd_buffer(iommu);
 
 		dev_err_ratelimited(dev, "Event logged [GUEST_EVENT_FAULT gid=%#x flags=0x%04x vflags=%#x]\n",
 				    gid, flags, vflags);
