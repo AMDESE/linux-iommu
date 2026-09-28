@@ -39,6 +39,7 @@
 
 #include "psp-dev.h"
 #include "sev-dev.h"
+#include "sev-dev-tio-dbg.h"
 
 #define DEVICE_NAME		"sev"
 #define SEV_FW_FILE		"amd/sev.fw"
@@ -1425,6 +1426,39 @@ int snp_get_cmd_version(u8 cmd)
 	mutex_unlock(&sev_cmd_mutex);
 
 	return ret;
+}
+
+static void snp_print_tio_cmd_versions(struct sev_device *sev)
+{
+	struct snp_command_info ci;
+	int cmd, rc, error;
+
+	if (!(sev->snp_feat_info_0.ebx & SNP_SEV_TIO_SUPPORTED))
+		return;
+
+	mutex_lock(&sev_cmd_mutex);
+
+	for (cmd = SEV_CMD_TIO_STATUS; cmd <= SEV_CMD_TIO_VIOMMU_GUEST_SHUTDOWN; cmd++) {
+		error = 0;
+		rc = __snp_get_command_info_locked(cmd, &ci, &error);
+		if (rc && error == SEV_RET_INVALID_COMMAND) {
+			dev_info(sev->dev, "SNP_GET_COMMAND_INFO not supported by firmware\n");
+			break;
+		}
+		/* Unimplemented command codes, e.g. 0x0D9 */
+		if (rc && error == SEV_RET_INVALID_PARAM)
+			continue;
+		if (rc) {
+			dev_info(sev->dev, "SEV-TIO %-21s (%#05x): query failed ret=%d %s\n",
+				 tio_cmd_to_str(cmd), cmd, rc, psp_ret_to_str(error));
+			continue;
+		}
+
+		dev_info(sev->dev, "SEV-TIO %-21s (%#05x): min_version=%u max_version=%u\n",
+			 tio_cmd_to_str(cmd), cmd, ci.min_version, ci.max_version);
+	}
+
+	mutex_unlock(&sev_cmd_mutex);
 }
 
 static int snp_get_platform_data(struct sev_device *sev, int *error)
@@ -3547,6 +3581,8 @@ void sev_pci_init(void)
 		dev_info(sev->dev, "SEV firmware updated from %d.%d.%d to %d.%d.%d\n",
 			 api_major, api_minor, build,
 			 sev->api_major, sev->api_minor, sev->build);
+
+	snp_print_tio_cmd_versions(sev);
 
 	register_sev_fw_uploader(sev);
 
