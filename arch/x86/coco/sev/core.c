@@ -2802,7 +2802,12 @@ static int setup_viommu_req(struct snp_msg_desc *mdesc,
 	req.resp_sz = resp_len;
 	req.exit_code = SVM_VMGEXIT_GUEST_REQUEST;
 
-	return snp_send_guest_request(mdesc, &req);
+	ret = snp_send_guest_request(mdesc, &req);
+	if (ret)
+		goto err_free_rsp;
+
+	if (vrsp->status)
+		ret = vrsp->status;
 
 err_free_rsp:
 	kfree(vrsp);
@@ -2932,6 +2937,9 @@ static int guest_sviommu_mapping_update(void *d)
 		goto free_exit;
 	}
 
+	if (rsp->status)
+		rc = rsp->status;
+
 free_exit:
 	/* The response buffer contains the sensitive data, explicitly clear it. */
 	memzero_explicit(rsp, resp_len);
@@ -3017,6 +3025,11 @@ static int guest_sdte_update(void *d)
 	if (rc) {
 		pr_err("%s: sDTE write request failed. fw_err=0x%llx\n",
 		       __func__, fw_err);
+		goto free_exit;
+	}
+
+	if (rsp->status) {
+		rc = rsp->status;
 		goto free_exit;
 	}
 
