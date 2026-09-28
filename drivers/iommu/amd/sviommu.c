@@ -151,6 +151,8 @@ int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
 	if (!sev_guest_ops || !sev_guest_ops->setup_mmio)
 		return -EINVAL;
 
+	/* Enable MMIO */
+	data |= 1;
 	rc = sev_guest_ops->setup_mmio(iommu->devid, &data);
 	if (rc)
 		pr_err("%s: Secure MMIO setup error (%d)\n", __func__, rc);
