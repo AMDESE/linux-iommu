@@ -41,6 +41,7 @@ struct guest_cmd_buf_data {
 int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable)
 {
 	struct guest_cmd_buf_data data;
+	int rc;
 
 	memset(&data, 0, sizeof(struct guest_cmd_buf_data));
 	data.cmdlen = iommu->cmd_buf_len;
@@ -53,7 +54,11 @@ int amd_sviommu_setup_cmd_buf(struct amd_iommu *iommu, bool enable)
 		return -EINVAL;
 
 	pr_debug("%s: data=%#llx\n", __func__, data.data);
-	return sev_guest_ops->setup_cmdbuf(iommu->devid, &data.data);
+	rc = sev_guest_ops->setup_cmdbuf(iommu->devid, &data.data);
+	if (rc)
+		pr_err("%s: Secure command buf setup error (%d)\n", __func__, rc);
+
+	return rc;
 }
 
 struct guest_evt_buf_data {
@@ -74,6 +79,7 @@ struct guest_evt_buf_data {
 int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable)
 {
 	struct guest_evt_buf_data data;
+	int rc;
 
 	memset(&data, 0, sizeof(struct guest_evt_buf_data));
 	data.evtlen = iommu->evt_buf_len;
@@ -85,7 +91,11 @@ int amd_sviommu_setup_evt_log(struct amd_iommu *iommu, bool enable)
 		return -EINVAL;
 
 	pr_debug("%s: data=%#llx\n", __func__, data.data);
-	return sev_guest_ops->setup_evtlog(iommu->devid, &data.data);
+	rc = sev_guest_ops->setup_evtlog(iommu->devid, &data.data);
+	if (rc)
+		pr_err("%s: Secure evtlog buf setup error (%d)\n", __func__, rc);
+
+	return rc;
 }
 
 struct guest_ppr_log_data {
@@ -110,6 +120,7 @@ struct guest_ppr_log_data {
 int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable)
 {
 	struct guest_ppr_log_data data;
+	int rc;
 
 	memset(&data, 0, sizeof(struct guest_ppr_log_data));
 	data.pprlen = iommu->ppr_log_len;
@@ -122,20 +133,29 @@ int amd_sviommu_setup_ppr_log(struct amd_iommu *iommu, bool enable)
 		return -EINVAL;
 
 	pr_debug("%s: data=%#llx\n", __func__, data.data);
-	return sev_guest_ops->setup_pprlog(iommu->devid, &data.data);
+	rc = sev_guest_ops->setup_pprlog(iommu->devid, &data.data);
+	if (rc)
+		pr_err("%s: Secure pprlog buf setup error (%d)\n", __func__, rc);
+
+	return rc;
 }
 
 int amd_sviommu_setup_mmio(struct amd_iommu *iommu)
 {
 	/* 3rd 4K of MMIO space */
 	u64 data = iommu->mmio_phys + 0x2000;
+	int rc;
 
 	pr_debug("%s: MMIO addr 0x%llx\n", __func__, data);
 
 	if (!sev_guest_ops || !sev_guest_ops->setup_mmio)
 		return -EINVAL;
 
-	return sev_guest_ops->setup_mmio(iommu->devid, &data);
+	rc = sev_guest_ops->setup_mmio(iommu->devid, &data);
+	if (rc)
+		pr_err("%s: Secure MMIO setup error (%d)\n", __func__, rc);
+
+	return rc;
 }
 
 int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
@@ -144,18 +164,24 @@ int amd_sviommu_setup_trans_sdte(struct amd_iommu *iommu, u64 vtom, bool enable)
 		.vtom = vtom,
 		.enable = enable,
 	};
+	int rc;
 
 	if (!sev_guest_ops || !sev_guest_ops->setup_trans_sdte)
 		return -EINVAL;
 
 	pr_debug("%s: vtom=%#llx enable=%d\n", __func__, vtom, enable);
-	return sev_guest_ops->setup_trans_sdte(iommu->devid, &data);
+	rc = sev_guest_ops->setup_trans_sdte(iommu->devid, &data);
+	if (rc)
+		pr_err("%s: Failed to enable translation sDTE (%d)\n", __func__, rc);
+
+	return rc;
 }
 
 int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid,
 			       struct iommu_dev_data *dev_data, bool set)
 {
 	struct amd_sviommu_mapping_data data;
+	int rc;
 
 	if (!sev_guest_ops || !sev_guest_ops->mapping_update) {
 		return -EINVAL;
@@ -170,13 +196,18 @@ int amd_sviommu_mapping_update(struct amd_iommu *iommu, u16 domid,
 	data.domid = domid;
 	data.set = set;
 
-	return sev_guest_ops->mapping_update(&data);
+	rc = sev_guest_ops->mapping_update(&data);
+	if (rc)
+		pr_err("%s: Domain ID mapping setup error (%d)\n", __func__, rc);
+
+	return rc;
 }
 
 int amd_sviommu_sdte_update(u16 iommu_devid,
 			    struct iommu_dev_data *dev_data, struct sdte *s)
 {
 	struct amd_sviommu_sdte_data data;
+	int rc;
 
 	BUILD_BUG_ON(sizeof(struct sdte) * 8 != 512);
 
@@ -188,5 +219,9 @@ int amd_sviommu_sdte_update(u16 iommu_devid,
 	data.pdev = to_pci_dev(dev_data->dev);
 	data.sdte = s;
 
-	return sev_guest_ops->sdte_update(&data);
+	rc = sev_guest_ops->sdte_update(&data);
+	if (rc)
+		pr_err("%s: sDTE setup error (%d)\n", __func__, rc);
+
+	return rc;
 }
