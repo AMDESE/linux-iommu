@@ -2125,7 +2125,7 @@ struct sev_data_tio_viommu_guest_init {
 	u8  reserved2[6];
 	u64 devid_map_pa;	/* In */
 	u64 domid_map_pa;	/* In */
-	u64 vfmmio_pa;		/* In */
+	u64 vfmmio_pa;		/* In: Reserved if version > 0 */
 	u64 reserved3;
 } __packed;
 
@@ -2185,8 +2185,12 @@ static int sev_tio_viommu_guest_init(struct amd_sviommu_guest *sg)
 	if (ret) {
 		goto err_out_domid;
 	}
-	g.vfmmio_pa = pa;
-	pr_debug("%s: vfmmio_pa=%#llx\n", __func__, pa);
+
+	/* VFMMIO is valid in version zero only */
+	if (g.version == 0) {
+		g.vfmmio_pa = pa;
+		pr_debug("%s: vfmmio_pa=%#llx\n", __func__, pa);
+	}
 
 	ret = sev_do_cmd(SEV_CMD_TIO_VIOMMU_GUEST_INIT, &g, &psp_ret);
 	if (ret || WARN_ON(!ret && psp_ret != SEV_RET_SUCCESS)) {
