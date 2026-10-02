@@ -611,6 +611,7 @@ struct amd_iommu_viommu {
 	u32 viommu_devid;
 	u64 *devid_table;
 	u64 *domid_table;
+	bool leak_tables;		  /* Tables may still be firmware-owned */
 	u16 trans_devid;
 	u16 trans_domid;
 	/* Synthetic DTE; not stored in pci_seg->dev_data_xa */
