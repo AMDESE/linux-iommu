@@ -350,7 +350,7 @@ static int alloc_private_vm_region(struct amd_iommu *iommu, u64 **entry,
 }
 
 static void free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
-					u64 base, size_t size, u16 gid)
+				   u64 base, size_t size, u16 gid, bool leak)
 {
 	size_t ret;
 	struct iommu_iotlb_gather gather;
@@ -369,7 +369,11 @@ static void free_private_vm_region(struct amd_iommu *iommu, u64 **entry,
 	if (ret)
 		amd_iommu_iotlb_sync(&iommu->viommu_pdom->domain, &gather);
 
-	iommu_free_pages(*entry);
+	if (leak)
+		pr_err("%s: leaking %#zx bytes at %#llx, RMP state not restored\n",
+		       __func__, size, iommu_virt_to_phys(*entry));
+	else
+		iommu_free_pages(*entry);
 	*entry = NULL;
 }
 
@@ -447,11 +451,11 @@ void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *avi
 	free_private_vm_region(iommu, &aviommu->devid_table,
 			       VIOMMU_DEVID_MAPPING_BASE,
 			       VIOMMU_DEVID_MAPPING_ENTRY_SIZE,
-			       aviommu->gid);
+			       aviommu->gid, aviommu->leak_tables);
 	free_private_vm_region(iommu, &aviommu->domid_table,
 			       VIOMMU_DOMID_MAPPING_BASE,
 			       VIOMMU_DOMID_MAPPING_ENTRY_SIZE,
-			       aviommu->gid);
+			       aviommu->gid, aviommu->leak_tables);
 
 	if (!amd_viommu_is_secure_guest(aviommu->gid)) {
 		amd_iommu_update_vfctrl_mmio_translate_devid(iommu, aviommu->gid, 0);
@@ -786,7 +790,7 @@ int amd_viommu_sviommu_guest_shutdown(struct amd_iommu *iommu,
 	ret = ccp_ops->sev_tio_viommu_guest_shutdown(&g);
 	if (ret) {
 		pr_err("%s: sviommu guest shutdown failed (ret=%d)\n", __func__, ret);
-		return ret;
+		goto err_leak;
 	}
 
 	/*
@@ -795,13 +799,23 @@ int amd_viommu_sviommu_guest_shutdown(struct amd_iommu *iommu,
 	 * if the PSP command fails would leave the RMP permanently
 	 * inconsistent.
 	 */
-	if (g.devid_map)
-		iommu_make_shared((void *)g.devid_map, g.devid_map_size);
+	if (g.devid_map) {
+		ret = iommu_make_shared((void *)g.devid_map, g.devid_map_size);
+		if (ret)
+			goto err_leak;
+	}
 
 	/* Reclaim domain ID table memory */
-	if (g.domid_map)
-		iommu_make_shared((void *)g.domid_map, g.domid_map_size);
+	if (g.domid_map) {
+		ret = iommu_make_shared((void *)g.domid_map, g.domid_map_size);
+		if (ret)
+			goto err_leak;
+	}
 
 	/* No need to call rmp update for MMIO region as PSP clears it */
+	return 0;
+
+err_leak:
+	viommu->leak_tables = true;
 	return ret;
 }
