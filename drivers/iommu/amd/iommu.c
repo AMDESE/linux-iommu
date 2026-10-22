@@ -932,7 +932,7 @@ retry:
 
 	if (type == EVENT_TYPE_IO_FAULT) {
 		amd_iommu_report_page_fault(iommu, devid, pasid, address, flags);
-		return;
+		goto out;
 	}
 
 	switch (type) {
@@ -986,6 +986,7 @@ retry:
 			event[0], event[1], event[2], event[3]);
 	}
 
+out:
 	/*
 	 * To detect the hardware errata 732 we need to clear the
 	 * entry back to zero. This issue does not exist on SNP
