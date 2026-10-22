@@ -82,7 +82,6 @@ static void amd_iommu_change_top(struct pt_iommu *iommu_table,
 
 static void iommu_flush_dte_sync(struct amd_iommu *iommu, u16 devid);
 
-static struct iommu_dev_data *find_dev_data(struct amd_iommu *iommu, u16 devid);
 static bool amd_iommu_enforce_cache_coherency(struct iommu_domain *domain);
 static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					bool enable);
@@ -412,10 +411,8 @@ static int clone_alias(struct pci_dev *pdev_origin, u16 alias, void *data)
 {
 	struct dev_table_entry new;
 	struct amd_iommu *iommu;
-	struct iommu_dev_data *dev_data, *alias_data;
 	struct pci_dev *pdev = data;
 	u16 devid = pci_dev_id(pdev);
-	int ret = 0;
 
 	if (devid == alias)
 		return 0;
@@ -424,27 +421,11 @@ static int clone_alias(struct pci_dev *pdev_origin, u16 alias, void *data)
 	if (!iommu)
 		return 0;
 
-	/* Copy the data from pdev */
-	dev_data = dev_iommu_priv_get(&pdev->dev);
-	if (!dev_data) {
-		pr_err("%s : Failed to get dev_data for 0x%x\n", __func__, devid);
-		ret = -EINVAL;
-		goto out;
-	}
-	get_dte256(iommu, dev_data->devid, &new);
-
-	/* Setup alias */
-	alias_data = find_dev_data(iommu, alias);
-	if (!alias_data) {
-		pr_err("%s : Failed to get alias dev_data for 0x%x\n", __func__, alias);
-		ret = -EINVAL;
-		goto out;
-	}
-	update_dte256(iommu, alias_data->devid, &new);
-
+	get_dte256(iommu, devid, &new);
+	update_dte256(iommu, alias, &new);
 	amd_iommu_set_rlookup_table(iommu, alias);
-out:
-	return ret;
+
+	return 0;
 }
 
 static void clone_aliases(struct amd_iommu *iommu, struct device *dev)
