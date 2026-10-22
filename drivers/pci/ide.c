@@ -18,6 +18,34 @@ static bool xt_support = true;
 module_param(xt_support, bool, 0444);
 MODULE_PARM_DESC(xt_support, "Enable XT support for IDE streams (default: true)");
 
+static bool pcrc_support = true;
+module_param(pcrc_support, bool, 0444);
+MODULE_PARM_DESC(pcrc_support, "Enable PCRC for IDE streams (default: true)");
+
+static unsigned int part_hdr = 4;
+
+static int part_hdr_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int mode;
+	int ret;
+
+	ret = kstrtouint(val, 0, &mode);
+	if (ret)
+		return ret;
+	if (mode > 4)
+		return -EINVAL;
+
+	*((unsigned int *)kp->arg) = mode;
+	return 0;
+}
+
+static const struct kernel_param_ops part_hdr_ops = {
+	.set = part_hdr_set,
+	.get = param_get_uint,
+};
+module_param_cb(part_hdr, &part_hdr_ops, &part_hdr, 0444);
+MODULE_PARM_DESC(part_hdr, "Partial Header Encryption mode (default = 4) (0=off, 1=Addr[17:2], 2=Addr[25:2], 3=Addr[33:2], 4=Addr[41:2])");
+
 #include "pci.h"
 
 static bool noisy_ide = true;
@@ -546,8 +574,12 @@ static bool ide_xt_supported(struct pci_dev *pdev)
 	if (!xt_support)
 		return false;
 
-	pci_read_config_dword(pdev, pdev->ide_cap + PCI_IDE_CAP, &val);
-	if ((val & PCI_IDE_CAP_XT_SUP))
+	val = 0;
+	if (pci_read_config_dword(pdev, pdev->ide_cap + PCI_IDE_CAP, &val) ||
+	    PCI_POSSIBLE_ERROR(val))
+		return false;
+
+	if (val & PCI_IDE_CAP_XT_SUP)
 		return true;
 
 	return false;
@@ -583,6 +615,36 @@ bool ide_xt_enabled(struct pci_ide *ide)
 }
 EXPORT_SYMBOL_GPL(ide_xt_enabled);
 
+static void ide_read_cap(struct pci_dev *pdev, u32 *cap)
+{
+	int ret;
+
+	*cap = 0;
+	if (!pdev || !pdev->ide_cap)
+		return;
+
+	ret = pci_read_config_dword(pdev, pdev->ide_cap + PCI_IDE_CAP, cap);
+	/*
+	 * A failed config read is stored as ~0. Every IDE capability bit is
+	 * set in that value, so treat it as no capability rather than as
+	 * every feature supported.
+	 */
+	if (ret || PCI_POSSIBLE_ERROR(*cap)) {
+		pci_warn_once(pdev, "IDE capability read failed (ret=%d val=%#x)\n",
+			      ret, *cap);
+		*cap = 0;
+	}
+}
+
+static void ide_partner_caps(struct pci_ide *ide, u32 *ep_cap, u32 *rp_cap)
+{
+	struct pci_dev *ep = ide->pdev;
+	struct pci_dev *rp = ep ? pcie_find_root_port(ep) : NULL;
+
+	ide_read_cap(ep, ep_cap);
+	ide_read_cap(rp, rp_cap);
+}
+
 static void set_ide_sel_ctl(struct pci_dev *pdev, struct pci_ide *ide,
 			    struct pci_ide_partner *settings, int pos,
 			    bool enable)
@@ -592,12 +654,29 @@ static void set_ide_sel_ctl(struct pci_dev *pdev, struct pci_ide *ide,
 		  FIELD_PREP(PCI_IDE_SEL_CTL_CFG_EN, pdev->ide_cfg) |
 		  FIELD_PREP(PCI_IDE_SEL_CTL_TEE_LIMITED, pdev->ide_tee_limit) |
 		  FIELD_PREP(PCI_IDE_SEL_CTL_EN, enable);
+	u32 ep_cap, rp_cap;
 
 	if (ide_xt_supported(pdev)) {
 		pr_info("%s: XT support enabled for devid : 0x%x\n",
 			__func__, pci_dev_id(pdev));
 		val |= FIELD_PREP(PCI_IDE_SEL_CTL_XT, 1);
 	}
+
+	/*
+	 * PCRC Enable and Partial Header Encryption Mode select the IDE
+	 * prefix both ports parse. Program a feature only when the endpoint
+	 * and the root port both advertise it, and write that same value to
+	 * both stream control registers. part_hdr 0 leaves the mode clear.
+	 */
+	ide_partner_caps(ide, &ep_cap, &rp_cap);
+
+	if (pcrc_support && (ep_cap & PCI_IDE_CAP_PCRC) &&
+	    (rp_cap & PCI_IDE_CAP_PCRC))
+		val |= PCI_IDE_SEL_CTL_PCRC_EN;
+
+	if (part_hdr && (ep_cap & PCI_IDE_CAP_PARTIAL_HEADER_ENC) &&
+	    (rp_cap & PCI_IDE_CAP_PARTIAL_HEADER_ENC))
+		val |= FIELD_PREP(PCI_IDE_SEL_CTL_PART_ENC, part_hdr);
 
 	pci_write_config_dword(pdev, pos + PCI_IDE_SEL_CTL, val);
 }
