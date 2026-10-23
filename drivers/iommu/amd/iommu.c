@@ -1436,24 +1436,11 @@ static int iommu_queue_command(struct amd_iommu *iommu, struct iommu_cmd *cmd)
 	return iommu_queue_command_sync(iommu, cmd, true);
 }
 
-static u64 get_cmdsem_val(struct amd_iommu *iommu)
-{
-	lockdep_assert_held(&iommu->lock);
-	return ++iommu->cmd_sem_val;
-}
-
-/*
- * This function queues a completion wait command into the command
- * buffer of an IOMMU
- */
-static int iommu_completion_wait(struct amd_iommu *iommu)
+static int __iommu_completion_wait(struct amd_iommu *iommu, u64 *data)
 {
 	struct iommu_cmd cmd;
-	unsigned long flags;
-	int ret;
-	u64 data;
 
-	raw_spin_lock_irqsave(&iommu->lock, flags);
+	lockdep_assert_held(&iommu->lock);
 
 	if (!iommu->need_sync) {
 		/*
@@ -1465,15 +1452,28 @@ static int iommu_completion_wait(struct amd_iommu *iommu)
 		 * command queued before this call (possibly on another CPU)
 		 * is guaranteed to have completed before returning.
 		 */
-		data = iommu->cmd_sem_val;
-		raw_spin_unlock_irqrestore(&iommu->lock, flags);
-		return wait_on_sem(iommu, data);
+		*data = iommu->cmd_sem_val;
+		return 0;
 	}
 
-	data = get_cmdsem_val(iommu);
-	build_completion_wait(&cmd, iommu, data);
+	*data = ++iommu->cmd_sem_val;
+	build_completion_wait(&cmd, iommu, *data);
 
-	ret = __iommu_queue_command_sync(iommu, &cmd, false);
+	return __iommu_queue_command_sync(iommu, &cmd, false);
+}
+
+/*
+ * This function queues a completion wait command into the command
+ * buffer of an IOMMU
+ */
+static int iommu_completion_wait(struct amd_iommu *iommu)
+{
+	unsigned long flags;
+	int ret;
+	u64 data;
+
+	raw_spin_lock_irqsave(&iommu->lock, flags);
+	ret = __iommu_completion_wait(iommu, &data);
 	raw_spin_unlock_irqrestore(&iommu->lock, flags);
 
 	if (ret)
@@ -3287,7 +3287,6 @@ static void iommu_flush_irt_and_complete(struct amd_iommu *iommu, u16 devid)
 	int ret;
 	u64 data;
 	unsigned long flags;
-	struct iommu_cmd cmd;
 	struct pci_dev *pdev = NULL;
 	struct iommu_dev_data *dev_data = search_dev_data(iommu, devid);
 
@@ -3298,9 +3297,6 @@ static void iommu_flush_irt_and_complete(struct amd_iommu *iommu, u16 devid)
 		pdev = to_pci_dev(dev_data->dev);
 
 	raw_spin_lock_irqsave(&iommu->lock, flags);
-	data = get_cmdsem_val(iommu);
-	build_completion_wait(&cmd, iommu, data);
-
 	if (pdev)
 		ret = pci_for_each_dma_alias(pdev, iommu_flush_dev_irt, iommu);
 	else
@@ -3308,11 +3304,11 @@ static void iommu_flush_irt_and_complete(struct amd_iommu *iommu, u16 devid)
 	if (ret)
 		goto out_err;
 
-	ret = __iommu_queue_command_sync(iommu, &cmd, false);
+	ret = __iommu_completion_wait(iommu, &data);
 	if (ret)
 		goto out_err;
-	raw_spin_unlock_irqrestore(&iommu->lock, flags);
 
+	raw_spin_unlock_irqrestore(&iommu->lock, flags);
 	wait_on_sem(iommu, data);
 	return;
 
