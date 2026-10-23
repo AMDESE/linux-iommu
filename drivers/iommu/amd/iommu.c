@@ -121,7 +121,7 @@ static void write_dte_upper128(struct dev_table_entry *ptr, struct dev_table_ent
 	/*
 	 * Preserve DTE_DATA2_INTR_MASK. This needs to be
 	 * done here since it requires to be inside
-	 * spin_lock(&dev_data->dte_lock) context.
+	 * pci_seg->dte_lock context.
 	 */
 	new->data[2] &= ~DTE_DATA2_INTR_MASK;
 	new->data[2] |= old.data[2] & DTE_DATA2_INTR_MASK;
@@ -152,7 +152,7 @@ static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_da
 	struct dev_table_entry *dev_table = get_dev_table(iommu);
 	struct dev_table_entry *ptr = &dev_table[dev_data->devid];
 
-	spin_lock_irqsave(&dev_data->dte_lock, flags);
+	spin_lock_irqsave(&iommu->pci_seg->dte_lock, flags);
 
 	if (!(ptr->data[0] & DTE_FLAG_V)) {
 		/* Existing DTE is not valid. */
@@ -208,7 +208,7 @@ static void update_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_da
 		write_dte_lower128(ptr, new);
 	}
 
-	spin_unlock_irqrestore(&dev_data->dte_lock, flags);
+	spin_unlock_irqrestore(&iommu->pci_seg->dte_lock, flags);
 }
 
 void amd_iommu_update_dte(struct amd_iommu *iommu,
@@ -230,10 +230,10 @@ static void get_dte256(struct amd_iommu *iommu, struct iommu_dev_data *dev_data,
 
 	ptr = &dev_table[dev_data->devid];
 
-	spin_lock_irqsave(&dev_data->dte_lock, flags);
+	spin_lock_irqsave(&iommu->pci_seg->dte_lock, flags);
 	dte->data128[0] = ptr->data128[0];
 	dte->data128[1] = ptr->data128[1];
-	spin_unlock_irqrestore(&dev_data->dte_lock, flags);
+	spin_unlock_irqrestore(&iommu->pci_seg->dte_lock, flags);
 }
 
 static inline bool pdom_is_v2_pgtbl_mode(struct protection_domain *pdom)
@@ -383,7 +383,6 @@ static struct iommu_dev_data *alloc_dev_data(struct amd_iommu *iommu, u16 devid)
 		return NULL;
 
 	mutex_init(&dev_data->mutex);
-	spin_lock_init(&dev_data->dte_lock);
 	dev_data->devid = devid;
 	ratelimit_default_init(&dev_data->rs);
 
@@ -3104,13 +3103,13 @@ static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 	}
 
 	list_for_each_entry(dev_data, &pdomain->dev_list, list) {
-		spin_lock(&dev_data->dte_lock);
 		iommu = get_amd_iommu_from_dev_data(dev_data);
+		spin_lock(&iommu->pci_seg->dte_lock);
 		dte = &get_dev_table(iommu)[dev_data->devid];
 		new = dte->data[0];
 		new = (enable ? new | DTE_FLAG_HAD : new & ~DTE_FLAG_HAD);
 		dte->data[0] = new;
-		spin_unlock(&dev_data->dte_lock);
+		spin_unlock(&iommu->pci_seg->dte_lock);
 
 		/* Flush device DTE */
 		device_flush_dte(dev_data);
@@ -3340,11 +3339,11 @@ static void set_dte_irq_entry(struct amd_iommu *iommu, u16 devid,
 			      struct irq_remap_table *table)
 {
 	u64 new;
+	unsigned long flags;
 	struct dev_table_entry *dte = &get_dev_table(iommu)[devid];
 	struct iommu_dev_data *dev_data = search_dev_data(iommu, devid);
 
-	if (dev_data)
-		spin_lock(&dev_data->dte_lock);
+	spin_lock_irqsave(&iommu->pci_seg->dte_lock, flags);
 
 	new = READ_ONCE(dte->data[2]);
 	new &= ~DTE_IRQ_PHYS_ADDR_MASK;
@@ -3354,8 +3353,7 @@ static void set_dte_irq_entry(struct amd_iommu *iommu, u16 devid,
 	new |= DTE_IRQ_REMAP_ENABLE;
 	WRITE_ONCE(dte->data[2], new);
 
-	if (dev_data)
-		spin_unlock(&dev_data->dte_lock);
+	spin_unlock_irqrestore(&iommu->pci_seg->dte_lock, flags);
 }
 
 static struct irq_remap_table *get_irq_table(struct amd_iommu *iommu, u16 devid)
