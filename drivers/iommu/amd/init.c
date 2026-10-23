@@ -792,6 +792,10 @@ void amd_iommu_restart_log(struct amd_iommu *iommu, const char *evt_type,
 {
 	u32 status;
 
+	/*
+	 * Overflow stops the log and clears its run bit. Confirm that
+	 * before disabling the log and clearing overflow.
+	 */
 	status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
 	if (status & status_run_mask)
 		return;

@@ -1126,8 +1126,13 @@ static void amd_iommu_handle_irq(void *data, const char *evt_type,
 	u32 mask = int_mask | overflow_mask;
 
 	while (status & mask) {
-		/* Enable interrupt sources again */
-		writel(mask, iommu->mmio_base + MMIO_STATUS_OFFSET);
+		/*
+		 * Enable the interrupt only. The overflow bit is cleared by
+		 * the restart procedure after the queued entries are consumed
+		 * and the log has stopped.
+		 */
+		if (status & int_mask)
+			writel(int_mask, iommu->mmio_base + MMIO_STATUS_OFFSET);
 
 		if (int_handler) {
 			pr_devel("Processing IOMMU (ivhd%d) %s Log\n",
@@ -1152,6 +1157,8 @@ static void amd_iommu_handle_irq(void *data, const char *evt_type,
 		 * again and re-clear the bits
 		 */
 		status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
+		if (!(status & int_mask))
+			break;
 	}
 }
 
