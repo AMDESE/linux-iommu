@@ -566,6 +566,7 @@ struct amd_iommu_pci_seg {
 
 	/* List of all available dev_data structures */
 	struct llist_head dev_data_list;
+	spinlock_t dte_lock;		/* Device-table update lock */
 
 	/* PCI segment number */
 	u16 id;
@@ -806,7 +807,6 @@ struct devid_map {
 struct iommu_dev_data {
 	/*Protect against attach/detach races */
 	struct mutex mutex;
-	spinlock_t dte_lock;              /* DTE lock for 256-bit access */
 
 	struct list_head list;		  /* For domain->dev_list */
 	struct llist_node dev_data_list;  /* For global dev_data_list */
