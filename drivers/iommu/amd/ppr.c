@@ -144,8 +144,11 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 		goto out;
 	}
 
-	event.fault.prm.flags |= IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID;
-	event.fault.prm.flags |= IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
+	/* PPR_FLAG_GN means this request carries a valid PASID. */
+	if (PPR_FLAGS(raw[0]) & PPR_FLAG_GN) {
+		event.fault.prm.flags |= IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID;
+		event.fault.prm.flags |= IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
+	}
 	if (PPR_TAG_LAST_PAGE(raw[0]))
 		event.fault.prm.flags |= IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE;
 
@@ -157,7 +160,8 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 out:
 	/* Nobody cared, abort */
 	amd_iommu_complete_ppr(&pdev->dev, PPR_PASID(raw[0]),
-			       IOMMU_PAGE_RESP_FAILURE, PPR_TAG(raw[0]));
+			       IOMMU_PAGE_RESP_FAILURE, PPR_TAG(raw[0]),
+			       PPR_FLAGS(raw[0]) & PPR_FLAG_GN);
 	pci_dev_put(pdev);
 }
 
@@ -241,7 +245,9 @@ void amd_iommu_iopf_uninit(struct amd_iommu *iommu)
 void amd_iommu_page_response(struct device *dev, struct iopf_fault *evt,
 			     struct iommu_page_response *resp)
 {
-	amd_iommu_complete_ppr(dev, resp->pasid, resp->code, resp->grpid);
+	bool gn = evt->fault.prm.flags & IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
+
+	amd_iommu_complete_ppr(dev, resp->pasid, resp->code, resp->grpid, gn);
 }
 
 int amd_iommu_iopf_add_device(struct amd_iommu *iommu,
