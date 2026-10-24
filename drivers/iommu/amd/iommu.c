@@ -2396,14 +2396,16 @@ static int attach_device(struct device *dev,
 	}
 
 skip_caps:
-	/* Update data structures */
-	dev_data->domain = domain;
+	/*
+	 * Build and write the DTE under the domain lock so a concurrent
+	 * change_top() or dirty tracking update cannot be overwritten with
+	 * stale values.
+	 */
 	spin_lock_irqsave(&domain->lock, flags);
+	dev_data->domain = domain;
 	list_add(&dev_data->list, &domain->dev_list);
-	spin_unlock_irqrestore(&domain->lock, flags);
-
-	/* Update device table */
 	dev_update_dte(dev_data, true);
+	spin_unlock_irqrestore(&domain->lock, flags);
 
 out:
 	mutex_unlock(&dev_data->mutex);
@@ -2441,11 +2443,12 @@ static void detach_device(struct device *dev)
 	if (dev_is_pci(dev))
 		pdev_disable_caps(to_pci_dev(dev));
 
+	spin_lock_irqsave(&domain->lock, flags);
+
 	/* Clear DTE and flush the entry */
 	dev_update_dte(dev_data, false);
 
 	/* Flush IOTLB and wait for the flushes to finish */
-	spin_lock_irqsave(&domain->lock, flags);
 	amd_iommu_domain_flush_all(domain);
 	list_del(&dev_data->list);
 	spin_unlock_irqrestore(&domain->lock, flags);
