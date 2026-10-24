@@ -656,9 +656,9 @@ static void pdev_enable_caps(struct pci_dev *pdev)
 
 static void pdev_disable_caps(struct pci_dev *pdev)
 {
+	pdev_disable_cap_pri(pdev);
 	pdev_disable_cap_ats(pdev);
 	pdev_disable_cap_pasid(pdev);
-	pdev_disable_cap_pri(pdev);
 }
 
 /*
