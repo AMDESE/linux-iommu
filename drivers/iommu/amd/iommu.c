@@ -3017,8 +3017,6 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 	if (dev_data->domain == domain)
 		return 0;
 
-	dev_data->defer_attach = false;
-
 	/*
 	 * Restrict to devices with compatible IOMMU hardware support
 	 * when enforcement of dirty tracking is enabled.
@@ -3036,6 +3034,10 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 		detach_device(dev);
 
 	ret = attach_device(dev, domain);
+	if (ret)
+		return ret;
+
+	dev_data->defer_attach = false;
 
 #ifdef CONFIG_IRQ_REMAP
 	if (AMD_IOMMU_GUEST_IR_VAPIC(amd_iommu_guest_ir)) {
@@ -3046,7 +3048,7 @@ static int amd_iommu_attach_device(struct iommu_domain *dom, struct device *dev,
 	}
 #endif
 
-	return ret;
+	return 0;
 }
 
 static bool amd_iommu_capable(struct device *dev, enum iommu_cap cap)
