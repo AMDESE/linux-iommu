@@ -2044,9 +2044,9 @@ static int update_gcr3(struct iommu_dev_data *dev_data,
 	int nid = iommu ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
 	u64 *pte;
 
-	pte = __get_gcr3_pte(gcr3_info, pasid, true, nid);
+	pte = __get_gcr3_pte(gcr3_info, pasid, set, nid);
 	if (pte == NULL)
-		return -ENOMEM;
+		return set ? -ENOMEM : 0;
 
 	if (set)
 		*pte = (gcr3 & PAGE_MASK) | GCR3_VALID;
