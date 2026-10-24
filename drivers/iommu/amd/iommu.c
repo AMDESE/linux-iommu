@@ -2829,19 +2829,16 @@ static void amd_iommu_change_top(struct pt_iommu *iommu_table,
 
 	lockdep_assert_held(&pdom->lock);
 
-	/* Update the DTE for all devices attached to this domain */
+	/*
+	 * Update the DTE for all devices attached to this domain. This also
+	 * updates the aliases and flushes the DTEs.
+	 */
 	list_for_each_entry(dev_data, &pdom->dev_list, list) {
-		struct amd_iommu *iommu = rlookup_amd_iommu(dev_data->dev);
+		struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
 
 		/* Update the HW references with the new level and top ptr */
 		set_dte_entry(iommu, dev_data, top_paddr, top_level);
-		clone_aliases(iommu, dev_data->dev);
 	}
-
-	list_for_each_entry(dev_data, &pdom->dev_list, list)
-		device_flush_dte(dev_data);
-
-	domain_flush_complete(pdom);
 }
 
 /*
