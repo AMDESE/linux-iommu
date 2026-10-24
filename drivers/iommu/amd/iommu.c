@@ -1934,6 +1934,7 @@ static void free_gcr3_tbl_level2(u64 *tbl)
 		ptr = iommu_phys_to_virt(tbl[i] & PAGE_MASK);
 
 		free_gcr3_tbl_level1(ptr);
+		iommu_free_pages(ptr);
 	}
 }
 
