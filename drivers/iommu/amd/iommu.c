@@ -2661,8 +2661,27 @@ static const struct iommu_domain_ops amdv1_ops = {
 	.enforce_cache_coherency = amd_iommu_enforce_cache_coherency,
 };
 
+/*
+ * The IOMMU can keep a translation's dirty bit in the IOTLB and write it
+ * back to the page table only when that entry is invalidated. Harvest those
+ * bits into memory before the walk. The walk's own IOTLB sync runs afterward
+ * and only covers PTEs whose in-memory D bit was already set, so it cannot
+ * see a store that is still cached. That drops device writes from the
+ * migration dirty bitmap, including the SDXI context-status update made
+ * while soft-stop drains.
+ */
+static int amd_iommu_read_and_clear_dirty(struct iommu_domain *domain,
+					  unsigned long iova, size_t size,
+					  unsigned long flags,
+					  struct iommu_dirty_bitmap *dirty)
+{
+	amd_iommu_flush_iotlb_all(domain);
+	return pt_iommu_amdv1_read_and_clear_dirty(domain, iova, size, flags,
+						   dirty);
+}
+
 static const struct iommu_dirty_ops amdv1_dirty_ops = {
-	IOMMU_PT_DIRTY_OPS(amdv1),
+	.read_and_clear_dirty = amd_iommu_read_and_clear_dirty,
 	.set_dirty_tracking = amd_iommu_set_dirty_tracking,
 };
 
