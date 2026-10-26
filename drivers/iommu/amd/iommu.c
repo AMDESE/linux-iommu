@@ -2002,7 +2002,7 @@ static int setup_gcr3_table(struct gcr3_tbl_info *gcr3_info,
 }
 
 static u64 *__get_gcr3_pte(struct gcr3_tbl_info *gcr3_info,
-			   ioasid_t pasid, bool alloc)
+			   ioasid_t pasid, bool alloc, int nid)
 {
 	int index;
 	u64 *pte;
@@ -2021,7 +2021,7 @@ static u64 *__get_gcr3_pte(struct gcr3_tbl_info *gcr3_info,
 			if (!alloc)
 				return NULL;
 
-			root = (void *)get_zeroed_page(GFP_ATOMIC);
+			root = iommu_alloc_pages_node_sz(nid, GFP_ATOMIC, SZ_4K);
 			if (root == NULL)
 				return NULL;
 
@@ -2040,9 +2040,11 @@ static int update_gcr3(struct iommu_dev_data *dev_data,
 		       ioasid_t pasid, unsigned long gcr3, bool set)
 {
 	struct gcr3_tbl_info *gcr3_info = &dev_data->gcr3_info;
+	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
+	int nid = iommu ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
 	u64 *pte;
 
-	pte = __get_gcr3_pte(gcr3_info, pasid, true);
+	pte = __get_gcr3_pte(gcr3_info, pasid, true, nid);
 	if (pte == NULL)
 		return -ENOMEM;
 
