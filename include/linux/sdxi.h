@@ -157,6 +157,17 @@ int sdxi_fn_start(struct device *dev, void __iomem *ctrl_regs);
 int sdxi_fn_stop(struct device *dev, void __iomem *ctrl_regs);
 
 /**
+ * sdxi_fn_stop_timeout() - sdxi_fn_stop() with a caller-chosen wait.
+ * @timeout_ms: Poll budget. Zero is rejected.
+ *
+ * The migration pause drain uses this so a PRI still in flight can be
+ * completed by a running guest. The one-second sdxi_fn_stop() wrapper
+ * stays the VFIO state-machine path.
+ */
+int sdxi_fn_stop_timeout(struct device *dev, void __iomem *ctrl_regs,
+			 unsigned int timeout_ms);
+
+/**
  * sdxi_pf_restart_vf_contexts() - Restart a VF's contexts after VM resume.
  * @vf:        SDXI VF whose contexts should be restarted.
  * @vf_num:    VF number as understood by the SDXI function (1-based).
