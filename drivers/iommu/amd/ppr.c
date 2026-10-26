@@ -8,7 +8,9 @@
 
 #include <linux/amd-iommu.h>
 #include <linux/delay.h>
+#include <linux/jiffies.h>
 #include <linux/mmu_notifier.h>
+#include <linux/wait.h>
 
 #include <asm/iommu.h>
 
@@ -216,6 +218,7 @@ static void __amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
 	u32 head, tail;
 
 	lockdep_assert_held(&iommu->ppr_lock);
+	atomic_inc(&iommu->ppr_active);
 
 	head = readl(iommu->mmio_base + MMIO_PPR_HEAD_OFFSET);
 	tail = readl(iommu->mmio_base + MMIO_PPR_TAIL_OFFSET);
@@ -257,6 +260,78 @@ static void __amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
 
 		/* Handle PPR entry */
 		iommu_call_iopf_notifier(iommu, entry);
+	}
+
+	/*
+	 * Head has moved and every entry copied out of this pass has been
+	 * reported. Drop ppr_active before publishing the completed pass:
+	 * a waiter observing the new sequence must not sleep on a poll that
+	 * has already completed.
+	 */
+	atomic_dec(&iommu->ppr_active);
+	atomic_inc(&iommu->ppr_seq);
+	wake_up_all(&iommu->ppr_wait);
+}
+
+/*
+ * True when the log still holds a request from @devid, or a slot the
+ * PPR thread has not consumed yet. A zero type means hardware has not
+ * finished the write, so the DeviceID is not known yet.
+ */
+static bool ppr_log_pending(struct amd_iommu *iommu, u16 devid)
+{
+	u32 head, tail;
+
+	head = readl(iommu->mmio_base + MMIO_PPR_HEAD_OFFSET);
+	tail = readl(iommu->mmio_base + MMIO_PPR_TAIL_OFFSET);
+
+	while (head != tail) {
+		u64 val = READ_ONCE(*(u64 *)(iommu->ppr_log + head));
+
+		if (!PPR_REQ_TYPE(val) || PPR_DEVID(val) == devid)
+			return true;
+
+		head = (head + PPRLOG_ENTRY_SIZE) % amd_iommu_pprlog_size;
+	}
+
+	return false;
+}
+
+/*
+ * Wait until every log entry for @devid has been consumed and reported.
+ * Callers of __amd_iommu_poll_ppr_log() own the head; this does not.
+ */
+void amd_iommu_wait_ppr_log(struct amd_iommu *iommu, u16 devid)
+{
+	unsigned long deadline = jiffies + 2 * HZ;
+
+	if (!iommu->ppr_log)
+		return;
+
+	for (;;) {
+		unsigned int seq = atomic_read(&iommu->ppr_seq);
+
+		/*
+		 * The thread advances the head before it reports the fault,
+		 * so an empty log is not enough while a poll is still in
+		 * iommu_report_device_fault(). Recheck seq so a poll that
+		 * starts between the two reads cannot finish unseen.
+		 */
+		if (!ppr_log_pending(iommu, devid) &&
+		    !atomic_read(&iommu->ppr_active) &&
+		    atomic_read(&iommu->ppr_seq) == seq &&
+		    !atomic_read(&iommu->ppr_active))
+			return;
+
+		if (!time_before(jiffies, deadline)) {
+			pr_warn_ratelimited("IOMMU%d: timed out draining PPR log for device %04x\n",
+					    iommu->index, devid);
+			return;
+		}
+
+		wait_event_timeout(iommu->ppr_wait,
+				   atomic_read(&iommu->ppr_seq) != seq,
+				   deadline - jiffies);
 	}
 }
 

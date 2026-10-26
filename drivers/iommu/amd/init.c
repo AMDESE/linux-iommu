@@ -1974,6 +1974,7 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h,
 
 	raw_spin_lock_init(&iommu->lock);
 	mutex_init(&iommu->ppr_lock);
+	init_waitqueue_head(&iommu->ppr_wait);
 	iommu->cmd_sem_val = 0;
 
 	/* Add IOMMU to internal data structures */

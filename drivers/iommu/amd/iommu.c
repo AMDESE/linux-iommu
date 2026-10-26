@@ -2468,12 +2468,19 @@ static void detach_device(struct device *dev)
 	}
 
 	/*
-	 * Stop new page requests, then finish the ones already logged,
-	 * before this RID domain's IOPF reference is dropped. An SVA
-	 * PASID holds its own reference and stays registered.
+	 * domain stays set across the unlock, so a racing attach returns
+	 * -EBUSY. Event and PPR logs share one thread on a single MSI,
+	 * and the event reporter takes this mutex. Drop it only while
+	 * waiting for that thread. Flush before dropping the RID
+	 * reference: that drop removes the queue when it was the last
+	 * one, and the removal stays under this mutex.
 	 */
-	if (dev_data->iopf_refcount)
-		amd_iommu_drain_ppr_log(dev_data);
+	if (dev_data->iopf_refcount) {
+		mutex_unlock(&dev_data->mutex);
+		amd_iommu_wait_ppr_log(iommu, dev_data->devid);
+		iopf_queue_flush_dev(dev);
+		mutex_lock(&dev_data->mutex);
+	}
 
 	amd_iommu_iopf_for_domain_replace(NULL, &domain->domain, dev);
 

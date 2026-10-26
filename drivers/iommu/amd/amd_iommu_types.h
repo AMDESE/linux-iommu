@@ -11,6 +11,7 @@
 #include <linux/bitfield.h>
 #include <linux/iommu.h>
 #include <linux/types.h>
+#include <linux/wait.h>
 #include <linux/mmu_notifier.h>
 #include <linux/mutex.h>
 #include <linux/msi.h>
@@ -764,6 +765,16 @@ struct amd_iommu {
 	/* IOPF support */
 	struct iopf_queue *iopf_queue;
 	unsigned char iopfq_name[32];
+
+	/*
+	 * ppr_active is set while a consumer holds ppr_lock inside
+	 * __amd_iommu_poll_ppr_log(), including the fault report after the
+	 * head advances. ppr_seq is bumped once that report has queued its
+	 * work. RID detach waits on ppr_wait instead of consuming the log.
+	 */
+	atomic_t ppr_active;
+	atomic_t ppr_seq;
+	wait_queue_head_t ppr_wait;
 };
 
 static inline struct amd_iommu *dev_to_amd_iommu(struct device *dev)
