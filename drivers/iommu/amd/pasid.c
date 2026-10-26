@@ -109,7 +109,12 @@ static int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
 	unsigned long flags;
 	int ret = -EINVAL;
 
-	if (old)
+	/*
+	 * pci_dev_reset_iommu_done() passes the blocking domain. prepare()
+	 * has already cleared this PASID, so program it again. Replacing
+	 * one attached domain with another is not supported.
+	 */
+	if (old && old->type != IOMMU_DOMAIN_BLOCKED)
 		return -EOPNOTSUPP;
 
 	/* PASID zero is used for requests from the I/O device without PASID */
