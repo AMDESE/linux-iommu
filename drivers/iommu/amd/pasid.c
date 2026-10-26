@@ -128,7 +128,7 @@ static int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
 	/* Add PASID to protection domain pasid list */
 	pdom_dev_data = kzalloc_obj(*pdom_dev_data);
 	if (pdom_dev_data == NULL)
-		return ret;
+		return -ENOMEM;
 
 	pdom_dev_data->pasid = pasid;
 	pdom_dev_data->dev_data = dev_data;
