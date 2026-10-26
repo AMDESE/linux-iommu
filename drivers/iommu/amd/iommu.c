@@ -2044,6 +2044,16 @@ int amd_iommu_set_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid,
 	return ret;
 }
 
+/*
+ * Clear a GCR3 entry and flush its cached translations without dropping
+ * pasid_cnt. amd_iommu_clear_gcr3() drops the count when the PASID is
+ * detached.
+ */
+int amd_iommu_disable_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid)
+{
+	return update_gcr3(dev_data, pasid, 0, false);
+}
+
 int amd_iommu_clear_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid)
 {
 	struct gcr3_tbl_info *gcr3_info = &dev_data->gcr3_info;
@@ -2051,7 +2061,7 @@ int amd_iommu_clear_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid)
 
 	iommu_group_mutex_assert(dev_data->dev);
 
-	ret = update_gcr3(dev_data, pasid, 0, false);
+	ret = amd_iommu_disable_gcr3(dev_data, pasid);
 	if (ret)
 		return ret;
 

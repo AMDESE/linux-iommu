@@ -79,7 +79,7 @@ static void sva_arch_invalidate_secondary_tlbs(struct mmu_notifier *mn,
 
 static void sva_mn_release(struct mmu_notifier *mn, struct mm_struct *mm)
 {
-	struct pdom_dev_data *pdom_dev_data, *next;
+	struct pdom_dev_data *pdom_dev_data;
 	struct protection_domain *sva_pdom;
 	unsigned long flags;
 
@@ -87,9 +87,14 @@ static void sva_mn_release(struct mmu_notifier *mn, struct mm_struct *mm)
 
 	spin_lock_irqsave(&sva_pdom->lock, flags);
 
-	/* Assume dev_data_list contains same PASID with different devices */
-	for_each_pdom_dev_data_safe(pdom_dev_data, next, sva_pdom)
-		remove_dev_pasid(pdom_dev_data);
+	/*
+	 * Disable the GCR3 entry before the mm page tables are freed. Leave
+	 * the PASID attachment and pdom_dev_data for the IOMMU core to
+	 * remove through the normal detach path.
+	 */
+	for_each_pdom_dev_data(pdom_dev_data, sva_pdom)
+		amd_iommu_disable_gcr3(pdom_dev_data->dev_data,
+				       pdom_dev_data->pasid);
 
 	spin_unlock_irqrestore(&sva_pdom->lock, flags);
 }
