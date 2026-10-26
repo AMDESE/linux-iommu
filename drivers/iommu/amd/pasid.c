@@ -159,9 +159,10 @@ void amd_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 				struct iommu_domain *domain)
 {
 	struct protection_domain *sva_pdom;
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	unsigned long flags;
 
-	if (!is_pasid_valid(dev_iommu_priv_get(dev), pasid))
+	if (!is_pasid_valid(dev_data, pasid))
 		return;
 
 	sva_pdom = to_pdomain(domain);
@@ -172,6 +173,13 @@ void amd_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 	remove_pdom_dev_pasid(sva_pdom, dev, pasid);
 
 	spin_unlock_irqrestore(&sva_pdom->lock, flags);
+
+	/*
+	 * Queued faults reference the attach handle, which the caller
+	 * frees once this returns. Consume requests already in the log
+	 * and flush the work they queued.
+	 */
+	amd_iommu_drain_ppr_log(dev_data);
 }
 
 static void iommu_sva_domain_free(struct iommu_domain *domain)
