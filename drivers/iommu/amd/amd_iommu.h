@@ -76,6 +76,10 @@ void amd_iommu_iopf_remove_device(struct amd_iommu *iommu,
 int amd_iommu_set_gcr3(struct iommu_dev_data *dev_data,
 		       ioasid_t pasid, unsigned long gcr3);
 int amd_iommu_clear_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid);
+int amd_iommu_set_gcr3_fault_pgd(struct iommu_dev_data *dev_data,
+				 ioasid_t pasid);
+int __init amd_iommu_sva_fault_pgd_alloc(void);
+void __init amd_iommu_sva_fault_pgd_free(void);
 
 /* PPR */
 int __init amd_iommu_alloc_ppr_log(struct amd_iommu *iommu);

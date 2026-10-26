@@ -452,8 +452,6 @@ extern bool amdr_ivrs_remap_support;
 /* Making iterating over protection_domain->dev_data_list easier */
 #define for_each_pdom_dev_data(pdom_dev_data, pdom) \
 	list_for_each_entry(pdom_dev_data, &pdom->dev_data_list, list)
-#define for_each_pdom_dev_data_safe(pdom_dev_data, next, pdom) \
-	list_for_each_entry_safe((pdom_dev_data), (next), &pdom->dev_data_list, list)
 
 #define for_each_ivhd_dte_flags(entry) \
 	list_for_each_entry((entry), &amd_ivhd_dev_flags_list, list)

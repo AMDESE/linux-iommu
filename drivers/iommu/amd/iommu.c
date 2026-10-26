@@ -2048,6 +2048,38 @@ int amd_iommu_set_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid,
 	return ret;
 }
 
+/* Dummy page table root, used in sva_mn_release() path */
+static void *sva_fault_pgd;
+
+int __init amd_iommu_sva_fault_pgd_alloc(void)
+{
+	sva_fault_pgd = iommu_alloc_pages_node_sz(NUMA_NO_NODE, GFP_KERNEL,
+						  SZ_4K);
+	return sva_fault_pgd ? 0 : -ENOMEM;
+}
+
+void __init amd_iommu_sva_fault_pgd_free(void)
+{
+	if (sva_fault_pgd)
+		iommu_free_pages(sva_fault_pgd);
+
+	sva_fault_pgd = NULL;
+}
+
+/*
+ * Point a still-attached PASID at the permanent zero root.
+ * pasid_cnt stays put; amd_iommu_clear_gcr3() drops the slot on detach.
+ */
+int amd_iommu_set_gcr3_fault_pgd(struct iommu_dev_data *dev_data,
+				 ioasid_t pasid)
+{
+	if (WARN_ON_ONCE(!sva_fault_pgd))
+		return -ENODEV;
+
+	return update_gcr3(dev_data, pasid,
+			   iommu_virt_to_phys(sva_fault_pgd), true);
+}
+
 int amd_iommu_clear_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid)
 {
 	struct gcr3_tbl_info *gcr3_info = &dev_data->gcr3_info;

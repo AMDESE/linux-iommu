@@ -79,7 +79,7 @@ static void sva_arch_invalidate_secondary_tlbs(struct mmu_notifier *mn,
 
 static void sva_mn_release(struct mmu_notifier *mn, struct mm_struct *mm)
 {
-	struct pdom_dev_data *pdom_dev_data, *next;
+	struct pdom_dev_data *pdom_dev_data;
 	struct protection_domain *sva_pdom;
 	unsigned long flags;
 
@@ -87,9 +87,14 @@ static void sva_mn_release(struct mmu_notifier *mn, struct mm_struct *mm)
 
 	spin_lock_irqsave(&sva_pdom->lock, flags);
 
-	/* Assume dev_data_list contains same PASID with different devices */
-	for_each_pdom_dev_data_safe(pdom_dev_data, next, sva_pdom)
-		remove_dev_pasid(pdom_dev_data);
+	/*
+	 * The mm page tables are freed when this returns. Point each
+	 * still-attached PASID at the permanent zero root so a later
+	 * access faults instead of walking freed memory.
+	 */
+	for_each_pdom_dev_data(pdom_dev_data, sva_pdom)
+		amd_iommu_set_gcr3_fault_pgd(pdom_dev_data->dev_data,
+					     pdom_dev_data->pasid);
 
 	spin_unlock_irqrestore(&sva_pdom->lock, flags);
 }

@@ -2450,6 +2450,16 @@ static int __init amd_iommu_init_pci(void)
 	}
 
 	/*
+	 * iommu_init_pci() populates amd_iommu_efr from the IOMMU, so check
+	 * PASID support only after it runs.
+	 */
+	if (amd_iommu_pasid_supported()) {
+		ret = amd_iommu_sva_fault_pgd_alloc();
+		if (ret)
+			goto out;
+	}
+
+	/*
 	 * Order is important here to make sure any unity map requirements are
 	 * fulfilled. The unity mappings are created and written to the device
 	 * table during the iommu_init_pci() call.
@@ -3279,6 +3289,7 @@ static struct syscore amd_iommu_syscore = {
 static void __init free_iommu_resources(void)
 {
 	free_iommu_all();
+	amd_iommu_sva_fault_pgd_free();
 	amd_iommu_pdom_id_destroy();
 	free_pci_segments();
 }
