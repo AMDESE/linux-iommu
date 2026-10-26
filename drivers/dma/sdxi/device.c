@@ -96,10 +96,14 @@ static int sdxi_dev_start(struct sdxi_dev *sdxi)
 	return sdxi_fn_start(sdxi_to_dev(sdxi), sdxi->ctrl_regs);
 }
 
-int sdxi_fn_stop(struct device *dev, void __iomem *ctrl_regs)
+int sdxi_fn_stop_timeout(struct device *dev, void __iomem *ctrl_regs,
+			  unsigned int timeout_ms)
 {
-	unsigned long deadline = jiffies + msecs_to_jiffies(1000);
+	unsigned long deadline = jiffies + msecs_to_jiffies(timeout_ms);
 	bool reset_issued = false;
+
+	if (!timeout_ms)
+		return -EINVAL;
 
 	do {
 		enum sdxi_fn_gsv status = sdxi_fn_gsv(ctrl_regs);
@@ -109,6 +113,7 @@ int sdxi_fn_stop(struct device *dev, void __iomem *ctrl_regs)
 		switch (status) {
 		case SDXI_GSV_ACTIVE:
 			sdxi_write_fn_gsr(ctrl_regs, SDXI_GSRV_STOP_SF);
+			fsleep(1000);
 			break;
 		case SDXI_GSV_ERROR:
 			if (!reset_issued) {
@@ -139,6 +144,12 @@ int sdxi_fn_stop(struct device *dev, void __iomem *ctrl_regs)
 	dev_err(dev, "stop attempt timed out, current status %u\n",
 		sdxi_fn_gsv(ctrl_regs));
 	return -ETIMEDOUT;
+}
+EXPORT_SYMBOL_FOR_MODULES(sdxi_fn_stop_timeout, "sdxi-vfio-pci");
+
+int sdxi_fn_stop(struct device *dev, void __iomem *ctrl_regs)
+{
+	return sdxi_fn_stop_timeout(dev, ctrl_regs, 1000);
 }
 EXPORT_SYMBOL_FOR_MODULES(sdxi_fn_stop, "sdxi-vfio-pci");
 

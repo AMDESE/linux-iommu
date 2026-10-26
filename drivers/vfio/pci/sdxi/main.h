@@ -33,6 +33,11 @@
  *   post-stop status block, including read_idx (P2P-O8). Resume writes
  *   those bytes into guest RAM before P2V.
  *   RUNNING / RUNNING_P2P -> PRE_COPY / PRE_COPY_P2P : open save FD (no blob)
+ *   Pause drain (before vCPUs stop): VFIO_DEVICE_FEATURE_SDXI_PAUSE
+ *     forwards new doorbells in QEMU and calls sdxi_fn_stop_timeout()
+ *     while the guest can still answer PRI. This does not change VFIO
+ *     state. PRE_COPY -> PRE_COPY_P2P then finds the function already
+ *     stopped.
  *   PRE_COPY -> PRE_COPY_P2P : sdxi_fn_stop()
  *   PRE_COPY_P2P -> PRE_COPY : sdxi_start()
  *   PRE_COPY_P2P -> STOP_COPY : sdxi_save_regs(); finalize stream

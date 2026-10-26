@@ -107,6 +107,16 @@ static int sdxi_start(struct sdxi_vfio_pci_device *s)
 	int vf_id;
 	int ret;
 
+	/*
+	 * PRE_COPY -> RUNNING is also taken when a pause drain stopped the
+	 * function without leaving PRE_COPY. Already-active is the normal
+	 * cancel path and must not issue another P2V.
+	 */
+	if ((enum sdxi_fn_gsv)FIELD_GET(SDXI_MMIO_STS0_FN_GSV,
+				       sdxi_read64(s, SDXI_MMIO_STS0)) ==
+	    SDXI_GSV_ACTIVE)
+		return 0;
+
 	ret = sdxi_fn_start(sdxi_dev(s), s->bar0);
 	if (ret)
 		return ret;
@@ -652,10 +662,17 @@ sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 		return err ? ERR_PTR(err) : NULL;
 	}
 
-	if ((cur == VFIO_DEVICE_STATE_PRE_COPY &&
-	     next == VFIO_DEVICE_STATE_RUNNING) ||
-	    (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
-	     next == VFIO_DEVICE_STATE_RUNNING_P2P)) {
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY &&
+	    next == VFIO_DEVICE_STATE_RUNNING) {
+		err = sdxi_start(s);
+		if (err)
+			return ERR_PTR(err);
+		sdxi_save_close(s);
+		return NULL;
+	}
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
+	    next == VFIO_DEVICE_STATE_RUNNING_P2P) {
 		sdxi_save_close(s);
 		return NULL;
 	}
@@ -897,6 +914,64 @@ static ssize_t sdxi_vfio_read(struct vfio_device *core_vdev, char __user *buf,
 	return count;
 }
 
+static int sdxi_feature_pause(struct sdxi_vfio_pci_device *s, u32 flags,
+			      void __user *arg, size_t argsz)
+{
+	struct vfio_device_feature_sdxi_pause pause;
+	unsigned int timeout_ms;
+	int ret;
+
+	ret = vfio_check_feature(flags, argsz, VFIO_DEVICE_FEATURE_SET,
+				 sizeof(pause));
+	if (ret != 1)
+		return ret;
+	if (copy_from_user(&pause, arg, sizeof(pause)))
+		return -EFAULT;
+
+	guard(mutex)(&s->state_mutex);
+
+	if (pause.flags == VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME)
+		return sdxi_start(s);
+
+	if (pause.flags != VFIO_DEVICE_FEATURE_SDXI_PAUSE_DRAIN)
+		return -EINVAL;
+
+	/*
+	 * A reset leaves CTL0 as all-ones until the function answers again.
+	 * sdxi_stop() treats that as already stopped; do the same here so
+	 * the drain does not poll a dead mapping.
+	 */
+	if (sdxi_read64(s, SDXI_MMIO_CTL0) == ~0ULL)
+		return 0;
+
+	timeout_ms = pause.timeout_ms ?: 30000;
+	if (timeout_ms > 120000)
+		timeout_ms = 120000;
+
+	dev_info(sdxi_dev(s), "pause drain: waiting up to %u ms for GSV_STOP\n",
+		 timeout_ms);
+	ret = sdxi_fn_stop_timeout(sdxi_dev(s), s->bar0, timeout_ms);
+	if (ret)
+		dev_err(sdxi_dev(s), "pause drain failed: %d\n", ret);
+	else
+		dev_info(sdxi_dev(s), "pause drain: function stopped\n");
+	return ret;
+}
+
+static int sdxi_vfio_device_feature(struct vfio_device *device, u32 flags,
+				    void __user *arg, size_t argsz)
+{
+	struct sdxi_vfio_pci_device *s =
+		container_of(device, struct sdxi_vfio_pci_device, core_dev.vdev);
+
+	switch (flags & VFIO_DEVICE_FEATURE_MASK) {
+	case VFIO_DEVICE_FEATURE_SDXI_PAUSE:
+		return sdxi_feature_pause(s, flags, arg, argsz);
+	default:
+		return vfio_pci_core_ioctl_feature(device, flags, arg, argsz);
+	}
+}
+
 static const struct vfio_device_ops sdxi_vfio_ops = {
 	.name			= KBUILD_MODNAME,
 	.init			= sdxi_vfio_init_device,
@@ -905,7 +980,7 @@ static const struct vfio_device_ops sdxi_vfio_ops = {
 	.close_device		= sdxi_vfio_close_device,
 	.ioctl			= vfio_pci_core_ioctl,
 	.get_region_info_caps	= vfio_pci_ioctl_get_region_info,
-	.device_feature		= vfio_pci_core_ioctl_feature,
+	.device_feature		= sdxi_vfio_device_feature,
 	.read			= sdxi_vfio_read,
 	.write			= sdxi_vfio_write,
 	.mmap			= vfio_pci_core_mmap,
