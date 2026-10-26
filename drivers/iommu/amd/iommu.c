@@ -1949,11 +1949,11 @@ static int setup_gcr3_table(struct gcr3_tbl_info *gcr3_info,
 	int nid = iommu ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
 	int domid;
 
+	if (gcr3_info->gcr3_tbl)
+		return 0;
+
 	if (levels > amd_iommu_max_glx_val)
 		return -EINVAL;
-
-	if (gcr3_info->gcr3_tbl)
-		return -EBUSY;
 
 	/* Allocate per device domain ID */
 	domid = amd_iommu_pdom_id_alloc();
@@ -2247,7 +2247,7 @@ static void destroy_gcr3_table(struct iommu_dev_data *dev_data,
 	if (pdom_is_v2_pgtbl_mode(pdom))
 		update_gcr3(dev_data, 0, 0, false);
 
-	if (gcr3_info->gcr3_tbl == NULL)
+	if (gcr3_info->gcr3_tbl == NULL || gcr3_info->pasid_cnt)
 		return;
 
 	free_gcr3_table(gcr3_info);
@@ -2521,6 +2521,21 @@ static struct iommu_device *amd_iommu_probe_device(struct device *dev)
 	}
 
 	return iommu_dev;
+}
+
+static void amd_iommu_release_device(struct device *dev)
+{
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+
+	/*
+	 * A device that requires direct mappings is released to the identity
+	 * domain, whose DTE can still point at the GCR3 table. Keep the table
+	 * in that case; a later probe reuses it.
+	 */
+	if (dev_data->domain)
+		return;
+
+	destroy_gcr3_table(dev_data, NULL);
 }
 
 static struct iommu_group *amd_iommu_device_group(struct device *dev)
@@ -3227,6 +3242,7 @@ const struct iommu_ops amd_iommu_ops = {
 	.domain_alloc_paging_flags = amd_iommu_domain_alloc_paging_flags,
 	.domain_alloc_sva = amd_iommu_domain_alloc_sva,
 	.probe_device = amd_iommu_probe_device,
+	.release_device = amd_iommu_release_device,
 	.device_group = amd_iommu_device_group,
 	.get_resv_regions = amd_iommu_get_resv_regions,
 	.is_attach_deferred = amd_iommu_is_attach_deferred,
