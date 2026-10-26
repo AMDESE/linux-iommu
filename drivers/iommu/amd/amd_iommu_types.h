@@ -691,6 +691,8 @@ struct amd_iommu {
 
 	/* Base of the PPR log, if present */
 	u8 *ppr_log;
+	/* Serializes PPR log consumption */
+	struct mutex ppr_lock;
 
 	/* Name for PPR log interrupt */
 	unsigned char ppr_irq_name[16];

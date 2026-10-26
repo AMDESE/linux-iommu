@@ -203,9 +203,11 @@ out:
 	pci_dev_put(pdev);
 }
 
-void amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
+static void __amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
 {
 	u32 head, tail;
+
+	lockdep_assert_held(&iommu->ppr_lock);
 
 	head = readl(iommu->mmio_base + MMIO_PPR_HEAD_OFFSET);
 	tail = readl(iommu->mmio_base + MMIO_PPR_TAIL_OFFSET);
@@ -248,6 +250,31 @@ void amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
 		/* Handle PPR entry */
 		iommu_call_iopf_notifier(iommu, entry);
 	}
+}
+
+void amd_iommu_poll_ppr_log(struct amd_iommu *iommu)
+{
+	mutex_lock(&iommu->ppr_lock);
+	__amd_iommu_poll_ppr_log(iommu);
+	mutex_unlock(&iommu->ppr_lock);
+}
+
+/*
+ * Consume PPR requests already logged for this device, then flush the
+ * IOPF work they queued. The caller is releasing a PASID attach handle.
+ */
+void amd_iommu_drain_ppr_log(struct iommu_dev_data *dev_data)
+{
+	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
+
+	if (!iommu->ppr_log || !dev_data->ppr)
+		return;
+
+	mutex_lock(&iommu->ppr_lock);
+	__amd_iommu_poll_ppr_log(iommu);
+	mutex_unlock(&iommu->ppr_lock);
+
+	iopf_queue_flush_dev(dev_data->dev);
 }
 
 /**************************************************************
