@@ -2391,24 +2391,24 @@ static void detach_device(struct device *dev)
 	if (WARN_ON(!dev_data->domain))
 		goto out;
 
-	/* Remove IOPF handler */
+	/* Clear DTE and flush the entry */
+	spin_lock_irqsave(&domain->lock, flags);
+	dev_update_dte(dev_data, false);
+	amd_iommu_domain_flush_all(domain);
+	list_del(&dev_data->list);
+	spin_unlock_irqrestore(&domain->lock, flags);
+
+	/*
+	 * Stop new page requests, then finish the ones already logged.
+	 * Disable the PCI capabilities only after that, for every device.
+	 */
 	if (dev_data->ppr) {
-		iopf_queue_flush_dev(dev);
+		amd_iommu_drain_ppr_log(dev_data);
 		amd_iommu_iopf_remove_device(iommu, dev_data);
 	}
 
 	if (dev_is_pci(dev))
 		pdev_disable_caps(to_pci_dev(dev));
-
-	spin_lock_irqsave(&domain->lock, flags);
-
-	/* Clear DTE and flush the entry */
-	dev_update_dte(dev_data, false);
-
-	/* Flush IOTLB and wait for the flushes to finish */
-	amd_iommu_domain_flush_all(domain);
-	list_del(&dev_data->list);
-	spin_unlock_irqrestore(&domain->lock, flags);
 
 	/*
 	 * GCR3[0] belongs to the paging domain w/ v2 page table.
