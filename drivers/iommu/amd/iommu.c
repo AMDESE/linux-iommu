@@ -1949,11 +1949,11 @@ static int setup_gcr3_table(struct gcr3_tbl_info *gcr3_info,
 	int nid = iommu ? dev_to_node(&iommu->dev->dev) : NUMA_NO_NODE;
 	int domid;
 
+	if (gcr3_info->gcr3_tbl)
+		return 0;
+
 	if (levels > amd_iommu_max_glx_val)
 		return -EINVAL;
-
-	if (gcr3_info->gcr3_tbl)
-		return -EBUSY;
 
 	/* Allocate per device domain ID */
 	domid = amd_iommu_pdom_id_alloc();
@@ -2247,7 +2247,7 @@ static void destroy_gcr3_table(struct iommu_dev_data *dev_data,
 	if (pdom_is_v2_pgtbl_mode(pdom))
 		update_gcr3(dev_data, 0, 0, false);
 
-	if (gcr3_info->gcr3_tbl == NULL)
+	if (gcr3_info->gcr3_tbl == NULL || gcr3_info->pasid_cnt)
 		return;
 
 	free_gcr3_table(gcr3_info);
@@ -2722,6 +2722,7 @@ static void amd_iommu_release_device(struct device *dev)
 	}
 
 	WARN_ON(dev_data->domain);
+	destroy_gcr3_table(dev_data, NULL);
 
 	/*
 	 * We keep dev_data around for unplugged devices and reuse it when the
