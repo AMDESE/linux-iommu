@@ -131,6 +131,11 @@ struct vfio_pci_core_device {
 	bool			disable_vga:1;
 	/* Flags modified at runtime - dedicated storage unit */
 	bool			needs_reset;
+	/*
+	 * Function is mid soft-stop and will not complete an FLR. Skip the
+	 * function reset and the fallback bus reset.
+	 */
+	bool			skip_reset;
 	bool			pm_intx_masked;
 	bool			pm_runtime_engaged;
 	bool			sriov_active;

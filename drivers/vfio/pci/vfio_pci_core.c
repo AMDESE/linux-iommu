@@ -604,12 +604,22 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 	if (ret)
 		goto out_power;
 
-	/* If reset fails because of the device lock, fail this path entirely */
-	ret = pci_try_reset_function(pdev);
-	if (ret == -EAGAIN)
-		goto out_disable_device;
+	/*
+	 * A function waiting on a response the guest must still deliver
+	 * does not finish FLR. Leave it alone and remember that FLR exists
+	 * so a later close can reset once the wait is over.
+	 */
+	if (vdev->skip_reset) {
+		pci_info(pdev, "skipping reset while function soft-stop is in progress\n");
+		vdev->reset_works = true;
+	} else {
+		/* If reset fails because of the device lock, fail this path entirely */
+		ret = pci_try_reset_function(pdev);
+		if (ret == -EAGAIN)
+			goto out_disable_device;
 
-	vdev->reset_works = !ret;
+		vdev->reset_works = !ret;
+	}
 	pci_save_state(pdev);
 	vdev->pci_saved_state = pci_store_saved_state(pdev);
 	if (!vdev->pci_saved_state)
@@ -753,7 +763,13 @@ void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
 		kfree(dummy_res);
 	}
 
-	vdev->needs_reset = true;
+	/*
+	 * skip_reset means FLR and the bus-reset fallback both hang.
+	 * needs_reset stays clear so vfio_pci_dev_set_try_reset() is a no-op.
+	 */
+	vdev->needs_reset = !vdev->skip_reset;
+	if (vdev->skip_reset)
+		pci_info(pdev, "skipping reset while function soft-stop is in progress\n");
 
 	vfio_pci_zdev_close_device(vdev);
 
@@ -785,7 +801,7 @@ void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
 	 * We can not use the "try" reset interface here, which will
 	 * overwrite the previously restored configuration information.
 	 */
-	if (vdev->reset_works) {
+	if (!vdev->skip_reset && vdev->reset_works) {
 		bridge = pci_upstream_bridge(pdev);
 		if (bridge && !pci_dev_trylock(bridge))
 			goto out_restore_state;

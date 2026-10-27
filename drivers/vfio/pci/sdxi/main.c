@@ -912,6 +912,44 @@ static void sdxi_vfio_release_device(struct vfio_device *vdev)
 	vfio_pci_core_release_dev(vdev);
 }
 
+static bool sdxi_gsv_reset_hangs(u64 sts0)
+{
+	enum sdxi_fn_gsv gsv;
+
+	if (sts0 == ~0ULL)
+		return true;
+
+	gsv = (enum sdxi_fn_gsv)FIELD_GET(SDXI_MMIO_STS0_FN_GSV, sts0);
+	return gsv == SDXI_GSV_STOPG_SF || gsv == SDXI_GSV_STOPG_HD;
+}
+
+/*
+ * FLR does not finish while the function is soft-stopping, and a
+ * function that no longer answers MMIO will not finish it either.
+ * Peek before VFIO's open/close reset. A healthy function still resets.
+ */
+static bool sdxi_peek_reset_hangs(struct pci_dev *pdev)
+{
+	void __iomem *bar0;
+	u16 vendor;
+	bool hangs = false;
+
+	if (pci_read_config_word(pdev, PCI_VENDOR_ID, &vendor) ||
+	    vendor == (u16)~0)
+		return true;
+
+	if (pci_enable_device(pdev))
+		return false;
+
+	bar0 = pci_iomap(pdev, 0, 0);
+	if (bar0) {
+		hangs = sdxi_gsv_reset_hangs(ioread64(bar0 + SDXI_MMIO_STS0));
+		pci_iounmap(pdev, bar0);
+	}
+	pci_disable_device(pdev);
+	return hangs;
+}
+
 static int sdxi_vfio_open_device(struct vfio_device *vdev)
 {
 	struct sdxi_vfio_pci_device *s =
@@ -921,6 +959,7 @@ static int sdxi_vfio_open_device(struct vfio_device *vdev)
 	enum sdxi_fn_gsv gsv;
 	int err;
 
+	s->core_dev.skip_reset = sdxi_peek_reset_hangs(pdev);
 	err = vfio_pci_core_enable(&s->core_dev);
 	if (err)
 		return err;
@@ -955,6 +994,13 @@ static void sdxi_vfio_close_device(struct vfio_device *vdev)
 
 	scoped_guard(mutex, &s->state_mutex)
 		sdxi_drop_mig_files(s);
+
+	if (s->bar0) {
+		s->core_dev.skip_reset =
+			sdxi_gsv_reset_hangs(sdxi_read64(s, SDXI_MMIO_STS0));
+	} else {
+		s->core_dev.skip_reset = false;
+	}
 
 	pci_iounmap(s->core_dev.pdev, s->bar0);
 	s->bar0 = NULL;
