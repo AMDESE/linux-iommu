@@ -130,6 +130,15 @@ static int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
 	if (!is_pasid_enabled(dev_data))
 		return ret;
 
+	/*
+	 * A PRI-capable device must have the capability enabled before an
+	 * SVA PASID can fault through the IOMMU. A device without PRI is
+	 * left to its driver.
+	 */
+	if ((dev_data->flags & AMD_IOMMU_DEVICE_FLAG_PRI_SUP) &&
+	    !dev_data->pri_enabled)
+		return ret;
+
 	ret = amd_iommu_iopf_for_domain_replace(domain, old, dev);
 	if (ret)
 		return ret;
