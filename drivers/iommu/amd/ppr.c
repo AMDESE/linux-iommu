@@ -59,6 +59,21 @@ void __init amd_iommu_free_ppr_log(struct amd_iommu *iommu)
  */
 void amd_iommu_restart_ppr_log(struct amd_iommu *iommu)
 {
+	u32 status;
+
+	/*
+	 * Overflow stops the log. The IRQ thread has already consumed
+	 * the entries that were written. A group whose last page was
+	 * dropped is still on the partial list; discard it before the
+	 * log restarts and another group reuses the index.
+	 */
+	status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
+	if (status & MMIO_STATUS_PPR_RUN_MASK)
+		return;
+
+	if (iommu->iopf_queue)
+		iopf_queue_discard_partial(iommu->iopf_queue);
+
 	amd_iommu_restart_log(iommu, "PPR", CONTROL_PPRINT_EN,
 			      CONTROL_PPRLOG_EN, MMIO_STATUS_PPR_RUN_MASK,
 			      MMIO_STATUS_PPR_OVERFLOW_MASK);
