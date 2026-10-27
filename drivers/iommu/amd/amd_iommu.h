@@ -83,8 +83,8 @@ int __init amd_iommu_alloc_ppr_log(struct amd_iommu *iommu);
 void __init amd_iommu_free_ppr_log(struct amd_iommu *iommu);
 void amd_iommu_enable_ppr_log(struct amd_iommu *iommu);
 void amd_iommu_poll_ppr_log(struct amd_iommu *iommu);
-int amd_iommu_complete_ppr(struct device *dev, u32 pasid, int status, int tag,
-			   bool gn);
+int amd_iommu_complete_ppr(struct amd_iommu *iommu, u16 devid, u32 pasid,
+			   int status, int tag, bool gn);
 
 /*
  * This function flushes all internal caches of

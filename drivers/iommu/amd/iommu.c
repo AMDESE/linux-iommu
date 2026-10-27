@@ -872,7 +872,6 @@ out:
 static void amd_iommu_report_ppr_err(struct amd_iommu *iommu, volatile u32 *event,
 				     u16 devid, u64 address, int flags)
 {
-	struct pci_dev *pdev;
 	struct device *dev = iommu->iommu.dev;
 	u32 pasid = PPR_PASID(*((u64 *)event));
 	int tag = event[1] & 0x03FF;
@@ -887,20 +886,9 @@ static void amd_iommu_report_ppr_err(struct amd_iommu *iommu, volatile u32 *even
 	if (flags & EVENT_FLAG_PPR_RX)
 		return;
 
-	pdev = pci_get_domain_bus_and_slot(iommu->pci_seg->id, PCI_BUS_NUM(devid),
-					   devid & 0xff);
-	if (!pdev)
-		return;
-
-	if (!dev_iommu_priv_get(&pdev->dev)) {
-		pci_dev_put(pdev);
-		return;
-	}
-
 	gn = (flags & EVENT_FLAG_PPR_GN);
-
-	amd_iommu_complete_ppr(&pdev->dev, pasid, IOMMU_PAGE_RESP_FAILURE, tag, gn);
-	pci_dev_put(pdev);
+	amd_iommu_complete_ppr(iommu, devid, pasid, IOMMU_PAGE_RESP_FAILURE,
+			       tag, gn);
 }
 
 static void iommu_print_event(struct amd_iommu *iommu, void *__evt)
@@ -1850,17 +1838,12 @@ static void dev_flush_pasid_all(struct iommu_dev_data *dev_data,
 	amd_iommu_dev_flush_pasid_pages(dev_data, pasid, 0, U64_MAX);
 }
 
-int amd_iommu_complete_ppr(struct device *dev, u32 pasid, int status,
-			   int tag, bool gn)
+int amd_iommu_complete_ppr(struct amd_iommu *iommu, u16 devid, u32 pasid,
+			   int status, int tag, bool gn)
 {
-	struct iommu_dev_data *dev_data;
-	struct amd_iommu *iommu;
 	struct iommu_cmd cmd;
 
-	dev_data = dev_iommu_priv_get(dev);
-	iommu    = get_amd_iommu_from_dev(dev);
-
-	build_complete_ppr(&cmd, dev_data->devid, pasid, status, tag, gn);
+	build_complete_ppr(&cmd, devid, pasid, status, tag, gn);
 
 	return iommu_queue_command(iommu, &cmd);
 }
