@@ -116,10 +116,27 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 		return;
 	}
 
+	/*
+	 * Probe never attached this device, or it is no longer on the
+	 * bus. A kdump kernel can reuse a DTE that still has PPR set.
+	 * The log entry carries the DeviceID, so complete the group
+	 * here and do not touch dev_data.
+	 */
 	pdev = pci_get_domain_bus_and_slot(iommu->pci_seg->id,
 					   PCI_BUS_NUM(devid), devid & 0xff);
-	if (!pdev)
+	dev_data = pdev ? dev_iommu_priv_get(&pdev->dev) : NULL;
+	if (!dev_data) {
+		pr_info_ratelimited("PPR for unprobed device: 0x%x\n", devid);
+
+		if (PPR_TAG_LAST_PAGE(raw[0])) {
+			amd_iommu_complete_ppr(iommu, devid, PPR_PASID(raw[0]),
+					       IOMMU_PAGE_RESP_FAILURE,
+					       PPR_TAG(raw[0]),
+					       PPR_FLAGS(raw[0]) & PPR_FLAG_GN);
+		}
+		pci_dev_put(pdev);
 		return;
+	}
 
 	if (!ppr_is_valid(iommu, raw))
 		goto out;
@@ -136,7 +153,6 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 	 * PASID zero is used for requests from the I/O device without
 	 * a PASID
 	 */
-	dev_data = dev_iommu_priv_get(&pdev->dev);
 	if (event.fault.prm.pasid == 0 ||
 	    event.fault.prm.pasid >= dev_data->max_pasids) {
 		pr_info_ratelimited("Invalid PASID : 0x%x, device : 0x%x\n",
@@ -159,7 +175,7 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 
 out:
 	/* Nobody cared, abort */
-	amd_iommu_complete_ppr(&pdev->dev, PPR_PASID(raw[0]),
+	amd_iommu_complete_ppr(iommu, devid, PPR_PASID(raw[0]),
 			       IOMMU_PAGE_RESP_FAILURE, PPR_TAG(raw[0]),
 			       PPR_FLAGS(raw[0]) & PPR_FLAG_GN);
 	pci_dev_put(pdev);
@@ -245,9 +261,12 @@ void amd_iommu_iopf_uninit(struct amd_iommu *iommu)
 void amd_iommu_page_response(struct device *dev, struct iopf_fault *evt,
 			     struct iommu_page_response *resp)
 {
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	bool gn = evt->fault.prm.flags & IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
 
-	amd_iommu_complete_ppr(dev, resp->pasid, resp->code, resp->grpid, gn);
+	amd_iommu_complete_ppr(get_amd_iommu_from_dev_data(dev_data),
+			       dev_data->devid, resp->pasid, resp->code,
+			       resp->grpid, gn);
 }
 
 int amd_iommu_iopf_add_device(struct amd_iommu *iommu,
