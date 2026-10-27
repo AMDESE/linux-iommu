@@ -174,10 +174,17 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 	return;
 
 out:
-	/* Nobody cared, abort */
-	amd_iommu_complete_ppr(iommu, devid, PPR_PASID(raw[0]),
-			       IOMMU_PAGE_RESP_FAILURE, PPR_TAG(raw[0]),
-			       PPR_FLAGS(raw[0]) & PPR_FLAG_GN);
+	/*
+	 * A page-request group is completed once. Responding to a page
+	 * that is not the last one sends another completion for the same
+	 * group index, which can complete a newer group that reused it.
+	 */
+	if (PPR_TAG_LAST_PAGE(raw[0])) {
+		amd_iommu_complete_ppr(iommu, devid, PPR_PASID(raw[0]),
+				       IOMMU_PAGE_RESP_FAILURE,
+				       PPR_TAG(raw[0]),
+				       PPR_FLAGS(raw[0]) & PPR_FLAG_GN);
+	}
 	pci_dev_put(pdev);
 }
 
