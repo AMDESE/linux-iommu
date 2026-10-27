@@ -665,6 +665,32 @@ static void pdev_disable_caps(struct pci_dev *pdev)
 }
 
 /*
+ * DTE[IOTLB] advertises device-TLB support to the IOMMU. Program it from
+ * IOMMU and device capability, not from whether ATS is currently enabled,
+ * so the bit does not need to be reprogrammed when ATS is turned on or off.
+ */
+static void set_dte_iotlb(struct iommu_dev_data *dev_data,
+			  struct dev_table_entry *new)
+{
+	if (amd_iommu_iotlb_sup &&
+	    (dev_data->flags & AMD_IOMMU_DEVICE_FLAG_ATS_SUP))
+		new->data[1] |= DTE_FLAG_IOTLB;
+}
+
+/*
+ * DTE[PPR] advertises PRI support to the IOMMU, independent of whether a
+ * fault-capable domain is currently attached or PRI is currently enabled.
+ * A request can arrive before a handler-owning domain is attached; the
+ * core returns an invalid response until one is.
+ */
+static void set_dte_ppr(struct iommu_dev_data *dev_data,
+			 struct dev_table_entry *new)
+{
+	if (dev_data->flags & AMD_IOMMU_DEVICE_FLAG_PRI_SUP)
+		new->data[0] |= DTE_FLAG_PPR;
+}
+
+/*
  * This function checks if the driver got a valid device from the caller to
  * avoid dereferencing invalid pointers.
  */
@@ -2112,7 +2138,6 @@ static void set_dte_gcr3_table(struct iommu_dev_data *dev_data,
 	u64 gcr3 = iommu_virt_to_phys(gcr3_info->gcr3_tbl);
 
 	new->data[0] |= DTE_FLAG_TV |
-			(dev_data->ppr ? DTE_FLAG_PPR : 0) |
 			(pdom_is_v2_pgtbl_mode(dev_data->domain) ?  DTE_FLAG_GIOV : 0) |
 			DTE_FLAG_GV |
 			FIELD_PREP(DTE_GLX, gcr3_info->glx) |
@@ -2121,7 +2146,6 @@ static void set_dte_gcr3_table(struct iommu_dev_data *dev_data,
 
 	new->data[1] |= FIELD_PREP(DTE_DOMID_MASK, dev_data->gcr3_info.domid) |
 			FIELD_PREP(DTE_GCR3_30_15, gcr3 >> 15) |
-			(dev_data->ats_enabled ? DTE_FLAG_IOTLB : 0) |
 			FIELD_PREP(DTE_GCR3_51_31, gcr3 >> 31);
 
 	/* Guest page table can only support 4 and 5 levels  */
@@ -2129,6 +2153,9 @@ static void set_dte_gcr3_table(struct iommu_dev_data *dev_data,
 		new->data[2] |= FIELD_PREP(DTE_GPT_LEVEL_MASK, GUEST_PGTABLE_5_LEVEL);
 	else
 		new->data[2] |= FIELD_PREP(DTE_GPT_LEVEL_MASK, GUEST_PGTABLE_4_LEVEL);
+
+	set_dte_iotlb(dev_data, new);
+	set_dte_ppr(dev_data, new);
 }
 
 void amd_iommu_set_dte_v1(struct iommu_dev_data *dev_data,
@@ -2145,8 +2172,10 @@ void amd_iommu_set_dte_v1(struct iommu_dev_data *dev_data,
 			FIELD_PREP(DTE_HOST_TRP, host_pt_root >> 12) |
 			DTE_FLAG_IR | DTE_FLAG_IW;
 
-	new->data[1] |= FIELD_PREP(DTE_DOMID_MASK, domid) |
-			(dev_data->ats_enabled ? DTE_FLAG_IOTLB : 0);
+	new->data[1] |= FIELD_PREP(DTE_DOMID_MASK, domid);
+
+	set_dte_iotlb(dev_data, new);
+	set_dte_ppr(dev_data, new);
 }
 
 static void set_dte_v1(struct iommu_dev_data *dev_data,
@@ -2179,9 +2208,10 @@ static void set_dte_passthrough(struct iommu_dev_data *dev_data,
 {
 	new->data[0] |= DTE_FLAG_TV | DTE_FLAG_IR | DTE_FLAG_IW;
 
-	new->data[1] |= FIELD_PREP(DTE_DOMID_MASK, domain->id) |
-			(dev_data->ats_enabled ? DTE_FLAG_IOTLB : 0);
+	new->data[1] |= FIELD_PREP(DTE_DOMID_MASK, domain->id);
 
+	set_dte_iotlb(dev_data, new);
+	set_dte_ppr(dev_data, new);
 }
 
 static void set_dte_entry(struct amd_iommu *iommu,
