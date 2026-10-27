@@ -2387,38 +2387,31 @@ static int attach_device(struct device *dev,
 	if (dev_data->perfopt && pdom_is_in_pt_mode(domain))
 		goto skip_caps;
 
+	ret = amd_iommu_iopf_for_domain_replace(&domain->domain, NULL, dev);
+	if (ret) {
+		pdom_detach_iommu(iommu, domain);
+		goto out;
+	}
+
 	/*
 	 * A PASID-capable device already owns a table from probe. A paging
 	 * domain with v2 page table without PASID allocates one here.
 	 */
 	if (pdom_is_v2_pgtbl_mode(domain)) {
 		ret = alloc_gcr3_table(dev_data, iommu);
-		if (ret) {
-			pdom_detach_iommu(iommu, domain);
-			goto out;
-		}
+		if (ret)
+			goto out_iopf;
 
 		ret = set_default_gcr3_entry(dev_data, domain);
-		if (ret) {
-			pdom_detach_iommu(iommu, domain);
-			goto out;
-		}
+		if (ret)
+			goto out_iopf;
 	}
 
 	pdev = dev_is_pci(dev_data->dev) ? to_pci_dev(dev_data->dev) : NULL;
-	if (pdev && pdom_is_sva_capable(domain)) {
+	if (pdev && pdom_is_sva_capable(domain))
 		pdev_enable_caps(pdev);
-
-		/*
-		 * Device can continue to function even if IOPF
-		 * enablement failed. Hence in error path just
-		 * disable device PRI support.
-		 */
-		if (amd_iommu_iopf_add_device(iommu, dev_data))
-			pdev_disable_cap_pri(pdev);
-	} else if (pdev) {
+	else if (pdev)
 		pdev_enable_cap_ats(pdev);
-	}
 
 skip_caps:
 	/*
@@ -2431,7 +2424,11 @@ skip_caps:
 	list_add(&dev_data->list, &domain->dev_list);
 	dev_update_dte(dev_data, true);
 	spin_unlock_irqrestore(&domain->lock, flags);
+	goto out;
 
+out_iopf:
+	amd_iommu_iopf_for_domain_replace(NULL, &domain->domain, dev);
+	pdom_detach_iommu(iommu, domain);
 out:
 	mutex_unlock(&dev_data->mutex);
 
@@ -2467,15 +2464,20 @@ static void detach_device(struct device *dev)
 	spin_unlock_irqrestore(&domain->lock, flags);
 
 	/*
-	 * Stop new page requests, then finish the ones already logged.
-	 * Disable the PCI capabilities only after that, for every device.
+	 * Stop new page requests, then finish the ones already logged,
+	 * before this RID domain's IOPF reference is dropped. An SVA
+	 * PASID holds its own reference and stays registered.
 	 */
-	if (dev_data->ppr) {
+	if (dev_data->iopf_refcount)
 		amd_iommu_drain_ppr_log(dev_data);
-		amd_iommu_iopf_remove_device(iommu, dev_data);
-	}
 
-	if (dev_is_pci(dev))
+	amd_iommu_iopf_for_domain_replace(NULL, &domain->domain, dev);
+
+	/*
+	 * The queue is gone only when this was the last fault-capable
+	 * domain. Leave PRI enabled while another domain still owns it.
+	 */
+	if (!dev_data->iopf_refcount && dev_is_pci(dev))
 		pdev_disable_caps(to_pci_dev(dev));
 
 	/*
@@ -2609,6 +2611,7 @@ static void amd_iommu_release_device(struct device *dev)
 	if (dev_data->domain)
 		return;
 
+	WARN_ON(dev_data->iopf_refcount);
 	WARN_ON(dev_data->gcr3_info.pasid_cnt);
 
 	if (dev_data->gcr3_info.gcr3_tbl)

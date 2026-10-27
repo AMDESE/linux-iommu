@@ -824,7 +824,12 @@ struct iommu_dev_data {
 	u8 pasid_enabled:1;		  /* PASID state */
 	u8 pri_tlp      :1;		  /* PASID TLB required for
 					     PPR completions */
-	u8 ppr          :1;		  /* Enable device PPR support */
+	/*
+	 * Number of attached domains whose iopf_handler must receive requests
+	 * from this device. Nonzero means the device is registered with the
+	 * IOPF queue. Protected by the device's IOMMU group mutex.
+	 */
+	unsigned int iopf_refcount;
 	bool use_vapic;			  /* Enable device to use vapic mode */
 	bool defer_attach;
 	bool perfopt;			  /* Device is eligible for PerfOpt */

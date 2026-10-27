@@ -267,7 +267,7 @@ void amd_iommu_drain_ppr_log(struct iommu_dev_data *dev_data)
 {
 	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
 
-	if (!iommu->ppr_log || !dev_data->ppr)
+	if (!iommu->ppr_log || !dev_data->iopf_refcount)
 		return;
 
 	mutex_lock(&iommu->ppr_lock);
@@ -318,29 +318,96 @@ void amd_iommu_page_response(struct device *dev, struct iopf_fault *evt,
 			       resp->grpid, gn);
 }
 
-int amd_iommu_iopf_add_device(struct amd_iommu *iommu,
-			      struct iommu_dev_data *dev_data)
+int amd_iommu_enable_iopf(struct device *dev)
 {
-	int ret = 0;
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
+	int ret;
 
 	if (!dev_data->pri_enabled)
-		return ret;
+		return -ENODEV;
+
+	/* iopf_refcount is protected by the group mutex. */
+	iommu_group_mutex_assert(dev);
+	if (dev_data->iopf_refcount) {
+		dev_data->iopf_refcount++;
+		return 0;
+	}
 
 	if (!iommu->iopf_queue)
 		return -EINVAL;
 
-	ret = iopf_queue_add_device(iommu->iopf_queue, dev_data->dev);
+	ret = iopf_queue_add_device(iommu->iopf_queue, dev);
 	if (ret)
 		return ret;
 
-	dev_data->ppr = true;
+	dev_data->iopf_refcount = 1;
 	return 0;
 }
 
-/* Its assumed that caller has verified that device was added to iopf queue */
-void amd_iommu_iopf_remove_device(struct amd_iommu *iommu,
-				  struct iommu_dev_data *dev_data)
+void amd_iommu_disable_iopf(struct device *dev)
 {
-	iopf_queue_remove_device(iommu->iopf_queue, dev_data->dev);
-	dev_data->ppr = false;
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
+
+	/*
+	 * PRI may already have been disabled by RID detach. The reference
+	 * still owns the IOPF queue entry until the last fault-capable
+	 * domain is gone.
+	 */
+	if (WARN_ON(!dev_data->iopf_refcount))
+		return;
+
+	iommu_group_mutex_assert(dev);
+	if (--dev_data->iopf_refcount)
+		return;
+
+	iopf_queue_remove_device(iommu->iopf_queue, dev);
+}
+
+static int iopf_for_domain_set(struct iommu_domain *domain, struct device *dev)
+{
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+
+	if (!domain || !domain->iopf_handler)
+		return 0;
+
+	/*
+	 * A device without PRI may handle SVA faults itself. Any other
+	 * handler-owning domain needs the IOMMU page-request path.
+	 */
+	if (domain->type == IOMMU_DOMAIN_SVA &&
+	    !(dev_data->flags & AMD_IOMMU_DEVICE_FLAG_PRI_SUP))
+		return 0;
+
+	return amd_iommu_enable_iopf(dev);
+}
+
+static void iopf_for_domain_remove(struct iommu_domain *domain,
+				   struct device *dev)
+{
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+
+	if (!domain || !domain->iopf_handler)
+		return;
+
+	if (domain->type == IOMMU_DOMAIN_SVA &&
+	    !(dev_data->flags & AMD_IOMMU_DEVICE_FLAG_PRI_SUP))
+		return;
+
+	amd_iommu_disable_iopf(dev);
+}
+
+int amd_iommu_iopf_for_domain_replace(struct iommu_domain *new,
+				      struct iommu_domain *old,
+				      struct device *dev)
+{
+	int ret;
+
+	ret = iopf_for_domain_set(new, dev);
+	if (ret)
+		return ret;
+
+	iopf_for_domain_remove(old, dev);
+	return 0;
 }

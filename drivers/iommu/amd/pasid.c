@@ -130,10 +130,16 @@ static int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
 	if (!is_pasid_enabled(dev_data))
 		return ret;
 
+	ret = amd_iommu_iopf_for_domain_replace(domain, old, dev);
+	if (ret)
+		return ret;
+
 	/* Add PASID to protection domain pasid list */
 	pdom_dev_data = kzalloc_obj(*pdom_dev_data);
-	if (pdom_dev_data == NULL)
+	if (pdom_dev_data == NULL) {
+		amd_iommu_iopf_for_domain_replace(old, domain, dev);
 		return -ENOMEM;
+	}
 
 	pdom_dev_data->pasid = pasid;
 	pdom_dev_data->dev_data = dev_data;
@@ -145,12 +151,13 @@ static int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
 				 iommu_virt_to_phys(domain->mm->pgd));
 	if (ret) {
 		kfree(pdom_dev_data);
-		goto out_unlock;
+		spin_unlock_irqrestore(&sva_pdom->lock, flags);
+		amd_iommu_iopf_for_domain_replace(old, domain, dev);
+		return ret;
 	}
 
 	list_add(&pdom_dev_data->list, &sva_pdom->dev_data_list);
 
-out_unlock:
 	spin_unlock_irqrestore(&sva_pdom->lock, flags);
 	return ret;
 }
@@ -180,6 +187,7 @@ void amd_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 	 * and flush the work they queued.
 	 */
 	amd_iommu_drain_ppr_log(dev_data);
+	amd_iommu_iopf_for_domain_replace(NULL, domain, dev);
 }
 
 static void iommu_sva_domain_free(struct iommu_domain *domain)
