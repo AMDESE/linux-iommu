@@ -129,6 +129,14 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 	}
 
 	/*
+	 * PASID Stop Marker: L set, R and W clear (PCIe LRW = 0b100).
+	 * No response is expected.
+	 */
+	if (PPR_TAG_LAST_PAGE(raw[0]) &&
+	    !(PPR_FLAGS(raw[0]) & (PPR_FLAG_READ | PPR_FLAG_WRITE)))
+		return;
+
+	/*
 	 * Probe never attached this device, or it is no longer on the
 	 * bus. A kdump kernel can reuse a DTE that still has PPR set.
 	 * The log entry carries the DeviceID, so complete the group
