@@ -87,6 +87,11 @@ static inline u32 ppr_flag_to_fault_perm(u16 flag)
 		perm |= IOMMU_FAULT_PERM_READ;
 	if (flag & PPR_FLAG_WRITE)
 		perm |= IOMMU_FAULT_PERM_WRITE;
+
+	/* Execute and privileged mode are carried in the PASID prefix. */
+	if (!(flag & PPR_FLAG_GN))
+		return perm;
+
 	if (flag & PPR_FLAG_EXEC)
 		perm |= IOMMU_FAULT_PERM_EXEC;
 	if (!(flag & PPR_FLAG_US))
@@ -99,14 +104,6 @@ static bool ppr_is_valid(struct amd_iommu *iommu, u64 *raw)
 {
 	struct device *dev = iommu->iommu.dev;
 	u16 devid = PPR_DEVID(raw[0]);
-
-	if (!(PPR_FLAGS(raw[0]) & PPR_FLAG_GN)) {
-		dev_dbg(dev, "PPR logged [Request ignored due to GN=0 (device=%04x:%02x:%02x.%x "
-			"pasid=0x%05llx address=0x%llx flags=0x%04llx tag=0x%03llx]\n",
-			iommu->pci_seg->id, PCI_BUS_NUM(devid), PCI_SLOT(devid), PCI_FUNC(devid),
-			PPR_PASID(raw[0]), raw[1], PPR_FLAGS(raw[0]), PPR_TAG(raw[0]));
-		return false;
-	}
 
 	if (PPR_FLAGS(raw[0]) & PPR_FLAG_RVSD) {
 		dev_dbg(dev, "PPR logged [Invalid request format (device=%04x:%02x:%02x.%x "
@@ -161,24 +158,27 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 	event.fault.type = IOMMU_FAULT_PAGE_REQ;
 	event.fault.prm.perm = ppr_flag_to_fault_perm(PPR_FLAGS(raw[0]));
 	event.fault.prm.addr = (u64)(raw[1] & PAGE_MASK);
-	event.fault.prm.pasid = PPR_PASID(raw[0]);
 	event.fault.prm.grpid = PPR_TAG(raw[0]);
 
 	/*
-	 * PASID zero is used for requests from the I/O device without
-	 * a PASID
+	 * GN=0: the request had no PASID prefix and the log's PASID field
+	 * is not meaningful. It is reported against the RID domain.
 	 */
-	if (event.fault.prm.pasid == 0 ||
-	    event.fault.prm.pasid >= dev_data->max_pasids) {
-		pr_info_ratelimited("Invalid PASID : 0x%x, device : 0x%x\n",
-				    event.fault.prm.pasid, dev_data->devid);
-		goto out;
-	}
-
-	/* PPR_FLAG_GN means this request carries a valid PASID. */
 	if (PPR_FLAGS(raw[0]) & PPR_FLAG_GN) {
+		event.fault.prm.pasid = PPR_PASID(raw[0]);
+
+		/* PASID zero is used for requests without a PASID */
+		if (event.fault.prm.pasid == 0 ||
+		    event.fault.prm.pasid >= dev_data->max_pasids) {
+			pr_info_ratelimited("Invalid PASID : 0x%x, device : 0x%x\n",
+					    event.fault.prm.pasid, dev_data->devid);
+			goto out;
+		}
+
 		event.fault.prm.flags |= IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID;
 		event.fault.prm.flags |= IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
+	} else {
+		event.fault.prm.pasid = IOMMU_NO_PASID;
 	}
 	if (PPR_TAG_LAST_PAGE(raw[0]))
 		event.fault.prm.flags |= IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE;
