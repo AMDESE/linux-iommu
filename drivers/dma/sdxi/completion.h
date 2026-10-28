@@ -17,7 +17,7 @@
 struct sdxi_completion;
 struct sdxi_completion *sdxi_completion_alloc(struct sdxi_dev *sdxi);
 void sdxi_completion_free(struct sdxi_completion *sc);
-void sdxi_completion_poll(const struct sdxi_completion *sc);
+int sdxi_completion_poll(const struct sdxi_completion *sc);
 int sdxi_completion_wait_timeout(const struct sdxi_completion *sc,
 				 unsigned int timeout_ms);
 int sdxi_completion_wait_timeout_nosignal(const struct sdxi_completion *sc,
