@@ -1,0 +1,104 @@
+VFIO SDXI live migration
+========================
+
+SDXI keeps descriptor rings and context state in guest memory. The
+vfio-pci variant driver saves and restores the writable BAR0 control
+registers, stops the function before the VM is paused, and asks the
+PF to restart the VF's contexts on resume.
+
+The guest admin context is stopped with the rest of the function.
+Restart starts at context 0, issued by the PF, so the guest can
+submit admin descriptors again after resume.
+
+read_idx is a device store in guest RAM. Precopy can miss the write
+that retires the last descriptor, and setting the stage-2 dirty bit
+after GSV_STOP did not put that page in the final RAM copy. The
+STOP_COPY blob carries each context-status block and writes it back
+before the contexts are restarted.
+
+An outstanding page request can be answered only while the guest
+still runs. VFIO_DEVICE_FEATURE_SDXI_PAUSE soft-stops the function
+on a caller-supplied timeout without a migration state change and
+without resetting the device. While that stop is in progress, VFIO
+skips the function reset that open and close would otherwise issue,
+because that reset does not finish.
+
+Base driver
+-----------
+1. dmaengine: sdxi: disable SR-IOV on remove
+
+   pci_disable_sriov() on remove, so VFs are not left enabled after
+   the PF driver is unbound.
+
+2. dmaengine: sdxi: bound the completion poll
+
+   A function that has stopped never completes the descriptor.
+   Give up after 5 seconds instead of spinning. The DMA engine
+   synchronize path treats that timeout as "not complete".
+
+3. dmaengine: sdxi: Hoist MMIO definitions to common header
+
+4. dmaengine: sdxi: export VF context restart for the vfio variant driver
+
+   P2V CXT_START_RS, including the VF flag and vf_num, so the PF
+   admin context can target a VF's contexts.
+
+5. dmaengine: sdxi: Generalize and export sdxi_dev_{start,stop}
+
+   The helpers take a struct device and an MMIO base so the VFIO
+   driver can use them.
+
+Variant driver
+--------------
+6. vfio/pci: add sdxi variant driver
+
+   STOP_COPY. Restore rejects a short blob before it writes MMIO.
+   Context restart starts at 0. Config accesses that the core
+   reports as -EOPNOTSUPP are dropped writes and zero reads, which
+   is what the guest expects for registers such as MSI-X Message
+   Control.
+
+7. vfio/pci/sdxi: add P2P and PRE_COPY migration support
+
+   RUNNING_P2P stops the function. Precopy leaves it running and
+   sends an empty stream until STOP_COPY writes the MMIO blob.
+   This is what QEMU needs for more than one SDXI VF.
+
+read_idx
+--------
+8. vfio/pci/sdxi: save context status in the migration blob
+
+   Walk guest memory for the context-status blocks, save them at
+   STOP_COPY, and write them back before P2V restart. The same walk
+   is what a stop dump would use. The IOTLB is flushed before the
+   harvest so other device writes are visible.
+
+Pause
+-----
+9. vfio/pci/sdxi: add a pause-drain device feature
+
+   VFIO_DEVICE_FEATURE_SDXI_PAUSE, feature index 13. DRAIN waits
+   for GSV_STOP. RESUME starts the function again after a failed
+   drain. PRE_COPY to RUNNING also starts a function that a drain
+   had already stopped.
+
+10. vfio/pci: skip function reset while an SDXI soft-stop is in progress
+
+    Open and close issue an FLR while the function is still
+    stopping. Remember that on the VFIO PCI device and skip the
+    function reset and the bus-reset fallback.
+
+Test
+----
+11. tools/testing/sdxi-vfio-migration: add migration harness
+
+    Exercises STOP_COPY, the P2P and PRE_COPY state machines, and
+    the context-status blob against a VF bound to sdxi-vfio-pci,
+    without a VMM. Build it with make. The binary is not in the tree.
+
+Not in this series
+------------------
+DMA_PRIVATE for in-guest dmatest, and the generated
+viommu-sdxi-migration.config, stay out. The config-space log level
+for a missing read/write handler is pr_debug in the PASID WIP,
+where those messages were added.
