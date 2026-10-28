@@ -26,7 +26,9 @@ config SDXI_VFIO_PCI
 	  PRE_COPY migration (VFIO_MIGRATION_PRE_COPY) keeps the function
 	  active during the precopy phase; guest RAM dirtiness is tracked
 	  via IOMMU dirty pages. The device migration stream carries the
-	  MMIO blob only at STOP_COPY.
+	  MMIO blob only at STOP_COPY. That blob includes each context's
+	  post-stop status block. Resume writes those bytes into guest
+	  RAM before the function starts again.
 
 	  To compile this driver as a module, choose M here; the module
 	  will be called sdxi-vfio-pci.

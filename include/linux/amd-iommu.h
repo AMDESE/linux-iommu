@@ -97,4 +97,27 @@ static inline int amd_iommu_snp_disable(void) { return 0; }
 static inline bool amd_iommu_sev_tio_supported(void) { return false; }
 #endif
 
+struct device;
+
+#if IS_ENABLED(CONFIG_AMD_IOMMU)
+int amd_iommu_read_guest_dma(struct device *dev, u32 pasid,
+			     dma_addr_t iova, void *buf, size_t len);
+int amd_iommu_write_guest_dma(struct device *dev, u32 pasid,
+			      dma_addr_t iova, const void *buf, size_t len);
+#else
+static inline int amd_iommu_read_guest_dma(struct device *dev, u32 pasid,
+					   dma_addr_t iova, void *buf,
+					   size_t len)
+{
+	return -ENODEV;
+}
+
+static inline int amd_iommu_write_guest_dma(struct device *dev, u32 pasid,
+					    dma_addr_t iova, const void *buf,
+					    size_t len)
+{
+	return -ENODEV;
+}
+#endif
+
 #endif /* _ASM_X86_AMD_IOMMU_H */

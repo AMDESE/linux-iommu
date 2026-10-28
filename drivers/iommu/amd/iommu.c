@@ -2844,8 +2844,7 @@ const struct iommu_domain_ops amdv1_ops = {
  * bits into memory before the walk. The walk's own IOTLB sync runs afterward
  * and only covers PTEs whose in-memory D bit was already set, so it cannot
  * see a store that is still cached. That drops device writes from the
- * migration dirty bitmap, including the SDXI context-status update made
- * while soft-stop drains.
+ * migration dirty bitmap.
  */
 static int amd_iommu_read_and_clear_dirty(struct iommu_domain *domain,
 					  unsigned long iova, size_t size,
