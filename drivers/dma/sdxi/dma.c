@@ -383,7 +383,10 @@ static void sdxi_dma_synchronize(struct dma_chan *dma_chan)
 	sdxi_desc_set_fence(nop);
 	sdxi_desc_make_valid(nop);
 	sdxi_cxt_push_doorbell(cxt, sdxi_ring_resv_dbval(&resv));
-	sdxi_completion_poll(sc);
+	if (sdxi_completion_poll(sc)) {
+		sdxi_completion_free(sc);
+		return;
+	}
 	sdxi_completion_free(sc);
 
 	vchan_synchronize(to_virt_chan(dma_chan));

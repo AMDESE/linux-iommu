@@ -9,7 +9,16 @@
 #include <linux/dma-mapping.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
+#include <linux/ktime.h>
 #include <linux/sched/signal.h>
+
+/*
+ * Upper bound on how long to busy-wait for a descriptor completion
+ * before giving up. A healthy completion lands in microseconds; a
+ * non-completion means the device errored (e.g. "Function stopped")
+ * and will never signal, so bound it rather than spin forever.
+ */
+#define SDXI_COMPLETION_TIMEOUT_MS 5000
 
 #include "completion.h"
 #include "descriptor.h"
@@ -55,10 +64,34 @@ void sdxi_completion_free(struct sdxi_completion *sc)
 	kfree(sc);
 }
 
-void sdxi_completion_poll(const struct sdxi_completion *sc)
+int sdxi_completion_poll(const struct sdxi_completion *sc)
 {
-	while (READ_ONCE(sc->cst_blk->signal) != 0)
+	ktime_t timeout = ktime_add_ms(ktime_get(), SDXI_COMPLETION_TIMEOUT_MS);
+
+	while (READ_ONCE(sc->cst_blk->signal) != 0) {
+		if (ktime_after(ktime_get(), timeout)) {
+			dev_err(sdxi_to_dev(sc->sdxi),
+				"completion poll timed out after %u ms (flags=0x%x)\n",
+				SDXI_COMPLETION_TIMEOUT_MS,
+				le32_to_cpu(sc->cst_blk->flags));
+			return -ETIMEDOUT;
+		}
 		cpu_relax();
+	}
+
+	/*
+	 * signal == 0 means the device wrote the completion. The ER bit
+	 * is a completed-with-error, not a success; callers of this poll
+	 * do not inspect it themselves.
+	 */
+	if (sdxi_completion_errored(sc)) {
+		dev_err(sdxi_to_dev(sc->sdxi),
+			"completion error (flags=0x%x)\n",
+			sdxi_completion_flags(sc));
+		return -EIO;
+	}
+
+	return 0;
 }
 
 static int sdxi_completion_wait_timeout_common(const struct sdxi_completion *sc,

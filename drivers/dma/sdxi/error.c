@@ -191,6 +191,7 @@ static bool sdxi_decode_err(struct sdxi_dev *sdxi,
 }
 
 static void sdxi_print_err(struct sdxi_dev *sdxi, u64 err_rd,
+			   const struct sdxi_errlog_hd_ent *raw,
 			   const struct errlog_entry *ent)
 {
 	sdxi_err(sdxi, "error log entry[%zu], MMIO_ERR_RD=%#llx:\n",
@@ -207,6 +208,9 @@ static void sdxi_print_err(struct sdxi_dev *sdxi, u64 err_rd,
 	if (ent->div)
 		sdxi_err(sdxi, "  dsc_index: %#llx\n", ent->dsc_index);
 	sdxi_err(sdxi, "  err_class: %#x\n", ent->err_class);
+	sdxi_err(sdxi, "  vendor: %#x %#x %#x %#x\n",
+		 le32_to_cpu(raw->vendor[0]), le32_to_cpu(raw->vendor[1]),
+		 le32_to_cpu(raw->vendor[2]), le32_to_cpu(raw->vendor[3]));
 }
 
 static void sdxi_handle_cxt_err(struct sdxi_dev *sdxi,
@@ -307,7 +311,7 @@ static irqreturn_t sdxi_irq_thread(int irq, void *data)
 		 */
 		memcpy(&raw, &sdxi->err_log[index], sizeof(raw));
 		if (sdxi_decode_err(sdxi, &raw, &ent)) {
-			sdxi_print_err(sdxi, read_index, &ent);
+			sdxi_print_err(sdxi, read_index, &raw, &ent);
 			sdxi_handle_cxt_err(sdxi, &ent);
 		}
 
