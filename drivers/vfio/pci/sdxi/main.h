@@ -26,10 +26,12 @@
  *   RUNNING_P2P    -> STOP        : no-op (already GSV_STOP)
  *   STOP           -> RUNNING_P2P : no-op (already GSV_STOP)
  *
- * PRE_COPY (Phase 1b — implemented; P2P-O3–O5)
+ * PRE_COPY (Phase 1b — implemented; P2P-O3–O5, P2P-O8)
  *   Guest RAM dirtiness: IOMMU dirty pages (no log_ops). Device stream empty
  *   until STOP_COPY; sdxi_save_regs() runs at PRE_COPY_P2P -> STOP_COPY or
- *   STOP -> STOP_COPY (non-precopy path).
+ *   STOP -> STOP_COPY (non-precopy path). The blob carries each context's
+ *   post-stop status block, including read_idx (P2P-O8). Resume writes
+ *   those bytes into guest RAM before P2V.
  *   RUNNING / RUNNING_P2P -> PRE_COPY / PRE_COPY_P2P : open save FD (no blob)
  *   PRE_COPY -> PRE_COPY_P2P : sdxi_fn_stop()
  *   PRE_COPY_P2P -> PRE_COPY : sdxi_start()
@@ -62,7 +64,13 @@
 #include <linux/vfio_pci_core.h>
 
 #define SDXI_MIG_MAGIC		0x49584453	/* "SDXI" */
-#define SDXI_MIG_VERSION	1
+#define SDXI_MIG_VERSION	2
+
+/* Device DMA address of a context-status block, then the 16 status bytes. */
+struct sdxi_mig_cxt_sts {
+	__le64 dma;
+	__u8 sts[16];
+} __packed;
 
 struct sdxi_mig_blob {
 	__le32 magic;
@@ -77,6 +85,9 @@ struct sdxi_mig_blob {
 	__le64 err_ctl;
 	__le64 err_wrt;
 	__le64 err_rd;
+	__le32 nr_cxt;
+	__le32 nr_pad;
+	struct sdxi_mig_cxt_sts cxt[];
 } __packed;
 
 struct sdxi_mig_file {
@@ -84,7 +95,10 @@ struct sdxi_mig_file {
 	struct sdxi_vfio_pci_device	*sdev;
 	struct mutex			 lock;
 	loff_t			 pos;
-	struct sdxi_mig_blob	 blob;
+	struct sdxi_mig_blob	*blob;
+	size_t			 blob_len;
+	size_t			 blob_cap;
+	u32			 max_cxts;
 	bool			 valid;
 	bool			 precopy;
 	bool			 finalized;

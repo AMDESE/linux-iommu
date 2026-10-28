@@ -10,6 +10,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/amd-iommu.h>
 #include <linux/anon_inodes.h>
 #include <linux/bitfield.h>
 #include <linux/file.h>
@@ -21,10 +22,14 @@
 #include <linux/overflow.h>
 #include <linux/pci.h>
 #include <linux/sdxi.h>
+#include <linux/slab.h>
+#include <linux/types.h>
 #include <linux/uaccess.h>
+#include <linux/vmalloc.h>
 #include <linux/vfio.h>
 #include <linux/vfio_pci_core.h>
 
+#include "hw.h"
 #include "main.h"
 
 #define sdxi_dev(s)	(&(s)->core_dev.pdev->dev)
@@ -54,6 +59,25 @@ static void sdxi_report_fault_state(struct sdxi_vfio_pci_device *s)
 		 (err_sts & SDXI_MMIO_ERR_STS_OVF_BIT) ? " [overflow]" : "",
 		 (err_sts & SDXI_MMIO_ERR_STS_STS_BIT) ? " [log non-empty]" : "");
 }
+
+/*
+ * Context control and status live in the kernel dma pool (L1.KA is set),
+ * so the device translates them with the function PASID, or GCR3[0] when
+ * that PASID is not valid. A context's own user PASID is for payload DMA.
+ */
+static u32 sdxi_dma_pasid(struct sdxi_vfio_pci_device *s)
+{
+	u64 ctl0 = sdxi_read64(s, SDXI_MMIO_CTL0);
+
+	if (!(ctl0 & SDXI_MMIO_CTL0_FN_PASID_VL))
+		return 0;
+
+	return FIELD_GET(SDXI_MMIO_CTL0_FN_PASID, ctl0);
+}
+
+/* Pointer fields store the address shifted down by the mask's low bit. */
+#define sdxi_field_ptr(raw, mask) \
+	((dma_addr_t)FIELD_GET((mask), (raw)) << __bf_shf(mask))
 
 static int sdxi_stop(struct sdxi_vfio_pci_device *s)
 {
@@ -104,7 +128,7 @@ static int sdxi_start(struct sdxi_vfio_pci_device *s)
 	 * PF admin context at CXTV_ERROR, breaking later restarts (MIG-D3).
 	 */
 	cxt_l2 = sdxi_read64(s, SDXI_MMIO_CXT_L2);
-	if (!FIELD_GET(SDXI_MMIO_CXT_L2_PTR, cxt_l2)) {
+	if (!sdxi_field_ptr(cxt_l2, SDXI_MMIO_CXT_L2_PTR)) {
 		dev_dbg(sdxi_dev(s),
 			"start: no context table, skipping P2V restart\n");
 		return 0;
@@ -140,6 +164,156 @@ static int sdxi_start(struct sdxi_vfio_pci_device *s)
 	return ret;
 }
 
+static int sdxi_snap_one_context(struct device *dev, u32 pasid,
+				 dma_addr_t ctl_dma, struct sdxi_mig_blob *b,
+				 u32 max_cxts)
+{
+	struct sdxi_mig_cxt_sts *rec;
+	struct sdxi_cxt_ctl ctl;
+	struct sdxi_cxt_sts sts;
+	dma_addr_t sts_dma;
+	u32 nr;
+	int ret;
+
+	static_assert(sizeof(sts) == sizeof(rec->sts));
+
+	ret = amd_iommu_read_guest_dma(dev, pasid, ctl_dma, &ctl, sizeof(ctl));
+	if (ret)
+		return ret;
+
+	sts_dma = sdxi_field_ptr(le64_to_cpu(ctl.cxt_sts_ptr),
+				 SDXI_CXT_CTL_CXT_STS_PTR);
+	if (!sts_dma)
+		return 0;
+
+	ret = amd_iommu_read_guest_dma(dev, pasid, sts_dma, &sts, sizeof(sts));
+	if (ret)
+		return ret;
+
+	nr = le32_to_cpu(b->nr_cxt);
+	if (nr >= max_cxts)
+		return -ENOSPC;
+
+	rec = &b->cxt[nr];
+	rec->dma = cpu_to_le64(sts_dma);
+	memcpy(rec->sts, &sts, sizeof(sts));
+	b->nr_cxt = cpu_to_le32(nr + 1);
+
+	dev_info(dev,
+		 "context-status save: dma %pad read_index %llu state %#x\n",
+		 &sts_dma, le64_to_cpu(sts.read_index), sts.state);
+	return 0;
+}
+
+static int sdxi_snap_l1(struct device *dev, u32 pasid, dma_addr_t l1_dma,
+			u8 *l1_buf, struct sdxi_mig_blob *b, u32 max_cxts)
+{
+	struct sdxi_cxt_l1_ent *ents = (struct sdxi_cxt_l1_ent *)l1_buf;
+	int i, ret;
+
+	ret = amd_iommu_read_guest_dma(dev, pasid, l1_dma, l1_buf, PAGE_SIZE);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < SDXI_L1_TABLE_ENTRIES; i++) {
+		u64 raw = le64_to_cpu(ents[i].cxt_ctl_ptr);
+		dma_addr_t ctl;
+
+		if (!(raw & SDXI_CXT_L1_ENT_VL))
+			continue;
+
+		ctl = sdxi_field_ptr(raw, SDXI_CXT_L1_ENT_CXT_CTL_PTR);
+		ret = sdxi_snap_one_context(dev, pasid, ctl, b, max_cxts);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+/*
+ * Copy every valid context-status block into the blob. The function is
+ * already at GSV_STOP, so read_idx is the post-stop value. A miss fails
+ * the save: resuming without that block would keep the precopy page.
+ */
+static int sdxi_snapshot_context_status(struct sdxi_vfio_pci_device *s,
+					struct sdxi_mig_blob *b, u32 max_cxts)
+{
+	struct device *dev = sdxi_dev(s);
+	u32 pasid = sdxi_dma_pasid(s);
+	u64 cxt_l2 = sdxi_read64(s, SDXI_MMIO_CXT_L2);
+	dma_addr_t l2_dma = sdxi_field_ptr(cxt_l2, SDXI_MMIO_CXT_L2_PTR);
+	struct sdxi_cxt_l2_ent *l2;
+	u8 *l2_buf, *l1_buf;
+	int i, ret = 0;
+
+	b->nr_cxt = 0;
+	if (!l2_dma)
+		return 0;
+
+	l2_buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	l1_buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!l2_buf || !l1_buf) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = amd_iommu_read_guest_dma(dev, pasid, l2_dma, l2_buf, PAGE_SIZE);
+	if (ret)
+		goto out;
+
+	l2 = (struct sdxi_cxt_l2_ent *)l2_buf;
+	for (i = 0; i < SDXI_L2_TABLE_ENTRIES; i++) {
+		u64 raw = le64_to_cpu(l2[i].lv01_ptr);
+		dma_addr_t l1_dma;
+
+		if (!(raw & SDXI_CXT_L2_ENT_VL))
+			continue;
+
+		l1_dma = sdxi_field_ptr(raw, SDXI_CXT_L2_ENT_LV01_PTR);
+		ret = sdxi_snap_l1(dev, pasid, l1_dma, l1_buf, b, max_cxts);
+		if (ret)
+			goto out;
+	}
+
+	dev_info(dev, "context-status save: %u block(s) (pasid %u)\n",
+		 le32_to_cpu(b->nr_cxt), pasid);
+out:
+	kfree(l2_buf);
+	kfree(l1_buf);
+	return ret;
+}
+
+static int sdxi_restore_context_status(struct sdxi_vfio_pci_device *s,
+				       const struct sdxi_mig_blob *b)
+{
+	struct device *dev = sdxi_dev(s);
+	u32 pasid = sdxi_dma_pasid(s);
+	u32 nr = le32_to_cpu(b->nr_cxt);
+	u32 i;
+	int ret;
+
+	for (i = 0; i < nr; i++) {
+		const struct sdxi_mig_cxt_sts *rec = &b->cxt[i];
+		dma_addr_t dma = le64_to_cpu(rec->dma);
+
+		if (!dma)
+			return -EINVAL;
+
+		ret = amd_iommu_write_guest_dma(dev, pasid, dma, rec->sts,
+						sizeof(rec->sts));
+		if (ret) {
+			dev_err(dev, "context-status restore: dma %pad: %pe\n",
+				&dma, ERR_PTR(ret));
+			return ret;
+		}
+	}
+
+	if (nr)
+		dev_info(dev, "context-status restore: wrote %u block(s) (pasid %u)\n",
+			 nr, pasid);
+	return 0;
+}
+
 static void sdxi_save_regs(struct sdxi_vfio_pci_device *s,
 			   struct sdxi_mig_blob *b)
 {
@@ -156,6 +330,8 @@ static void sdxi_save_regs(struct sdxi_vfio_pci_device *s,
 	b->err_ctl = cpu_to_le64(sdxi_read64(s, SDXI_MMIO_ERR_CTL));
 	b->err_wrt = cpu_to_le64(sdxi_read64(s, SDXI_MMIO_ERR_WRT));
 	b->err_rd  = cpu_to_le64(sdxi_read64(s, SDXI_MMIO_ERR_RD));
+	b->nr_cxt  = 0;
+	b->nr_pad  = 0;
 }
 
 static int sdxi_restore_regs(struct sdxi_vfio_pci_device *s,
@@ -219,7 +395,7 @@ static int sdxi_restore_regs(struct sdxi_vfio_pci_device *s,
 	sdxi_write64(s, SDXI_MMIO_ERR_CTL, le64_to_cpu(b->err_ctl));
 	sdxi_write64(s, SDXI_MMIO_CTL0,    le64_to_cpu(b->ctl0));
 
-	return 0;
+	return sdxi_restore_context_status(s, b);
 }
 
 static int sdxi_mig_release(struct inode *inode, struct file *filp)
@@ -227,20 +403,24 @@ static int sdxi_mig_release(struct inode *inode, struct file *filp)
 	struct sdxi_mig_file *m = filp->private_data;
 
 	mutex_destroy(&m->lock);
+	kvfree(m->blob);
 	kfree(m);
 	return 0;
 }
 
 /*
- * copy_{to,from}_user() may fault and take mmap_lock. Snapshot under
- * m->lock and copy only after it is released.
+ * copy_{to,from}_user() may fault and take mmap_lock. A BAR fault takes
+ * memory_lock under mmap_lock, and VFIO_DEVICE_RESET takes state_mutex from
+ * reset_done() while holding memory_lock. Holding m->lock or state_mutex
+ * across the user copy closes an mmap_lock cycle, so snapshot under the
+ * mutex and copy only after it is released.
  */
 static ssize_t sdxi_save_read(struct file *filp, char __user *buf,
 			      size_t len, loff_t *pos)
 {
 	struct sdxi_mig_file *m = filp->private_data;
-	u8 bounce[sizeof(struct sdxi_mig_blob)];
 	unsigned long missed;
+	void *bounce;
 	loff_t off;
 	size_t n;
 
@@ -259,17 +439,33 @@ static ssize_t sdxi_save_read(struct file *filp, char __user *buf,
 		mutex_unlock(&m->lock);
 		return -EINVAL;
 	}
-	if (!len || (size_t)m->pos >= sizeof(m->blob)) {
+	if (!len || (size_t)m->pos >= m->blob_len) {
 		mutex_unlock(&m->lock);
 		return 0;
 	}
-	n = min_t(size_t, len, sizeof(m->blob) - (size_t)m->pos);
+	n = min_t(size_t, len, m->blob_len - (size_t)m->pos);
 	off = m->pos;
-	memcpy(bounce, (u8 *)&m->blob + off, n);
+	mutex_unlock(&m->lock);
+
+	bounce = kvmalloc(n, GFP_KERNEL);
+	if (!bounce)
+		return -ENOMEM;
+
+	mutex_lock(&m->lock);
+	if (m->pos != off || !m->finalized || m->pos < 0 ||
+	    (size_t)m->pos >= m->blob_len ||
+	    m->blob_len - (size_t)m->pos < n) {
+		mutex_unlock(&m->lock);
+		kvfree(bounce);
+		return sdxi_save_read(filp, buf, len, pos);
+	}
+	memcpy(bounce, (u8 *)m->blob + off, n);
+	/* Reserve the range so a second reader does not return it again. */
 	m->pos = off + n;
 	mutex_unlock(&m->lock);
 
 	missed = copy_to_user(buf, bounce, n);
+	kvfree(bounce);
 	if (!missed)
 		return n;
 
@@ -300,7 +496,7 @@ static long sdxi_save_precopy_ioctl(struct file *filp, unsigned int cmd,
 		scoped_guard(mutex, &m->lock) {
 			info.dirty_bytes = 0;
 			if (m->finalized)
-				info.initial_bytes = sizeof(m->blob) - m->pos;
+				info.initial_bytes = m->blob_len - m->pos;
 			else
 				info.initial_bytes = 0;
 		}
@@ -323,7 +519,8 @@ static ssize_t sdxi_restore_write(struct file *filp, const char __user *buf,
 				  size_t len, loff_t *pos)
 {
 	struct sdxi_mig_file *m = filp->private_data;
-	u8 kbuf[sizeof(struct sdxi_mig_blob)];
+	void *kbuf;
+	ssize_t ret;
 	size_t n;
 	loff_t off;
 
@@ -336,28 +533,49 @@ retry:
 		mutex_unlock(&m->lock);
 		return -EINVAL;
 	}
-	if ((size_t)m->pos >= sizeof(m->blob)) {
+	if ((size_t)m->pos >= m->blob_cap) {
 		mutex_unlock(&m->lock);
 		return 0;
 	}
-	n = min_t(size_t, len, sizeof(m->blob) - (size_t)m->pos);
+	n = min_t(size_t, len, m->blob_cap - (size_t)m->pos);
 	off = m->pos;
 	mutex_unlock(&m->lock);
 
-	if (copy_from_user(kbuf, buf, n))
-		return -EFAULT;
+	kbuf = memdup_user(buf, n);
+	if (IS_ERR(kbuf))
+		return PTR_ERR(kbuf);
 
 	mutex_lock(&m->lock);
 	if (m->pos != off) {
 		mutex_unlock(&m->lock);
+		kfree(kbuf);
 		goto retry;
 	}
-	memcpy((u8 *)&m->blob + off, kbuf, n);
+	memcpy((u8 *)m->blob + off, kbuf, n);
 	m->pos = off + n;
-	if (m->pos == sizeof(m->blob))
-		m->valid = true;
+	kfree(kbuf);
+	ret = n;
+
+	if (m->pos >= sizeof(*m->blob)) {
+		u32 nr = le32_to_cpu(m->blob->nr_cxt);
+		size_t expect;
+
+		if (nr > m->max_cxts) {
+			ret = -EINVAL;
+			goto out_unlock;
+		}
+		expect = sizeof(*m->blob) + nr * sizeof(m->blob->cxt[0]);
+		if (m->pos > expect) {
+			ret = -EINVAL;
+			goto out_unlock;
+		}
+		if (m->pos == expect)
+			m->valid = true;
+	}
+
+out_unlock:
 	mutex_unlock(&m->lock);
-	return n;
+	return ret;
 }
 
 static const struct file_operations sdxi_restore_fops = {
@@ -366,12 +584,31 @@ static const struct file_operations sdxi_restore_fops = {
 	.release = sdxi_mig_release,
 };
 
+static u32 sdxi_max_cxts(struct sdxi_vfio_pci_device *s)
+{
+	u64 cap1 = sdxi_read64(s, SDXI_MMIO_CAP1);
+
+	return FIELD_GET(SDXI_MMIO_CAP1_MAX_CXT, cap1) + 1;
+}
+
+static size_t sdxi_mig_image_cap(u32 max_cxts)
+{
+	size_t bytes;
+
+	if (check_mul_overflow((size_t)max_cxts, sizeof(struct sdxi_mig_cxt_sts),
+			       &bytes) ||
+	    check_add_overflow(bytes, sizeof(struct sdxi_mig_blob), &bytes))
+		return 0;
+	return bytes;
+}
+
 static struct sdxi_mig_file *
 sdxi_mig_file_alloc(struct sdxi_vfio_pci_device *s,
 		    const struct file_operations *fops, int flags,
 		    bool precopy)
 {
 	struct sdxi_mig_file *m;
+	size_t cap;
 
 	m = kzalloc(sizeof(*m), GFP_KERNEL);
 	if (!m)
@@ -379,12 +616,22 @@ sdxi_mig_file_alloc(struct sdxi_vfio_pci_device *s,
 
 	m->sdev = s;
 	m->precopy = precopy;
+	m->max_cxts = sdxi_max_cxts(s);
+	cap = sdxi_mig_image_cap(m->max_cxts);
+	m->blob = cap ? kvzalloc(cap, GFP_KERNEL) : NULL;
+	m->blob_cap = cap;
+	if (!m->blob) {
+		kfree(m);
+		return ERR_PTR(-ENOMEM);
+	}
+
 	mutex_init(&m->lock);
 	m->filp = anon_inode_getfile("sdxi_vfio_mig", fops, m, flags);
 	if (IS_ERR(m->filp)) {
 		int err = PTR_ERR(m->filp);
 
 		mutex_destroy(&m->lock);
+		kvfree(m->blob);
 		kfree(m);
 		return ERR_PTR(err);
 	}
@@ -415,11 +662,17 @@ sdxi_save_open(struct sdxi_vfio_pci_device *s, bool precopy)
 static int sdxi_save_finalize(struct sdxi_vfio_pci_device *s)
 {
 	struct sdxi_mig_file *m = s->save_file;
+	int err;
 
 	if (!m)
 		return -EINVAL;
 
-	sdxi_save_regs(s, &m->blob);
+	sdxi_save_regs(s, m->blob);
+	err = sdxi_snapshot_context_status(s, m->blob, m->max_cxts);
+	if (err)
+		return err;
+	m->blob_len = sizeof(*m->blob) +
+		      le32_to_cpu(m->blob->nr_cxt) * sizeof(m->blob->cxt[0]);
 	m->finalized = true;
 	m->precopy = false;
 	m->pos = 0;
@@ -542,7 +795,7 @@ sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 			s->restore_file = NULL;
 			return ERR_PTR(-EINVAL);
 		}
-		err = sdxi_restore_regs(s, &m->blob);
+		err = sdxi_restore_regs(s, m->blob);
 		if (err) {
 			m->pos = 0;
 			m->valid = false;
@@ -600,7 +853,12 @@ static int sdxi_vfio_get_state(struct vfio_device *vdev,
 static int sdxi_vfio_get_data_size(struct vfio_device *vdev,
 				   unsigned long *stop_copy_length)
 {
-	*stop_copy_length = sizeof(struct sdxi_mig_blob);
+	struct sdxi_vfio_pci_device *s =
+		container_of(vdev, struct sdxi_vfio_pci_device, core_dev.vdev);
+
+	*stop_copy_length = sdxi_mig_image_cap(sdxi_max_cxts(s));
+	if (!*stop_copy_length)
+		return -EOVERFLOW;
 	return 0;
 }
 
