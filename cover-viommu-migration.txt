@@ -1,0 +1,154 @@
+AMD vIOMMU live migration
+=========================
+
+A vIOMMU keeps its command ring, event log, and PPR log in guest
+memory, and the IOMMU itself writes the two logs. Saving one is a
+sequence: quiesce the command ring, freeze log generation, then
+read the registers and the log bytes that have to agree with them.
+Restoring checks the rings userspace allocated, writes the log
+bytes back, and only then arms the rings.
+
+IOMMU_VIOMMU_MIG_STATE is one ioctl. Saving runs NONE, PREPARED,
+SAVED. Restoring runs NONE, RESTORING, COMMITTED. Abort returns
+to NONE from any state, which is also how a source resumes after
+a failed migration. The payload header is a fixed 64 bytes. Drivers
+own the bytes after it. A section a destination does not recognise
+is skipped. A feature flag it does not recognise is refused.
+
+The AMD payload carries the ring registers, the guest status
+register, and the event and PPR log contents. The command ring is
+left to RAM migration, because the guest writes it. The guest DTE
+is left to the VMM, which replays nested domain allocation on the
+destination anyway.
+
+Two holes that migration depends on are fixed first. Destroying a
+hardware queue used to leave the ring's base and enable bit set.
+And a nest-attached device was not on the list dirty tracking and
+page-table growth walk, so its DTE went stale.
+
+Bugfixes
+--------
+1. iommu/amd: Serialize VFCTRL guest queue control register updates
+
+   One spinlock per vIOMMU around the read-modify-write of the
+   guest command, event, and PPR control registers.
+
+2. iommu/amd: Disarm a guest ring when its hw_queue is destroyed
+
+   Clear the base, length, and enable bits the matching
+   set_*_flags() programmed. A restore can then tell a ring it
+   validated from one that has since gone away.
+
+3. iommu/amd: Factor the per-DTE dirty tracking update out
+
+4. iommu/amd: Reach nest-attached devices when dirty tracking toggles
+
+   A nested attach does not go through attach_device(), so the
+   device never landed on the parent's dev_list. Track it on the
+   nest parent and walk that list with the others.
+
+5. iommu/amd: Keep nested DTEs valid across parent page table growth
+
+   Growing the nest parent's table has to rebuild the nested DTE,
+   not replace it with a plain stage-2 entry. A device is on the
+   nested list or on dev_list, and each says which entry a rebuild
+   writes. Device IOTLB invalidation walks both.
+
+6. iommu/amd: Bind the nest parent's IOMMU on a nested attach
+
+   Stage-2 flushes go to the IOMMUs in the parent's iommu_array.
+   A nested attach that never passed through the parent left that
+   array empty.
+
+iommufd
+-------
+7. iommufd: Add UAPI for vIOMMU migration state
+
+8. iommufd: Add vIOMMU migration hooks and state machine
+
+   The ops are optional, and a driver offers all of them or none.
+   mig_lock is per vIOMMU and stays off the fast path, because
+   prepare waits for the guest command ring to drain.
+
+9. iommufd: Add the IOMMU_VIOMMU_MIG_STATE ioctl
+
+   The core checks the reserved words, the feature flags, and the
+   vIOMMU type before a driver sees a restore payload, and stamps
+   the type on save itself. A short buffer is reported with the
+   size required and leaves the state alone, so the caller can
+   retry without quiescing again.
+
+10. iommufd: Report vIOMMU migration support to userspace
+
+    IOMMU_HW_CAP_VIOMMU_MIGRATION through IOMMU_GET_HW_INFO. It
+    describes the driver. The ioctl still refuses a vIOMMU whose
+    type that driver cannot migrate.
+
+11. iommufd/selftest: Add coverage for vIOMMU migration
+
+12. iommufd: Give vIOMMU migration ops access to guest memory
+
+    A function pointer on a context handed to each op, so a
+    built-in IOMMU driver can reach iommufd when IOMMUFD is a
+    module. The access is the nesting parent's IOAS. Sizing and
+    abort do not receive one.
+
+13. iommufd/selftest: Cover guest memory access from migration ops
+
+AMD driver
+----------
+14. iommu/amd: Add vIOMMU migration payload format and writer
+
+    Type-length-value sections. The same call sequence measures a
+    payload and emits one, so GET_SIZE and save agree.
+
+15. iommu/amd: Add guest command ring quiesce for vIOMMU migration
+
+    head == tail, then one read of the newest entry. A
+    COMPLETION_WAIT that stores is fenced. The ring is found from
+    the VFCTRL register the hardware is acting on.
+
+16. iommu/amd: Implement vIOMMU migration PREPARE_SAVE and abort
+
+    Quiesce first, then clear event and PPR generation, then record
+    the guest status register. Abort puts back only the generation
+    bits the freeze cleared.
+
+17. iommu/amd: Save vIOMMU ring state, status, and logs
+
+    Ring base, size, enables, and head and tail come from the
+    registers. Event and PPR bytes are copied so they agree with
+    those pointers. The status register is reported, not restored:
+    its overflow bits are write-one-to-clear. An unprogrammed ring
+    contributes no record.
+
+18. iommu/amd: Implement vIOMMU migration RESTORE
+
+    Refuse a ring record the destination did not allocate at the
+    same base and size, a pointer that is not on an entry boundary,
+    and a section that repeats or runs past the payload. Head and
+    tail are written back. The enable bits stay off.
+
+19. iommu/amd: Implement vIOMMU migration COMMIT_RESTORE
+
+    Confirm each register still holds the ring restore validated,
+    drop the nesting parent's translation caches, then set the
+    enable bits the guest had.
+
+20. iommu/amd: Advertise IOMMU_CAP_VIOMMU_MIGRATION
+
+    The bit stays clear until every operation exists. It is
+    answered per IOMMU, from whether amd_viommu_init() completed.
+
+Test
+----
+21. viommu: Add the AMD vIOMMU migration hardware harness
+
+    Drives the ioctl against a VF bound to vfio-pci, without a
+    VMM. --dirty and --dirty-late check the translate DTE.
+    --nested, --nested-cold, --grow, and --reattach check the
+    nested DTE. Build it with make. The binary is not in the tree.
+
+Not in this series
+------------------
+The generated viommu-migration.config stays out.
