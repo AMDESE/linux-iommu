@@ -619,17 +619,23 @@ static inline void pdev_disable_cap_pri(struct pci_dev *pdev)
 static inline int pdev_enable_cap_pasid(struct pci_dev *pdev)
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(&pdev->dev);
+	int features = 0;
 	int ret = -EINVAL;
 
 	if (dev_data->pasid_enabled)
 		return 0;
 
-	if (dev_data->flags & AMD_IOMMU_DEVICE_FLAG_PASID_SUP) {
-		/* Only allow access to user-accessible pages */
-		ret = pci_enable_pasid(pdev, 0);
-		if (!ret)
-			dev_data->pasid_enabled = 1;
-	}
+	if (!(dev_data->flags & AMD_IOMMU_DEVICE_FLAG_PASID_SUP))
+		return 0;
+
+	if (dev_data->flags & AMD_IOMMU_DEVICE_FLAG_EXEC_SUP)
+		features |= PCI_PASID_CAP_EXEC;
+	if (dev_data->flags & AMD_IOMMU_DEVICE_FLAG_PRIV_SUP)
+		features |= PCI_PASID_CAP_PRIV;
+
+	ret = pci_enable_pasid(pdev, features);
+	if (!ret)
+		dev_data->pasid_enabled = 1;
 
 	return ret;
 }
