@@ -295,6 +295,7 @@ static void sdxi_pci_remove(struct pci_dev *pdev)
 {
 	struct sdxi_dev *sdxi = pci_get_drvdata(pdev);
 
+	pci_disable_sriov(pdev);
 	sdxi_chardev_unregister(sdxi);
 	sdxi_device_exit(sdxi);
 	sdxi_pci_exit(sdxi);
