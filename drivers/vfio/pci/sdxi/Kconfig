@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SDXI_VFIO_PCI
+	tristate "VFIO support for SDXI PCI devices"
+	depends on PCI && PCI_MSI
+	depends on SDXI
+	select VFIO_PCI_CORE
+	help
+	  VFIO driver for AMD SDXI (Smart Data Accelerator Interface)
+	  PCI devices with savevm/loadvm migration support.
+
+	  The driver saves and restores the small set of writable BAR0
+	  control registers (CTL0, CTL2, CXT_L2, RKEY, ERR_CFG, ERR_CTL,
+	  ERR_WRT, ERR_RD). Context tables, descriptor rings, and
+	  completion-status blocks live in guest RAM and are captured
+	  as part of the VM memory snapshot.
+
+	  After resume, the variant driver asks the host SDXI PF driver
+	  to restart the VF's contexts so the guest can resume DMA
+	  without explicit cooperation.
+
+	  To compile this driver as a module, choose M here; the module
+	  will be called sdxi-vfio-pci.
