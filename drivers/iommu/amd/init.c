@@ -8,6 +8,7 @@
 #define pr_fmt(fmt)     "AMD-Vi: " fmt
 #define dev_fmt(fmt)    pr_fmt(fmt)
 
+#include <linux/delay.h>
 #include <linux/pci.h>
 #include <linux/acpi.h>
 #include <linux/list.h>
@@ -783,22 +784,36 @@ static int __init alloc_command_buffer(struct amd_iommu *iommu)
 }
 
 /*
+ * Overflow stops the log and clears its run bit. The restart procedure
+ * waits for that before the log enable bit may be toggled.
+ */
+bool amd_iommu_wait_log_stop(struct amd_iommu *iommu, const char *evt_type,
+			     u32 status_run_mask)
+{
+	u32 status;
+	int i;
+
+	for (i = 0; i < LOOP_TIMEOUT; i++) {
+		status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
+		if (!(status & status_run_mask))
+			return true;
+		udelay(1);
+	}
+
+	pr_warn_ratelimited("IOMMU %s log restart timed out\n", evt_type);
+	return false;
+}
+
+/*
  * Interrupt handler has processed all pending events and adjusted head
  * and tail pointer. Reset overflow mask and restart logging again.
  */
-void amd_iommu_restart_log(struct amd_iommu *iommu, const char *evt_type,
+bool amd_iommu_restart_log(struct amd_iommu *iommu, const char *evt_type,
 			   u8 cntrl_intr, u8 cntrl_log,
 			   u32 status_run_mask, u32 status_overflow_mask)
 {
-	u32 status;
-
-	/*
-	 * Overflow stops the log and clears its run bit. Confirm that
-	 * before disabling the log and clearing overflow.
-	 */
-	status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
-	if (status & status_run_mask)
-		return;
+	if (!amd_iommu_wait_log_stop(iommu, evt_type, status_run_mask))
+		return false;
 
 	pr_info_ratelimited("IOMMU %s log restarting\n", evt_type);
 
@@ -809,28 +824,31 @@ void amd_iommu_restart_log(struct amd_iommu *iommu, const char *evt_type,
 
 	iommu_feature_enable(iommu, cntrl_intr);
 	iommu_feature_enable(iommu, cntrl_log);
+	return true;
 }
 
 /*
  * This function restarts event logging in case the IOMMU experienced
  * an event log buffer overflow.
  */
-void amd_iommu_restart_event_logging(struct amd_iommu *iommu)
+bool amd_iommu_restart_event_logging(struct amd_iommu *iommu)
 {
-	amd_iommu_restart_log(iommu, "Event", CONTROL_EVT_INT_EN,
-			      CONTROL_EVT_LOG_EN, MMIO_STATUS_EVT_RUN_MASK,
-			      MMIO_STATUS_EVT_OVERFLOW_MASK);
+	return amd_iommu_restart_log(iommu, "Event", CONTROL_EVT_INT_EN,
+				     CONTROL_EVT_LOG_EN,
+				     MMIO_STATUS_EVT_RUN_MASK,
+				     MMIO_STATUS_EVT_OVERFLOW_MASK);
 }
 
 /*
  * This function restarts event logging in case the IOMMU experienced
  * GA log overflow.
  */
-void amd_iommu_restart_ga_log(struct amd_iommu *iommu)
+bool amd_iommu_restart_ga_log(struct amd_iommu *iommu)
 {
-	amd_iommu_restart_log(iommu, "GA", CONTROL_GAINT_EN,
-			      CONTROL_GALOG_EN, MMIO_STATUS_GALOG_RUN_MASK,
-			      MMIO_STATUS_GALOG_OVERFLOW_MASK);
+	return amd_iommu_restart_log(iommu, "GA", CONTROL_GAINT_EN,
+				     CONTROL_GALOG_EN,
+				     MMIO_STATUS_GALOG_RUN_MASK,
+				     MMIO_STATUS_GALOG_OVERFLOW_MASK);
 }
 
 /*

@@ -1119,11 +1119,12 @@ amd_iommu_set_pci_msi_domain(struct device *dev, struct amd_iommu *iommu) { }
 static void amd_iommu_handle_irq(void *data, const char *evt_type,
 				 u32 int_mask, u32 overflow_mask,
 				 void (*int_handler)(struct amd_iommu *),
-				 void (*overflow_handler)(struct amd_iommu *))
+				 bool (*overflow_handler)(struct amd_iommu *))
 {
 	struct amd_iommu *iommu = (struct amd_iommu *) data;
 	u32 status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
 	u32 mask = int_mask | overflow_mask;
+	bool restart_failed = false;
 
 	while (status & mask) {
 		/*
@@ -1140,8 +1141,9 @@ static void amd_iommu_handle_irq(void *data, const char *evt_type,
 			int_handler(iommu);
 		}
 
-		if ((status & overflow_mask) && overflow_handler)
-			overflow_handler(iommu);
+		if ((status & overflow_mask) && overflow_handler &&
+		    !overflow_handler(iommu))
+			restart_failed = true;
 
 		/*
 		 * Hardware bug: ERBT1312
@@ -1154,10 +1156,17 @@ static void amd_iommu_handle_irq(void *data, const char *evt_type,
 		 * Workaround: The IOMMU driver should read back the
 		 * status register and check if the interrupt bits are cleared.
 		 * If not, driver will need to go through the interrupt handler
-		 * again and re-clear the bits
+		 * again and re-clear the bits.
+		 *
+		 * Overflow with the interrupt bit clear must not end the
+		 * loop: the restart may still be waiting for the run bit.
+		 * A failed wait breaks out so the thread does not spin.
 		 */
 		status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
-		if (!(status & int_mask))
+		if (restart_failed)
+			break;
+		if (!(status & int_mask) &&
+		    (!(status & overflow_mask) || !overflow_handler))
 			break;
 	}
 }

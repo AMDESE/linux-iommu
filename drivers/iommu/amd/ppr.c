@@ -59,26 +59,24 @@ void __init amd_iommu_free_ppr_log(struct amd_iommu *iommu)
  * This function restarts ppr logging in case the IOMMU experienced
  * PPR log overflow.
  */
-void amd_iommu_restart_ppr_log(struct amd_iommu *iommu)
+bool amd_iommu_restart_ppr_log(struct amd_iommu *iommu)
 {
-	u32 status;
-
 	/*
-	 * Overflow stops the log. The IRQ thread has already consumed
-	 * the entries that were written. A group whose last page was
-	 * dropped is still on the partial list; discard it before the
-	 * log restarts and another group reuses the index.
+	 * Overflow stops the log. Wait until that is visible before
+	 * discarding a group whose last page was dropped, so a later
+	 * group cannot reuse its index. The restart below polls again
+	 * and returns immediately once the run bit is clear.
 	 */
-	status = readl(iommu->mmio_base + MMIO_STATUS_OFFSET);
-	if (status & MMIO_STATUS_PPR_RUN_MASK)
-		return;
+	if (!amd_iommu_wait_log_stop(iommu, "PPR", MMIO_STATUS_PPR_RUN_MASK))
+		return false;
 
 	if (iommu->iopf_queue)
 		iopf_queue_discard_partial(iommu->iopf_queue);
 
-	amd_iommu_restart_log(iommu, "PPR", CONTROL_PPRINT_EN,
-			      CONTROL_PPRLOG_EN, MMIO_STATUS_PPR_RUN_MASK,
-			      MMIO_STATUS_PPR_OVERFLOW_MASK);
+	return amd_iommu_restart_log(iommu, "PPR", CONTROL_PPRINT_EN,
+				     CONTROL_PPRLOG_EN,
+				     MMIO_STATUS_PPR_RUN_MASK,
+				     MMIO_STATUS_PPR_OVERFLOW_MASK);
 }
 
 static inline u32 ppr_flag_to_fault_perm(u16 flag)
