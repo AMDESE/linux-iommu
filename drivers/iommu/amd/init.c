@@ -2641,15 +2641,21 @@ static int iommu_init_irq(struct amd_iommu *iommu)
 	if (iommu->int_enabled)
 		goto enable_faults;
 
-	if (amd_iommu_xt_mode == IRQ_REMAP_X2APIC_MODE)
+	if (amd_iommu_xt_mode == IRQ_REMAP_X2APIC_MODE) {
 		ret = iommu_setup_intcapxt(iommu);
-	else if (iommu->dev->msi_cap)
+	} else if (iommu->dev->msi_cap) {
 		ret = iommu_setup_msi(iommu);
-	else
-		ret = -ENODEV;
+	} else {
+		pr_err("IOMMU%d: x2APIC is unavailable and the IOMMU has no MSI capability\n",
+		       iommu->index);
+		return -ENODEV;
+	}
 
-	if (ret)
+	if (ret) {
+		pr_err("IOMMU%d: failed to enable interrupts (%d)\n",
+		       iommu->index, ret);
 		return ret;
+	}
 
 	iommu->int_enabled = true;
 enable_faults:
