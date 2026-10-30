@@ -3174,6 +3174,7 @@ static struct syscore amd_iommu_syscore = {
 static void __init free_iommu_resources(void)
 {
 	free_iommu_all();
+	amd_iommu_pdom_id_destroy();
 	free_pci_segments();
 }
 
@@ -3268,7 +3269,6 @@ out:
 
 static void __init free_dma_resources(void)
 {
-	amd_iommu_pdom_id_destroy();
 	free_unity_maps();
 }
 
