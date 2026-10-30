@@ -1948,13 +1948,17 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h,
 			amd_iommu_hatdis = true;
 		}
 
-		/* XT and GAM require GA mode. */
+		/*
+		 * XT and GAM require GA mode. XT mode programs 32-bit
+		 * APIC IDs, so select it only when the kernel can enable
+		 * x2APIC. Otherwise stay in xAPIC mode and use MSI.
+		 */
 		if ((h->efr_reg & (0x1 << IOMMU_EFR_GASUP_SHIFT)) == 0) {
 			amd_iommu_guest_ir = AMD_IOMMU_GUEST_IR_LEGACY;
 			break;
-		} else {
-			if (h->efr_reg & BIT(IOMMU_EFR_XTSUP_SHIFT))
-				amd_iommu_xt_mode = IRQ_REMAP_X2APIC_MODE;
+		} else if ((h->efr_reg & BIT(IOMMU_EFR_XTSUP_SHIFT)) &&
+			   x2apic_supported()) {
+			amd_iommu_xt_mode = IRQ_REMAP_X2APIC_MODE;
 		}
 
 		early_iommu_features_init(iommu, h);
