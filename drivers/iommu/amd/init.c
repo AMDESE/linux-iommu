@@ -1792,9 +1792,19 @@ static void __init free_pci_segments(void)
 	}
 }
 
-static void __init free_sysfs(struct amd_iommu *iommu)
+/*
+ * Unregistering an IOMMU releases the devices behind it and clearing a
+ * DTE queues an invalidation and waits for it to complete. The IOMMUs
+ * must still accept commands.
+ */
+static void __init unregister_iommus(void)
 {
-	if (iommu->iommu.dev) {
+	struct amd_iommu *iommu;
+
+	for_each_iommu(iommu) {
+		if (!iommu->iommu.dev)
+			continue;
+
 		iommu_device_unregister(&iommu->iommu);
 		iommu_device_sysfs_remove(&iommu->iommu);
 	}
@@ -1802,7 +1812,6 @@ static void __init free_sysfs(struct amd_iommu *iommu)
 
 static void __init free_iommu_one(struct amd_iommu *iommu)
 {
-	free_sysfs(iommu);
 	free_iommu_buffers(iommu);
 	amd_iommu_free_ppr_log(iommu);
 	free_ga_log(iommu);
@@ -3631,6 +3640,7 @@ static int __init state_next(void)
 	if (ret) {
 		free_dma_resources();
 		if (!irq_remapping_enabled) {
+			unregister_iommus();
 			disable_iommus();
 			free_iommu_resources();
 		} else {
