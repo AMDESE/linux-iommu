@@ -1810,8 +1810,17 @@ static void __init unregister_iommus(void)
 	}
 }
 
+static void iommu_free_intcapxt_irq(struct amd_iommu *iommu, int *irq);
+
 static void __init free_iommu_one(struct amd_iommu *iommu)
 {
+	/*
+	 * Masking an INTCAPXT IRQ writes its MMIO register, so free the
+	 * IRQs before unmapping the IOMMU registers.
+	 */
+	iommu_free_intcapxt_irq(iommu, &iommu->evt_irq);
+	iommu_free_intcapxt_irq(iommu, &iommu->ppr_irq);
+	iommu_free_intcapxt_irq(iommu, &iommu->ga_irq);
 	free_iommu_buffers(iommu);
 	amd_iommu_free_ppr_log(iommu);
 	free_ga_log(iommu);
@@ -2547,6 +2556,33 @@ static const struct irq_domain_ops intcapxt_domain_ops = {
 
 
 static struct irq_domain *iommu_irqdomain;
+static int iommu_intcapxt_irqs;
+
+static void iommu_remove_intcapxt_domain(void)
+{
+	struct fwnode_handle *fn;
+
+	if (!iommu_irqdomain || iommu_intcapxt_irqs)
+		return;
+
+	fn = iommu_irqdomain->fwnode;
+	irq_domain_remove(iommu_irqdomain);
+	iommu_irqdomain = NULL;
+	/* irq_domain_remove() does not free an irqchip fwnode. */
+	irq_domain_free_fwnode(fn);
+}
+
+static void iommu_free_intcapxt_irq(struct amd_iommu *iommu, int *irq)
+{
+	if (!irq || *irq <= 0)
+		return;
+
+	free_irq(*irq, iommu);
+	irq_domain_free_irqs(*irq, 1);
+	*irq = 0;
+	iommu_intcapxt_irqs--;
+	iommu_remove_intcapxt_domain();
+}
 
 static struct irq_domain *iommu_get_irqdomain(void)
 {
@@ -2588,7 +2624,7 @@ static int __iommu_setup_intcapxt(struct amd_iommu *iommu, const char *devname,
 
 	irq = irq_domain_alloc_irqs(domain, 1, node, &info);
 	if (irq < 0) {
-		irq_domain_remove(domain);
+		iommu_remove_intcapxt_domain();
 		return irq;
 	}
 
@@ -2596,11 +2632,12 @@ static int __iommu_setup_intcapxt(struct amd_iommu *iommu, const char *devname,
 				   iommu);
 	if (ret) {
 		irq_domain_free_irqs(irq, 1);
-		irq_domain_remove(domain);
+		iommu_remove_intcapxt_domain();
 		return ret;
 	}
 
-	return 0;
+	iommu_intcapxt_irqs++;
+	return irq;
 }
 
 static int iommu_setup_intcapxt(struct amd_iommu *iommu)
@@ -2612,16 +2649,18 @@ static int iommu_setup_intcapxt(struct amd_iommu *iommu)
 	ret = __iommu_setup_intcapxt(iommu, iommu->evt_irq_name,
 				     MMIO_INTCAPXT_EVT_OFFSET,
 				     amd_iommu_int_thread_evtlog);
-	if (ret)
-		return ret;
+	if (ret < 0)
+		goto err;
+	iommu->evt_irq = ret;
 
 	snprintf(iommu->ppr_irq_name, sizeof(iommu->ppr_irq_name),
 		 "AMD-Vi%d-PPR", iommu->index);
 	ret = __iommu_setup_intcapxt(iommu, iommu->ppr_irq_name,
 				     MMIO_INTCAPXT_PPR_OFFSET,
 				     amd_iommu_int_thread_pprlog);
-	if (ret)
-		return ret;
+	if (ret < 0)
+		goto err;
+	iommu->ppr_irq = ret;
 
 #ifdef CONFIG_IRQ_REMAP
 	snprintf(iommu->ga_irq_name, sizeof(iommu->ga_irq_name),
@@ -2629,8 +2668,17 @@ static int iommu_setup_intcapxt(struct amd_iommu *iommu)
 	ret = __iommu_setup_intcapxt(iommu, iommu->ga_irq_name,
 				     MMIO_INTCAPXT_GALOG_OFFSET,
 				     amd_iommu_int_thread_galog);
+	if (ret < 0)
+		goto err;
+	iommu->ga_irq = ret;
 #endif
 
+	return 0;
+
+err:
+	iommu_free_intcapxt_irq(iommu, &iommu->ga_irq);
+	iommu_free_intcapxt_irq(iommu, &iommu->ppr_irq);
+	iommu_free_intcapxt_irq(iommu, &iommu->evt_irq);
 	return ret;
 }
 

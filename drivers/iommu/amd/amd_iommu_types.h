@@ -686,18 +686,21 @@ struct amd_iommu {
 
 	/* Name for event log interrupt */
 	unsigned char evt_irq_name[16];
+	int evt_irq;
 
 	/* Base of the PPR log, if present */
 	u8 *ppr_log;
 
 	/* Name for PPR log interrupt */
 	unsigned char ppr_irq_name[16];
+	int ppr_irq;
 
 	/* Base of the GA log, if present */
 	u8 *ga_log;
 
 	/* Name for GA log interrupt */
 	unsigned char ga_irq_name[16];
+	int ga_irq;
 
 	/* Tail of the GA log, if present */
 	u8 *ga_log_tail;
