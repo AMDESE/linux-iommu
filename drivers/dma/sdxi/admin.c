@@ -32,6 +32,9 @@ int sdxi_adm_start_cxt_sync(struct sdxi_cxt *cxt, unsigned int timeout_ms,
 
 	might_sleep();
 
+	sdxi_dbg(cxt->sdxi, "adm start NM cxt=%u timeout_ms=%u\n",
+		 cxt->id, timeout_ms);
+
 	struct sdxi_completion *sc __free(sdxi_completion) =
 		sdxi_completion_alloc(cxt->sdxi);
 

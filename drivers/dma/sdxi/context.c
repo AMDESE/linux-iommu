@@ -991,17 +991,30 @@ int sdxi_p2v_restart_cxts(struct sdxi_dev *pf, u16 vf_num,
 	struct sdxi_cxt *adm = pf->admin_cxt;
 	struct sdxi_desc *desc;
 	struct sdxi_ring_resv resv;
+	enum cxt_sts_state state;
+	u64 read_idx;
+	u64 db;
+	u32 flags;
 	int err;
 
 	might_sleep();
+
+	state = sdxi_cxt_sts_state(adm->sq->cxt_sts);
+	read_idx = le64_to_cpu(READ_ONCE(adm->sq->cxt_sts->read_index));
+	sdxi_info(pf,
+		  "debug P2V: before admin ctxt=%u state=%s (%#x) read_idx=%llu vf_num=%#x range=%u..%u\n",
+		  adm->id, cxt_sts_state_str(state), state, read_idx,
+		  vf_num, range.cxt_start, range.cxt_end);
 
 	sc = sdxi_completion_alloc(pf);
 	if (!sc)
 		return -ENOMEM;
 
 	err = sdxi_ring_reserve(adm->ring_state, 1, &resv);
-	if (err)
+	if (err) {
+		sdxi_info(pf, "debug P2V: ring reserve failed: %d\n", err);
 		return err;
+	}
 
 	desc = sdxi_ring_resv_next(&resv);
 	sdxi_encode_cxt_start_rs(desc, &(const struct sdxi_cxt_start) {
@@ -1011,7 +1024,25 @@ int sdxi_p2v_restart_cxts(struct sdxi_dev *pf, u16 vf_num,
 		});
 	sdxi_completion_attach(desc, sc);
 	sdxi_desc_make_valid(desc);
-	sdxi_cxt_push_doorbell(adm, sdxi_ring_resv_dbval(&resv));
+	sdxi_info(pf,
+		  "debug P2V desc: opcode=%#x vflags=%#x vf_num=%#x cxt=%u..%u db_value=%#llx csb=%#llx\n",
+		  le32_to_cpu(desc->cxt_start.opcode), desc->cxt_start.vflags,
+		  le16_to_cpu(desc->cxt_start.vf_num),
+		  le16_to_cpu(desc->cxt_start.cxt_start),
+		  le16_to_cpu(desc->cxt_start.cxt_end),
+		  le64_to_cpu(desc->cxt_start.db_value),
+		  le64_to_cpu(desc->cxt_start.csb_ptr));
 
-	return sdxi_completion_poll(sc);
+	db = sdxi_ring_resv_dbval(&resv);
+	sdxi_cxt_push_doorbell(adm, db);
+
+	err = sdxi_completion_poll(sc);
+	flags = sdxi_completion_flags(sc);
+	state = sdxi_cxt_sts_state(adm->sq->cxt_sts);
+	read_idx = le64_to_cpu(READ_ONCE(adm->sq->cxt_sts->read_index));
+	sdxi_info(pf,
+		  "debug P2V: after ret=%d csb_flags=0x%x er=%u db=%llu admin state=%s (%#x) read_idx=%llu\n",
+		  err, flags, sdxi_completion_errored(sc), db,
+		  cxt_sts_state_str(state), state, read_idx);
+	return err;
 }

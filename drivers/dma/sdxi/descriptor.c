@@ -154,6 +154,9 @@ EXPORT_SYMBOL_IF_KUNIT(sdxi_encode_cxt_start);
 void sdxi_encode_cxt_start_rs(struct sdxi_desc *desc,
 			      const struct sdxi_cxt_start *params)
 {
+	pr_debug("SDXI: encode CXT_START_RS vf=%u vf_num=%#x cxt=%u..%u\n",
+		 params->vf, params->vf_num,
+		 params->range.cxt_start, params->range.cxt_end);
 	sdxi_encode_cxt_start_subtype(desc, params,
 				      SDXI_DSC_OP_SUBTYPE_CXT_START_RS);
 }

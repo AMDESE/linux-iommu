@@ -98,6 +98,53 @@ static int sdxi_stop(struct sdxi_vfio_pci_device *s)
 	return sdxi_fn_stop(sdxi_dev(s), s->bar0);
 }
 
+/*
+ * Debug: sample the registers the migration image writes. TC09 reads
+ * them only after a failed RUNNING transition, and QEMU's recover path
+ * resets the VF in that case.
+ */
+static void sdxi_debug_log_regs(struct sdxi_vfio_pci_device *s, const char *when)
+{
+	u64 sts0 = sdxi_read64(s, SDXI_MMIO_STS0);
+
+	dev_info(sdxi_dev(s),
+		 "debug regs %s: fn_gsv=%s sts0=0x%llx ctl0=0x%llx ctl2=0x%llx cxt_l2=0x%llx rkey=0x%llx err_ctl=0x%llx err_cfg=0x%llx\n",
+		 when,
+		 sdxi_gsv_str((enum sdxi_fn_gsv)FIELD_GET(SDXI_MMIO_STS0_FN_GSV,
+							  sts0)),
+		 sts0,
+		 sdxi_read64(s, SDXI_MMIO_CTL0),
+		 sdxi_read64(s, SDXI_MMIO_CTL2),
+		 sdxi_read64(s, SDXI_MMIO_CXT_L2),
+		 sdxi_read64(s, SDXI_MMIO_RKEY),
+		 sdxi_read64(s, SDXI_MMIO_ERR_CTL),
+		 sdxi_read64(s, SDXI_MMIO_ERR_CFG));
+}
+
+static const char *sdxi_mig_state_str(enum vfio_device_mig_state st)
+{
+	switch (st) {
+	case VFIO_DEVICE_STATE_ERROR:
+		return "ERROR";
+	case VFIO_DEVICE_STATE_STOP:
+		return "STOP";
+	case VFIO_DEVICE_STATE_RUNNING:
+		return "RUNNING";
+	case VFIO_DEVICE_STATE_STOP_COPY:
+		return "STOP_COPY";
+	case VFIO_DEVICE_STATE_RESUMING:
+		return "RESUMING";
+	case VFIO_DEVICE_STATE_RUNNING_P2P:
+		return "RUNNING_P2P";
+	case VFIO_DEVICE_STATE_PRE_COPY:
+		return "PRE_COPY";
+	case VFIO_DEVICE_STATE_PRE_COPY_P2P:
+		return "PRE_COPY_P2P";
+	default:
+		return "OTHER";
+	}
+}
+
 static int sdxi_start(struct sdxi_vfio_pci_device *s)
 {
 	struct pci_dev *vf = s->core_dev.pdev;
@@ -105,6 +152,10 @@ static int sdxi_start(struct sdxi_vfio_pci_device *s)
 	u32 max_cxt;
 	int vf_id;
 	int ret;
+
+	dev_info(sdxi_dev(s), "sdxi_start: enter (mig %s)\n",
+		 sdxi_mig_state_str(s->state));
+	sdxi_debug_log_regs(s, "start entry");
 
 	/*
 	 * PRE_COPY -> RUNNING is also taken when a pause drain stopped the
@@ -119,6 +170,7 @@ static int sdxi_start(struct sdxi_vfio_pci_device *s)
 	ret = sdxi_fn_start(sdxi_dev(s), s->bar0);
 	if (ret)
 		return ret;
+	sdxi_debug_log_regs(s, "after fn_start");
 
 	/*
 	 * Function went GSV_ACTIVE -> GSV_STOPG -> GSV_STOP at snapshot time,
@@ -395,6 +447,13 @@ static int sdxi_restore_regs(struct sdxi_vfio_pci_device *s,
 	 */
 	err_cfg = le64_to_cpu(b->err_cfg);
 
+	sdxi_debug_log_regs(s, "before write");
+	dev_info(sdxi_dev(s),
+		 "debug regs blob: ctl0=0x%llx ctl2=0x%llx cxt_l2=0x%llx rkey=0x%llx err_ctl=0x%llx err_cfg=0x%llx\n",
+		 le64_to_cpu(b->ctl0), le64_to_cpu(b->ctl2),
+		 le64_to_cpu(b->cxt_l2), le64_to_cpu(b->rkey),
+		 le64_to_cpu(b->err_ctl), err_cfg);
+
 	sdxi_write64(s, SDXI_MMIO_CTL2,    le64_to_cpu(b->ctl2));
 	sdxi_write64(s, SDXI_MMIO_CXT_L2,  le64_to_cpu(b->cxt_l2));
 	sdxi_write64(s, SDXI_MMIO_RKEY,    le64_to_cpu(b->rkey));
@@ -404,6 +463,7 @@ static int sdxi_restore_regs(struct sdxi_vfio_pci_device *s,
 	sdxi_write64(s, SDXI_MMIO_ERR_CFG, err_cfg);
 	sdxi_write64(s, SDXI_MMIO_ERR_CTL, le64_to_cpu(b->err_ctl));
 	sdxi_write64(s, SDXI_MMIO_CTL0,    le64_to_cpu(b->ctl0));
+	sdxi_debug_log_regs(s, "after write");
 
 	return sdxi_restore_context_status(s, b);
 }
@@ -706,6 +766,7 @@ sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 		return sdxi_stop(s) ? ERR_PTR(-EIO) : NULL;
 
 	if (cur == VFIO_DEVICE_STATE_STOP && next == VFIO_DEVICE_STATE_RUNNING) {
+		dev_info(sdxi_dev(s), "sdxi_start: arc STOP -> RUNNING\n");
 		err = sdxi_start(s);
 		return err ? ERR_PTR(err) : NULL;
 	}
@@ -721,6 +782,8 @@ sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 
 	if (cur == VFIO_DEVICE_STATE_RUNNING_P2P &&
 	    next == VFIO_DEVICE_STATE_RUNNING) {
+		dev_info(sdxi_dev(s),
+			 "sdxi_start: arc RUNNING_P2P -> RUNNING\n");
 		err = sdxi_start(s);
 		return err ? ERR_PTR(err) : NULL;
 	}
@@ -745,12 +808,16 @@ sdxi_step_state(struct sdxi_vfio_pci_device *s, enum vfio_device_mig_state next)
 
 	if (cur == VFIO_DEVICE_STATE_PRE_COPY_P2P &&
 	    next == VFIO_DEVICE_STATE_PRE_COPY) {
+		dev_info(sdxi_dev(s),
+			 "sdxi_start: arc PRE_COPY_P2P -> PRE_COPY\n");
 		err = sdxi_start(s);
 		return err ? ERR_PTR(err) : NULL;
 	}
 
 	if (cur == VFIO_DEVICE_STATE_PRE_COPY &&
 	    next == VFIO_DEVICE_STATE_RUNNING) {
+		dev_info(sdxi_dev(s),
+			 "sdxi_start: arc PRE_COPY -> RUNNING\n");
 		err = sdxi_start(s);
 		if (err)
 			return ERR_PTR(err);
@@ -838,6 +905,9 @@ sdxi_vfio_set_state(struct vfio_device *vdev,
 	int err;
 
 	guard(mutex)(&s->state_mutex);
+	dev_info(sdxi_dev(s), "set_state %s -> %s\n",
+		 sdxi_mig_state_str(s->state),
+		 sdxi_mig_state_str(new_state));
 	while (new_state != s->state) {
 		err = vfio_mig_get_next_state(vdev, s->state, new_state, &next);
 		if (err)
@@ -1067,8 +1137,10 @@ static int sdxi_feature_pause(struct sdxi_vfio_pci_device *s, u32 flags,
 
 	guard(mutex)(&s->state_mutex);
 
-	if (pause.flags == VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME)
+	if (pause.flags == VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME) {
+		dev_info(sdxi_dev(s), "sdxi_start: SDXI_PAUSE_RESUME\n");
 		return sdxi_start(s);
+	}
 
 	if (pause.flags != VFIO_DEVICE_FEATURE_SDXI_PAUSE_DRAIN)
 		return -EINVAL;
@@ -1187,6 +1259,9 @@ static void sdxi_vfio_reset_done(struct pci_dev *pdev)
 	 * uAPI: device_state returns to RUNNING. The function itself
 	 * stays at GSV_STOP until the next sdxi_start().
 	 */
+	if (s->bar0)
+		dev_info(&pdev->dev, "reset_done: %s -> RUNNING\n",
+			 sdxi_mig_state_str(s->state));
 	sdxi_drop_mig_files(s);
 	s->state = VFIO_DEVICE_STATE_RUNNING;
 }
