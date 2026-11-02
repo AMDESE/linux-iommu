@@ -2992,6 +2992,20 @@ static void early_enable_iommus(void)
 
 		for_each_iommu(iommu) {
 			iommu_disable_command_buffer(iommu);
+
+			/*
+			 * SNP reuses the previous kernel's completion
+			 * semaphore. wait_on_sem() returns once the stored
+			 * value is at least the target. A completion wait
+			 * fetched before CmdBufEn was cleared can still
+			 * store a later value, and the old command buffer
+			 * holds at most CMD_BUFFER_ENTRIES such commands.
+			 * Continue past that range. A new page reads as
+			 * zero, so this only skips those entries.
+			 */
+			iommu->cmd_sem_val = READ_ONCE(*iommu->cmd_sem) +
+					     CMD_BUFFER_ENTRIES;
+
 			iommu_disable_event_buffer(iommu);
 			iommu_disable_irtcachedis(iommu);
 			iommu_enable_command_buffer(iommu);
