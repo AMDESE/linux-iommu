@@ -1,0 +1,179 @@
+commit f3bb91b4b47dd38d03ea502560eceb8a6aafd1fd
+Author: Vasant Hegde <vasant.hegde@amd.com>
+
+iommu/amd: Allocate the GCR3 table from the device
+
+This separates the lifetime of a device GCR3 table from the lifetime of
+the RID domain.  PASID-capable devices allocate the table during probe,
+while a non-PASID device in a v2 paging domain allocates it on attach.
+
+> diff --git a/drivers/iommu/amd/iommu.c b/drivers/iommu/amd/iommu.c
+> index 3ecab557f6b6..8750ac32f382 100644
+> --- a/drivers/iommu/amd/iommu.c
+> +++ b/drivers/iommu/amd/iommu.c
+
+[ ... ]
+
+> @@ -2165,7 +2169,11 @@ static void set_dte_entry(struct amd_iommu *iommu,
+>  	amd_iommu_make_clear_dte(dev_data, &new);
+>  
+>  	old_domid = READ_ONCE(dte->data[1]) & DTE_DOMID_MASK;
+> -	if (gcr3_info->gcr3_tbl)
+> +	/*
+> +	 * Update GCR3 related info if device is attached to PASID
+> +	 * capable domain
+> +	 */
+> +	if (pdom_is_sva_capable(domain) && gcr3_info->gcr3_tbl)
+>  		set_dte_gcr3_table(dev_data, &new);
+>  	else if (domain->domain.type == IOMMU_DOMAIN_IDENTITY)
+>  		set_dte_passthrough(dev_data, domain, &new);
+
+[ ... ]
+
+> @@ -2351,9 +2328,18 @@ static int attach_device(struct device *dev,
+>  	if (dev_data->perfopt)
+>  		goto skip_caps;
+>  
+> -	/* Setup GCR3 table */
+> -	if (pdom_is_sva_capable(domain)) {
+> -		ret = init_gcr3_table(dev_data, domain);
+> +	/*
+> +	 * A PASID-capable device already owns a table from probe. A paging
+> +	 * domain with v2 page table without PASID allocates one here.
+> +	 */
+> +	if (pdom_is_v2_pgtbl_mode(domain)) {
+> +		ret = alloc_gcr3_table(dev_data, iommu);
+>  		if (ret) {
+>  			pdom_detach_iommu(iommu, domain);
+>  			goto out;
+>  		}
+> +
+> +		ret = set_default_gcr3_entry(dev_data, domain);
+>  		if (ret) {
+>  			pdom_detach_iommu(iommu, domain);
+>  			goto out;
+
+[ ... ]
+
+> @@ -2716,6 +2710,17 @@ static struct iommu_device *amd_iommu_probe_device(struct device *dev)
+>  		return ERR_PTR(-ENODEV);
+>  	}
+>  
+> +	/*
+> +	 * PASID-capable devices own a GCR3 table for the life of the device.
+> +	 * A paging domain with v2 page table without PASID allocates one
+> +	 * later, from attach_device().
+> +	 */
+> +	if (pdev_pasid_supported(dev_data)) {
+> +		ret = alloc_gcr3_table(dev_data, iommu);
+> +		if (ret)
+> +			return ERR_PTR(ret);
+> +	}
+> +
+>  	return iommu_dev;
+>  }
+
+[Severity: High]
+Could the PerfOpt re-attach keep the identity DTE on the passthrough
+path?
+
+amd_iommu_enable_perfopt() sets dev_data->perfopt and detaches then
+re-attaches the device to the identity domain.  attach_device() skips
+the old GCR3 setup for that re-attach, but the new probe-time allocation
+means gcr3_info->gcr3_tbl is already non-NULL.
+
+pdom_is_sva_capable() returns true for the identity domain, so
+set_dte_entry() now calls set_dte_gcr3_table() and sets DTE_FLAG_GV
+instead of calling set_dte_passthrough().  This contradicts the PerfOpt
+path's requirement that the device remain untranslated with PASID, ATS,
+and PRI disabled.  Before this patch, the skip_caps jump also skipped
+init_gcr3_table(), so the identity DTE took set_dte_passthrough().
+
+
+commit 084734375d0e6ac7fc357c68d0d599291be69774
+Author: Santosh Shukla <santosh.shukla@amd.com>
+
+iommu/amd: Restore an SVA PASID after PCI reset
+
+This permits a reset restore to program an SVA PASID when the previous
+domain is the group's blocking domain.
+
+> diff --git a/drivers/iommu/amd/pasid.c b/drivers/iommu/amd/pasid.c
+> index 40be5902087c..87fd2688574c 100644
+> --- a/drivers/iommu/amd/pasid.c
+> +++ b/drivers/iommu/amd/pasid.c
+> @@ -109,7 +109,12 @@ static int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
+>  	unsigned long flags;
+>  	int ret = -EINVAL;
+>  
+> -	if (old)
+> +	/*
+> +	 * pci_dev_reset_iommu_done() passes the blocking domain. prepare()
+> +	 * has already cleared this PASID, so program it again. Replacing
+> +	 * one attached domain with another is not supported.
+> +	 */
+> +	if (old && old->type != IOMMU_DOMAIN_BLOCKED)
+>  		return -EOPNOTSUPP;
+
+[Severity: High]
+Can a reset restore distinguish an SVA domain whose mm notifier has
+already released?
+
+pci_dev_reset_iommu_prepare() removes the PASID from the driver list.
+If mmu_notifier_release() then runs, sva_mn_release() sees no entry to
+disable and the notifier is removed before the page tables are freed.
+
+pci_dev_reset_iommu_done() subsequently invokes this path with the
+blocking domain.  iommu_sva_set_dev_pasid() accepts it and writes
+domain->mm->pgd back to GCR3 without an active notifier.  The device can
+then resume DMA through page tables that exit_mmap() is freeing.
+
+commit b74d151e658d46e839e42e4cd490c3cd8f5af33f
+Author: Vasant Hegde <vasant.hegde@amd.com>
+
+iommu/amd: Keep the GCR3 table while PASIDs are attached
+
+This defers freeing a device GCR3 table to release_device() so a PCI
+reset can clear active PASIDs before the table is reclaimed.
+
+> diff --git a/drivers/iommu/amd/iommu.c b/drivers/iommu/amd/iommu.c
+> index b429d8dfb3e9..da20ce511a4c 100644
+> --- a/drivers/iommu/amd/iommu.c
+> +++ b/drivers/iommu/amd/iommu.c
+> @@ -2722,6 +2722,7 @@ static void amd_iommu_release_device(struct device *dev)
+>  	}
+>  
+>  	WARN_ON(dev_data->domain);
+> +	destroy_gcr3_table(dev_data, NULL);
+>  
+>  	/*
+>  	 * We keep dev_data around for unplugged devices and reuse it when the
+
+[Severity: High]
+Could release_device() free the GCR3 table after the core has selected the
+identity release domain?
+
+iommu_deinit_device() switches a require_direct device to identity_domain
+instead of blocked_domain.  amd_iommu_attach_device() then returns early
+when the device is already attached to that identity domain, leaving its
+GCR3-mode DTE unchanged.
+
+amd_iommu_release_device() warns that dev_data->domain is still set and
+then frees gcr3_tbl.  The retained DTE can therefore reference the freed
+table.  On a later rescan, the reused dev_data is still attached to the
+identity domain, so the early return also prevents the DTE from being
+rewritten for the newly allocated table.
+
+
+
+4: iommu/amd: Discard partial page requests when the PPR log overflows
+
+What is RUN bit in still set? it  causes overflow restart procedure to fail
+It should be handled as part of last series
+
+5. 08fc54acb738 Nested attach and RID detach do not share one IOPF reference.
+
+6. 9811eb00e7ab A PerfOpt device can get a GCR3 device-table entry with GV set.
+
+
+
