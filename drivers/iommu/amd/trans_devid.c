@@ -155,6 +155,18 @@ static int trans_devid_relocate(struct amd_iommu_pci_seg *pci_seg, u16 from_id,
 		goto unlock_seg;
 	}
 
+	/*
+	 * The PSP is told this devid at guest init and keeps using it.
+	 * Moving the host DTE would leave firmware on the old id, so
+	 * fail the probe that needs this BDF.
+	 */
+	if (amd_viommu_is_secure_guest(aviommu->gid)) {
+		pr_err("%s: refuse relocate of trans_devid %#x, secure gid %#x\n",
+		       __func__, from_id, aviommu->gid);
+		ret = -EBUSY;
+		goto unlock_seg;
+	}
+
 	new_id = trans_devid_find_free_locked(pci_seg);
 	if (new_id < 0) {
 		ret = new_id;
@@ -215,10 +227,11 @@ unlock_seg:
  *
  * When @id is allocated to a vIOMMU (e.g. after PCI hot-plug), the driver relocates
  * that vIOMMU to a newly allocated translate-device-id and reserves @id for the PCI
- * function.
+ * function. A secure vIOMMU is not relocated: its translate devid stays with the PSP.
  *
- * Return: 0 on success, %-ENOSPC if relocation cannot find a free id, or another
- * errno from relocation.  A second reserve of an already-reserved @id succeeds.
+ * Return: 0 on success, %-ENOSPC if relocation cannot find a free id, %-EBUSY if @id
+ * belongs to a secure vIOMMU, or another errno from relocation. A second reserve of
+ * an already-reserved @id succeeds.
  */
 static int trans_devid_reserve(struct amd_iommu_pci_seg *pci_seg, u16 id,
 			       bool allow_relocate)
