@@ -32,6 +32,10 @@ static inline bool is_pasid_valid(struct iommu_dev_data *dev_data,
 static void remove_dev_pasid(struct pdom_dev_data *pdom_dev_data)
 {
 	/* Update GCR3 table and flush IOTLB */
+	pr_info("%s: unbind path devid=0x%x pasid=0x%x\n", __func__,
+			pdom_dev_data->dev_data->devid,
+			pdom_dev_data->pasid);
+
 	amd_iommu_clear_gcr3(pdom_dev_data->dev_data, pdom_dev_data->pasid);
 
 	list_del(&pdom_dev_data->list);
@@ -92,9 +96,13 @@ static void sva_mn_release(struct mmu_notifier *mn, struct mm_struct *mm)
 	 * still-attached PASID at the permanent zero root so a later
 	 * access faults instead of walking freed memory.
 	 */
-	for_each_pdom_dev_data(pdom_dev_data, sva_pdom)
+	for_each_pdom_dev_data(pdom_dev_data, sva_pdom) {
 		amd_iommu_set_gcr3_fault_pgd(pdom_dev_data->dev_data,
 					     pdom_dev_data->pasid);
+		pr_info("%s: devid=0x%x pasid=0x%x\n", __func__,
+				pdom_dev_data->dev_data->devid,
+				pdom_dev_data->pasid);
+	}
 
 	spin_unlock_irqrestore(&sva_pdom->lock, flags);
 }

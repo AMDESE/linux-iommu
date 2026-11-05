@@ -191,6 +191,11 @@ static void iommu_call_iopf_notifier(struct amd_iommu *iommu, u64 *raw)
 	if (PPR_TAG_LAST_PAGE(raw[0]))
 		event.fault.prm.flags |= IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE;
 
+	pr_info("%s: devid=0x%x pasid=0x%x, grpid=0x%x addr=0x%llx\n",
+			__func__, devid, event.fault.prm.pasid,
+			event.fault.prm.grpid,
+			event.fault.prm.addr);
+
 	/* Submit event */
 	iommu_report_device_fault(&pdev->dev, &event);
 	pci_dev_put(pdev);

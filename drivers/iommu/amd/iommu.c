@@ -1893,6 +1893,9 @@ int amd_iommu_complete_ppr(struct amd_iommu *iommu, u16 devid, u32 pasid,
 
 	build_complete_ppr(&cmd, devid, pasid, status, tag, gn);
 
+	pr_info("%s devid=0x%x pasid=%d status=%d tag=%d gn=%d\n",
+			__func__, devid, pasid, status, tag, gn);
+
 	return iommu_queue_command(iommu, &cmd);
 }
 
@@ -2071,6 +2074,8 @@ static int update_gcr3(struct iommu_dev_data *dev_data,
 	if (pte == NULL)
 		return set ? -ENOMEM : 0;
 
+	pr_info("%s:  devid=0x%x pasid %d gcr3=0x%lx : %s\n", 
+			__func__, dev_data->devid, pasid, gcr3, set ? "set" : "clear");
 	if (set)
 		*pte = (gcr3 & PAGE_MASK) | GCR3_VALID;
 	else
@@ -2087,6 +2092,9 @@ int amd_iommu_set_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid,
 	int ret;
 
 	iommu_group_mutex_assert(dev_data->dev);
+
+	pr_info("%s:  devid=0x%x pasid %d gcr3=0x%lx \n",
+			__func__, dev_data->devid, pasid, gcr3);
 
 	ret = update_gcr3(dev_data, pasid, gcr3, true);
 	if (ret)
@@ -2124,6 +2132,10 @@ int amd_iommu_set_gcr3_fault_pgd(struct iommu_dev_data *dev_data,
 	if (WARN_ON_ONCE(!sva_fault_pgd))
 		return -ENODEV;
 
+	pr_info("%s:  devid=0x%x pasid %d gcr3=0x%llx \n",
+			__func__, dev_data->devid, pasid,
+			iommu_virt_to_phys(sva_fault_pgd));
+
 	return update_gcr3(dev_data, pasid,
 			   iommu_virt_to_phys(sva_fault_pgd), true);
 }
@@ -2135,6 +2147,7 @@ int amd_iommu_clear_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid)
 
 	iommu_group_mutex_assert(dev_data->dev);
 
+	pr_info("%s: devid=0x%x pasid %d \n", __func__, dev_data->devid, pasid);
 	ret = update_gcr3(dev_data, pasid, 0, false);
 	if (ret)
 		return ret;
