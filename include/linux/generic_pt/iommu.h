@@ -254,6 +254,8 @@ struct pt_iommu_cfg {
 	int pt_iommu_##fmt##_read_and_clear_dirty(                             \
 		struct iommu_domain *domain, unsigned long iova, size_t size,  \
 		unsigned long flags, struct iommu_dirty_bitmap *dirty);        \
+	int pt_iommu_##fmt##_split_large_leaves(struct iommu_domain *domain,   \
+						unsigned int max_lg2);         \
 	int pt_iommu_##fmt##_init(struct pt_iommu_##fmt *table,                \
 				  const struct pt_iommu_##fmt##_cfg *cfg,      \
 				  gfp_t gfp);                                  \

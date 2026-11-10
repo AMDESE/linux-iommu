@@ -779,6 +779,11 @@ struct protection_domain {
 	u16 id;			/* the domain id written to the device table */
 	enum protection_domain_mode pd_mode; /* Track page table type */
 	bool dirty_tracking;	/* dirty tracking is enabled in the domain */
+	/*
+	 * pgsize_bitmap before dirty tracking caps it. Restored when tracking
+	 * is turned off so later maps can use large leaves again.
+	 */
+	unsigned long pgsize_bitmap_full;
 	struct xarray iommu_array;	/* per-IOMMU reference count */
 
 	struct mmu_notifier mn;	/* mmu notifier for the SVA domain */

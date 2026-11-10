@@ -3416,6 +3416,7 @@ struct iommu_domain *amd_iommu_domain_alloc_paging_v1(struct device *dev, u32 fl
 	 * command line.
 	 */
 	domain->domain.pgsize_bitmap &= amd_iommu_pgsize_bitmap;
+	domain->pgsize_bitmap_full = domain->domain.pgsize_bitmap;
 	return &domain->domain;
 }
 
@@ -3841,6 +3842,13 @@ void amd_iommu_nested_dev_unlink(struct iommu_dev_data *dev_data)
 	amd_iommu_pdom_unbind_iommu(iommu, parent);
 }
 
+/*
+ * Largest stage-2 leaf while dirty tracking is on. A 2 MiB leaf fits a
+ * 128 MiB/s, 300 ms downtime window. A 1 GiB leaf does not: one DMA sets
+ * the single dirty bit for the whole leaf.
+ */
+#define AMD_IOMMU_DIRTY_MAX_PGSIZE_LG2 21
+
 static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					bool enable)
 {
@@ -3849,12 +3857,31 @@ static int amd_iommu_set_dirty_tracking(struct iommu_domain *domain,
 	struct iommu_dev_data *dev_data;
 	bool domain_flush = false;
 	unsigned long flags;
+	int ret = 0;
+
+	/*
+	 * iopt_set_dirty_tracking() holds iova_rwsem and has already cleared
+	 * dirty bits, so the table is stable and no IOTLB dirty bit is waiting
+	 * to be written back. Split before HAD is enabled.
+	 */
+	if (enable && !READ_ONCE(pdomain->dirty_tracking)) {
+		ret = pt_iommu_amdv1_split_large_leaves(
+			domain, AMD_IOMMU_DIRTY_MAX_PGSIZE_LG2);
+		if (ret)
+			return ret;
+	}
 
 	spin_lock_irqsave(&pdomain->lock, flags);
 	if (!(pdomain->dirty_tracking ^ enable)) {
 		spin_unlock_irqrestore(&pdomain->lock, flags);
 		return 0;
 	}
+
+	if (enable)
+		domain->pgsize_bitmap &=
+			GENMASK_U64(AMD_IOMMU_DIRTY_MAX_PGSIZE_LG2, PAGE_SHIFT);
+	else if (pdomain->pgsize_bitmap_full)
+		domain->pgsize_bitmap = pdomain->pgsize_bitmap_full;
 
 	list_for_each_entry(dev_data, &pdomain->dev_list, list) {
 		sync_dev_dte_had(get_amd_iommu_from_dev_data(dev_data),

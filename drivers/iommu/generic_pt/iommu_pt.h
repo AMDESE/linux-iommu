@@ -446,6 +446,185 @@ static inline struct pt_table_p *table_alloc(const struct pt_state *parent_pts,
 			    gfp, mode);
 }
 
+/*
+ * Replace one leaf with a table of leaves at the next level. The next level's
+ * item size is the largest leaf written there; the caller has checked that
+ * size is no larger than the dirty-tracking cap.
+ */
+static int split_leaf_to_child(struct pt_state *parent, unsigned int max_lg2)
+{
+	struct pt_iommu *iommu_table =
+		iommu_from_common(parent->range->common);
+	struct pt_state child_probe =
+		pt_init(parent->range, parent->level - 1, NULL);
+	unsigned int child_isz = pt_table_item_lg2sz(&child_probe);
+	struct pt_write_attrs attrs = {};
+	struct pt_table_p *table_mem;
+	unsigned int nitems;
+	unsigned int step;
+	unsigned int leaf_lg2;
+	unsigned int i;
+	pt_oaddr_t oa;
+	struct pt_range child_range;
+	struct pt_state child_pts;
+	unsigned int parent_isz;
+
+	if (PT_WARN_ON(!pt_can_have_table(parent)))
+		return -EINVAL;
+	if (child_isz > max_lg2)
+		return -EOPNOTSUPP;
+
+	table_mem = table_alloc(parent, GFP_KERNEL, ALLOC_NORMAL);
+	if (IS_ERR(table_mem))
+		return PTR_ERR(table_mem);
+
+	pt_attr_from_entry(parent, &attrs);
+	parent_isz = pt_table_item_lg2sz(parent);
+	/*
+	 * pt_entry_oa() is the start of a contiguous run. Pick this item,
+	 * which is the same address when the run is a single item.
+	 */
+	oa = pt_entry_oa(parent) +
+	     log2_mul(log2_mod(parent->index,
+			       pt_entry_oa_lg2sz(parent) - parent_isz),
+		      parent_isz);
+	pt_index_to_va(parent);
+	child_range = pt_make_child_range(
+		parent->range, log2_set_mod(parent->range->va, 0, parent_isz),
+		log2_set_mod_max(parent->range->va, parent_isz));
+	child_pts = pt_init(&child_range, parent->level - 1, table_mem);
+
+	leaf_lg2 = max_lg2;
+	if (leaf_lg2 < child_isz)
+		leaf_lg2 = child_isz;
+	step = log2_to_int_t(unsigned int, leaf_lg2 - child_isz);
+	nitems = log2_to_int_t(unsigned int, pt_num_items_lg2(&child_pts));
+	for (i = 0; i < nitems; i += step) {
+		child_pts.index = i;
+		pt_install_leaf_entry(&child_pts, oa, leaf_lg2, &attrs);
+		oa += log2_to_int(leaf_lg2);
+	}
+
+	if (pts_feature(parent, PT_FEAT_DMA_INCOHERENT))
+		iommu_pages_flush_incoherent(
+			iommu_table->iommu_device, table_mem, 0,
+			log2_to_int(pt_num_items_lg2(&child_pts) +
+				    ilog2(PT_ITEM_WORD_SIZE)));
+
+	if (!pt_install_table(parent, virt_to_phys(table_mem), &attrs)) {
+		iommu_pages_free_incoherent(table_mem, iommu_table->iommu_device);
+		return -EAGAIN;
+	}
+	flush_writes_item(parent);
+	return 0;
+}
+
+/* Rewrite a contiguous leaf as several leaves of size max_lg2. */
+static void split_contig_leaf(struct pt_state *pts, unsigned int max_lg2)
+{
+	unsigned int isz = pt_table_item_lg2sz(pts);
+	unsigned int nitems = log2_to_int_t(unsigned int,
+					    pt_entry_oa_lg2sz(pts) - isz);
+	unsigned int step = log2_to_int_t(unsigned int, max_lg2 - isz);
+	struct pt_write_attrs attrs = {};
+	unsigned int start = pts->index;
+	pt_oaddr_t oa = pt_entry_oa(pts);
+	unsigned int i;
+
+	pt_attr_from_entry(pts, &attrs);
+	for (i = 0; i < nitems; i += step) {
+		pts->index = start + i;
+		pt_install_leaf_entry(pts, oa, max_lg2, &attrs);
+		oa += log2_to_int(max_lg2);
+	}
+	pts->index = start;
+}
+
+static int __split_large_leaves(struct pt_range *range, void *arg,
+				unsigned int level, struct pt_table_p *table)
+{
+	struct pt_state pts = pt_init(range, level, table);
+	unsigned int max_lg2 = *(unsigned int *)arg;
+	int ret;
+
+	_pt_iter_first(&pts);
+	while (pts.index < pts.end_index) {
+		unsigned int oasz;
+		unsigned int isz;
+
+		pt_index_to_va(&pts);
+		pt_load_entry(&pts);
+		if (pts.type == PT_ENTRY_TABLE) {
+			ret = pt_descend(&pts, arg, __split_large_leaves);
+			if (ret)
+				return ret;
+			pts.index++;
+			continue;
+		}
+		if (pts.type != PT_ENTRY_OA) {
+			pts.index++;
+			continue;
+		}
+
+		oasz = pt_entry_oa_lg2sz(&pts);
+		isz = pt_table_item_lg2sz(&pts);
+		if (oasz <= max_lg2) {
+			pts.index += log2_to_int_t(unsigned int,
+						   pt_entry_num_contig_lg2(&pts));
+			continue;
+		}
+
+		if (isz > max_lg2) {
+			unsigned int n = log2_to_int_t(unsigned int, oasz - isz);
+			unsigned int start = pts.index;
+			unsigned int i;
+
+			for (i = 0; i < n; i++) {
+				pts.index = start + i;
+				pt_index_to_va(&pts);
+				pt_load_entry(&pts);
+				ret = split_leaf_to_child(&pts, max_lg2);
+				if (ret)
+					return ret;
+			}
+			pts.index = start;
+		} else {
+			split_contig_leaf(&pts, max_lg2);
+		}
+		pts.index += log2_to_int_t(unsigned int, oasz - isz);
+	}
+	return 0;
+}
+
+/**
+ * split_large_leaves() - Break leaves larger than @max_lg2
+ * @domain: Domain to rewrite
+ * @max_lg2: Largest leaf that may remain, log2 of the size in bytes
+ *
+ * Dirty tracking records one bit per leaf. A leaf bigger than the migration
+ * downtime window is re-dirtied in full by any write inside it, so precopy
+ * cannot converge. Replace those leaves with smaller ones that cover the same
+ * output address. Call this before dirty tracking is enabled: the IOTLB must
+ * not still hold a dirty bit for a leaf this replaces.
+ *
+ * Context: The caller must exclude map and unmap for the whole table.
+ *
+ * Returns: -ERRNO on failure, 0 on success. A failure can leave some leaves
+ * already split; the translations stay valid.
+ */
+int DOMAIN_NS(split_large_leaves)(struct iommu_domain *domain,
+				  unsigned int max_lg2)
+{
+	struct pt_iommu *iommu_table =
+		container_of(domain, struct pt_iommu, domain);
+	struct pt_range range = pt_all_range(common_from_iommu(iommu_table));
+
+	if (max_lg2 < PT_GRANULE_LG2SZ)
+		return -EINVAL;
+	return pt_walk_range(&range, __split_large_leaves, &max_lg2);
+}
+EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(split_large_leaves), "GENERIC_PT_IOMMU");
+
 static inline int pt_iommu_new_table(struct pt_state *pts,
 				     struct pt_write_attrs *attrs)
 {
