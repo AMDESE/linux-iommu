@@ -1618,6 +1618,8 @@ int sev_tio_tdi_bind(struct pci_dev *pdev, struct tsm_dsm_tio *dev_data,
 	b.guest_device_id = guest_rid;
 	b.gctx_paddr = tdi_data->gctx_paddr;
 	b.run_flags = force_run ? TIO_TDI_BIND_RUN_FORCE : 0;
+	if (!ide_xt_enabled(dev_data->ide[0]))
+		b.tdisp_lock_if_flags |= TIO_TDI_BIND_FLAG_ALL_REQUEST_REDIRECT;
 	if (b.version >= 1)
 		b.mmio_reporting_offset = tdi_data->mmio_reporting_offset;
 	else
