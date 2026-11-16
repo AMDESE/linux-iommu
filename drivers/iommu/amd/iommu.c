@@ -2295,6 +2295,13 @@ static u64 *__get_gcr3_pte(struct gcr3_tbl_info *gcr3_info,
 	u64 *root = gcr3_info->gcr3_tbl;
 	int level = gcr3_info->glx;
 
+	/*
+	 * detach_device() frees the table before a reset clears leftover
+	 * PASIDs. A NULL root with glx == 0 would form &root[pasid].
+	 */
+	if (!root)
+		return NULL;
+
 	while (true) {
 
 		index = (pasid >> (9 * level)) & 0x1ff;
@@ -2363,6 +2370,10 @@ int amd_iommu_clear_gcr3(struct iommu_dev_data *dev_data, ioasid_t pasid)
 	int ret;
 
 	iommu_group_mutex_assert(dev_data->dev);
+
+	/* The table is already freed and the DTE no longer points at it. */
+	if (!gcr3_info->gcr3_tbl)
+		return 0;
 
 	ret = update_gcr3(dev_data, pasid, 0, false);
 	if (ret)
