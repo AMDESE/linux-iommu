@@ -243,11 +243,16 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 	int ret = 0;
 
 	/*
-	 * Needs to make sure PASID is not enabled
-	 * for this attach path.
+	 * The PCI PASID capability may already be enabled by the host. The
+	 * guest owns the GCR3 table installed below, so reject the attach
+	 * while a host PASID still occupies the host table.
 	 */
-	if (WARN_ON(dev_data->pasid_enabled))
+	if (WARN_ON(dev_data->gcr3_info.pasid_cnt))
 		return -EINVAL;
+
+	ret = amd_iommu_iopf_for_domain_replace(dom, old, dev);
+	if (ret)
+		return ret;
 
 	mutex_lock(&dev_data->mutex);
 

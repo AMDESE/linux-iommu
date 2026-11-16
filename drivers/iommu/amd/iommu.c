@@ -2368,7 +2368,6 @@ static int attach_device(struct device *dev,
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
 	struct amd_iommu *iommu = get_amd_iommu_from_dev_data(dev_data);
-	struct pci_dev *pdev;
 	unsigned long flags;
 	int ret = 0;
 
@@ -2384,14 +2383,14 @@ static int attach_device(struct device *dev,
 	if (ret)
 		goto out;
 
-	if (dev_data->perfopt && pdom_is_in_pt_mode(domain))
-		goto skip_caps;
-
 	ret = amd_iommu_iopf_for_domain_replace(&domain->domain, NULL, dev);
 	if (ret) {
 		pdom_detach_iommu(iommu, domain);
 		goto out;
 	}
+
+	if (dev_data->perfopt && pdom_is_in_pt_mode(domain))
+		goto skip_gcr3;
 
 	/*
 	 * A PASID-capable device already owns a table from probe. A paging
@@ -2407,13 +2406,7 @@ static int attach_device(struct device *dev,
 			goto out_iopf;
 	}
 
-	pdev = dev_is_pci(dev_data->dev) ? to_pci_dev(dev_data->dev) : NULL;
-	if (pdev && pdom_is_sva_capable(domain))
-		pdev_enable_caps(pdev);
-	else if (pdev)
-		pdev_enable_cap_ats(pdev);
-
-skip_caps:
+skip_gcr3:
 	/*
 	 * Build and write the DTE under the domain lock so a concurrent
 	 * change_top() or dirty tracking update cannot be overwritten with
@@ -2456,29 +2449,11 @@ static void detach_device(struct device *dev)
 	if (WARN_ON(!dev_data->domain))
 		goto out;
 
-	/* Clear DTE and flush the entry */
 	spin_lock_irqsave(&domain->lock, flags);
 	dev_update_dte(dev_data, false);
 	amd_iommu_domain_flush_all(domain);
 	list_del(&dev_data->list);
 	spin_unlock_irqrestore(&domain->lock, flags);
-
-	/*
-	 * Stop new page requests, then finish the ones already logged,
-	 * before this RID domain's IOPF reference is dropped. An SVA
-	 * PASID holds its own reference and stays registered.
-	 */
-	if (dev_data->iopf_refcount)
-		amd_iommu_drain_ppr_log(dev_data);
-
-	amd_iommu_iopf_for_domain_replace(NULL, &domain->domain, dev);
-
-	/*
-	 * The queue is gone only when this was the last fault-capable
-	 * domain. Leave PRI enabled while another domain still owns it.
-	 */
-	if (!dev_data->iopf_refcount && dev_is_pci(dev))
-		pdev_disable_caps(to_pci_dev(dev));
 
 	/*
 	 * GCR3[0] belongs to the paging domain w/ v2 page table.
@@ -2491,6 +2466,16 @@ static void detach_device(struct device *dev)
 		if (!pdev_pasid_supported(dev_data))
 			free_gcr3_table(&dev_data->gcr3_info);
 	}
+
+	/*
+	 * Stop new page requests, then finish the ones already logged,
+	 * before this RID domain's IOPF reference is dropped. An SVA
+	 * PASID holds its own reference and stays registered.
+	 */
+	if (dev_data->iopf_refcount)
+		amd_iommu_drain_ppr_log(dev_data);
+
+	amd_iommu_iopf_for_domain_replace(NULL, &domain->domain, dev);
 
 	/* Update data structures */
 	dev_data->domain = NULL;
@@ -2599,9 +2584,35 @@ static struct iommu_device *amd_iommu_probe_device(struct device *dev)
 	return iommu_dev;
 }
 
+static void amd_iommu_probe_finalize(struct device *dev)
+{
+	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+
+	if (!dev_is_pci(dev) || dev_data->perfopt)
+		return;
+
+	/*
+	 * Enable the capabilities for the life of the device. PASID precedes
+	 * ATS because changing PASID Enable while ATS is enabled is undefined.
+	 * PRI can be enabled without PASID so a later DMA domain can receive
+	 * requests that do not carry one. DTE[IOTLB] and DTE[PPR] are already
+	 * set from device support, so no DTE update is needed here.
+	 */
+	pdev_enable_caps(to_pci_dev(dev));
+}
+
 static void amd_iommu_release_device(struct device *dev)
 {
 	struct iommu_dev_data *dev_data = dev_iommu_priv_get(dev);
+
+	/*
+	 * The release domain is already attached before this callback runs.
+	 * Disable PRI before ATS and ATS before PASID; no DTE update is needed
+	 * since DTE[IOTLB] and DTE[PPR] are set from device support rather
+	 * than from this state.
+	 */
+	if (dev_is_pci(dev))
+		pdev_disable_caps(to_pci_dev(dev));
 
 	/*
 	 * A device that requires direct mappings is released to the identity
@@ -3322,6 +3333,7 @@ const struct iommu_ops amd_iommu_ops = {
 	.domain_alloc_paging_flags = amd_iommu_domain_alloc_paging_flags,
 	.domain_alloc_sva = amd_iommu_domain_alloc_sva,
 	.probe_device = amd_iommu_probe_device,
+	.probe_finalize = amd_iommu_probe_finalize,
 	.release_device = amd_iommu_release_device,
 	.device_group = amd_iommu_device_group,
 	.get_resv_regions = amd_iommu_get_resv_regions,
