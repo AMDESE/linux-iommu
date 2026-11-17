@@ -537,11 +537,9 @@ int iommufd_vdevice_tsm_bind_ioctl(struct iommufd_ucmd *ucmd)
 		goto out_put_viommu;
 	}
 
-	vdev = container_of(iommufd_get_object(ucmd->ictx, cmd->vdevice_id,
-					       IOMMUFD_OBJ_VDEVICE),
-			    struct iommufd_vdevice, obj);
-	if (IS_ERR(idev)) {
-		rc = PTR_ERR(idev);
+	vdev = iommufd_get_vdevice(ucmd->ictx, cmd->vdevice_id);
+	if (IS_ERR(vdev)) {
+		rc = PTR_ERR(vdev);
 		goto out_put_dev;
 	}
 
@@ -623,11 +621,9 @@ int iommufd_vdevice_tsm_guest_request_ioctl(struct iommufd_ucmd *ucmd)
 		goto out_put_viommu;
 	}
 
-	vdev = container_of(iommufd_get_object(ucmd->ictx, cmd->vdevice_id,
-					       IOMMUFD_OBJ_VDEVICE),
-			    struct iommufd_vdevice, obj);
-	if (IS_ERR(idev)) {
-		rc = PTR_ERR(idev);
+	vdev = iommufd_get_vdevice(ucmd->ictx, cmd->vdevice_id);
+	if (IS_ERR(vdev)) {
+		rc = PTR_ERR(vdev);
 		goto out_put_dev;
 	}
 
