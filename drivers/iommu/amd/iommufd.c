@@ -4,6 +4,7 @@
  */
 
 #include <asm/sev-kvm.h>
+#include <asm/svm.h>
 
 #include <linux/iommu.h>
 #include <linux/amd-iommu.h>
@@ -134,7 +135,14 @@ static int sviommu_gid_alloc(struct amd_iommu_viommu *aviommu, u32 kvmfd)
 		return PTR_ERR(kvm);
 
 	sev = &to_kvm_svm(kvm)->sev_info;
-	if (!sev->asid) {
+	/*
+	 * The secure GID is this VM's SEV-SNP ASID, and guest init later
+	 * hands sev->snp_context to the PSP. A non-SNP VM also has an ASID,
+	 * so reject anything that is not an SNP guest with a launch context.
+	 */
+	if (!sev->active || !sev->es_active ||
+	    !(sev->vmsa_features & SVM_SEV_FEAT_SNP_ACTIVE) ||
+	    !sev->snp_context || !sev->asid) {
 		ops->put_kvm(kvm);
 		return -EINVAL;
 	}
