@@ -543,6 +543,15 @@ int iommufd_vdevice_tsm_bind_ioctl(struct iommufd_ucmd *ucmd)
 		goto out_put_dev;
 	}
 
+	/*
+	 * The three ids are independent objects. Refuse a vDEVICE that was
+	 * not allocated for this vIOMMU and device.
+	 */
+	if (vdev->viommu != viommu || vdev->idev != idev) {
+		rc = -EINVAL;
+		goto out_put_vdev;
+	}
+
 	if (cmd->kvmfd == -1) {
 		iommufd_vdevice_tsm_unbind(vdev);
 	} else {
@@ -618,13 +627,22 @@ int iommufd_vdevice_tsm_guest_request_ioctl(struct iommufd_ucmd *ucmd)
 	domain = iommu_get_domain_for_dev(idev->dev);
 	if (!domain) {
 		rc = -ENODEV;
-		goto out_put_viommu;
+		goto out_put_dev;
 	}
 
 	vdev = iommufd_get_vdevice(ucmd->ictx, cmd->vdevice_id);
 	if (IS_ERR(vdev)) {
 		rc = PTR_ERR(vdev);
 		goto out_put_dev;
+	}
+
+	/*
+	 * The three ids are independent objects. Refuse a vDEVICE that was
+	 * not allocated for this vIOMMU and device.
+	 */
+	if (vdev->viommu != viommu || vdev->idev != idev) {
+		rc = -EINVAL;
+		goto out_put_vdev;
 	}
 
 	switch (cmd->scope) {
