@@ -1,0 +1,42 @@
+VFIO SDXI live migration
+========================
+
+Move an SDXI function without quiescing the PF, and without an FLR
+while a soft-stop is still waiting on the guest.
+
+dma/sdxi
+--------
+1. dma/sdxi: restart VF contexts without quiescing the PF
+
+   Share GSV/GSR and the capability bits the migration blob checks.
+   A stuck CXT_START_RS returns the error and leaves the PF running.
+
+Guest DMA
+---------
+2. iommu/amd: walk guest DMA for the SDXI migration blob
+
+   Context tables and completion signals live in guest RAM. The VFIO
+   driver reads and writes them through the device page tables.
+
+VFIO
+----
+3. vfio/pci: skip reset while a function soft-stop is in progress
+
+   A function waiting on the guest does not finish FLR, and the
+   bus-reset fallback hangs the same way. skip_reset leaves it
+   alone and keeps needs_reset clear so close does not reset either.
+
+4. vfio: add VFIO_DEVICE_FEATURE_SDXI_PAUSE
+
+   Stop or restart an SDXI function without a migration state change
+   and without resetting the device. DRAIN polls until GSV_STOP so a
+   guest that is still running can finish an outstanding PRI. RESUME
+   activates the function again after a failed drain.
+
+5. vfio/pci/sdxi: add the live-migration driver
+
+   BAR0 start and stop stay in this driver, and pause is feature 14.
+
+6. tools/testing: add the sdxi-vfio-migration harness
+
+   Drives the VFIO migration device against an SDXI function.
