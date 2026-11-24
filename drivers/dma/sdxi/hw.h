@@ -331,7 +331,11 @@ enum sdxi_dsc_subtype {
 	SDXI_DSC_OP_SUBTYPE_CXT_STOP     = 0x04,
 	SDXI_DSC_OP_SUBTYPE_SYNC         = 0x06,
 	SDXI_DSC_OP_SUBTYPE_RKEY_UPD     = 0x07,
+	SDXI_DSC_OP_SUBTYPE_CXT_START_RS = 0x08,
 	SDXI_DSC_OP_SUBTYPE_DISC         = 0x09,
 };
+
+/* vflags in DSC_CXT_START: vf_num names a virtual function. */
+#define SDXI_DSC_CXT_START_VF BIT(7)
 
 #endif /* DMA_SDXI_HW_H */

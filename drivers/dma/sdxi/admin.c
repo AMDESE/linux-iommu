@@ -14,13 +14,12 @@
 #include "descriptor.h"
 #include "ring.h"
 
-#define SDXI_ADMIN_DEFAULT_TIMEOUT_MS	5000U
 #define SDXI_ADMIN_DRAIN_TIMEOUT_MS	1000U
 
 static int sdxi_adm_submit(struct sdxi_cxt *adm,
 			   const struct sdxi_desc *descs, size_t nr_descs,
 			   unsigned int timeout_ms, u32 *cst_flags,
-			   bool interruptible)
+			   bool interruptible, bool quiesce_on_stall)
 {
 	struct sdxi_ring_resv resv;
 	struct sdxi_completion comp;
@@ -74,11 +73,14 @@ static int sdxi_adm_submit(struct sdxi_cxt *adm,
 			if (cst_flags)
 				*cst_flags = sdxi_cst_blk_flags(comp.cst_blk);
 		}
-		if (wait_ret == -ETIMEDOUT) {
+		if (wait_ret == -ETIMEDOUT && quiesce_on_stall) {
 			adm->sdxi->admin_dead = true;
 			dev_err(adm->sdxi->dev,
 				"admin command did not drain; quiescing function\n");
 			sdxi_dev_force_quiesce(adm->sdxi);
+		} else if (wait_ret == -ETIMEDOUT) {
+			dev_err(adm->sdxi->dev,
+				"admin command did not drain; leaving function running\n");
 		}
 	}
 	if (!ret || ret == -EIO) {
@@ -118,7 +120,8 @@ int sdxi_adm_update_cxt(struct sdxi_cxt *cxt)
 		return ret;
 
 	return sdxi_adm_submit(to_admin_cxt(cxt), descs, ARRAY_SIZE(descs),
-			       SDXI_ADMIN_DEFAULT_TIMEOUT_MS, NULL, false);
+			       SDXI_ADMIN_DEFAULT_TIMEOUT_MS, NULL, false,
+			       true);
 }
 
 int sdxi_adm_start_cxt_sync(struct sdxi_cxt *cxt, unsigned int timeout_ms,
@@ -147,7 +150,7 @@ int sdxi_adm_start_cxt_sync(struct sdxi_cxt *cxt, unsigned int timeout_ms,
 	WRITE_ONCE(cxt->quiesced, false);
 	WRITE_ONCE(cxt->started, true);
 	ret = sdxi_adm_submit(to_admin_cxt(cxt), descs, ARRAY_SIZE(descs),
-			      timeout_ms, cst_flags, interruptible);
+			      timeout_ms, cst_flags, interruptible, true);
 
 	return ret;
 }
@@ -175,7 +178,7 @@ int sdxi_adm_stop_cxt_sync(struct sdxi_cxt *cxt, unsigned int timeout_ms,
 		return ret;
 
 	ret = sdxi_adm_submit(to_admin_cxt(cxt), descs, ARRAY_SIZE(descs),
-			      timeout_ms, cst_flags, interruptible);
+			      timeout_ms, cst_flags, interruptible, true);
 	if (!ret)
 		WRITE_ONCE(cxt->started, false);
 
@@ -208,7 +211,7 @@ int sdxi_adm_rkey_update_sync(struct sdxi_dev *sdxi, u16 rkey_start,
 		return ret;
 
 	return sdxi_adm_submit(sdxi->admin_cxt, descs, ARRAY_SIZE(descs),
-			       timeout_ms, cst_flags, false);
+			       timeout_ms, cst_flags, false, true);
 }
 
 int sdxi_adm_akey_update_sync(struct sdxi_dev *sdxi, u16 cxt_start,
@@ -243,7 +246,7 @@ int sdxi_adm_akey_update_sync(struct sdxi_dev *sdxi, u16 cxt_start,
 		return ret;
 
 	return sdxi_adm_submit(sdxi->admin_cxt, descs, ARRAY_SIZE(descs),
-			       timeout_ms, cst_flags, false);
+			       timeout_ms, cst_flags, false, true);
 }
 
 int sdxi_adm_disc(struct sdxi_dev *sdxi, u16 index_start, u16 index_end,
@@ -264,7 +267,7 @@ int sdxi_adm_disc(struct sdxi_dev *sdxi, u16 index_start, u16 index_end,
 		return ret;
 
 	return sdxi_adm_submit(sdxi->admin_cxt, &desc, 1, timeout_ms,
-			       cst_flags, false);
+			       cst_flags, false, true);
 }
 
 int sdxi_adm_submit_desc(struct sdxi_cxt *adm, const struct sdxi_desc *desc,
@@ -273,8 +276,26 @@ int sdxi_adm_submit_desc(struct sdxi_cxt *adm, const struct sdxi_desc *desc,
 	if (!desc)
 		return -EINVAL;
 
-	return sdxi_adm_submit(adm, desc, 1, timeout_ms, cst_flags, false);
+	return sdxi_adm_submit(adm, desc, 1, timeout_ms, cst_flags, false,
+			       true);
 }
+
+/*
+ * Same submit path as sdxi_adm_submit_desc(), except a stuck drain returns
+ * the error and leaves the function running. Used when a failed VF context
+ * restart must not take down the PF.
+ */
+int sdxi_adm_submit_desc_noforce(struct sdxi_cxt *adm,
+				 const struct sdxi_desc *desc,
+				 unsigned int timeout_ms, u32 *cst_flags)
+{
+	if (!desc)
+		return -EINVAL;
+
+	return sdxi_adm_submit(adm, desc, 1, timeout_ms, cst_flags, false,
+			       false);
+}
+EXPORT_SYMBOL_NS_GPL(sdxi_adm_submit_desc_noforce, "SDXI");
 EXPORT_SYMBOL_NS_GPL(sdxi_adm_submit_desc, "SDXI");
 
 int sdxi_adm_start_cxt(struct sdxi_cxt *cxt)

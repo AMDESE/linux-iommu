@@ -10,6 +10,7 @@
 #include <linux/align.h>
 #include <linux/bitfield.h>
 #include <linux/bug.h>
+#include <linux/export.h>
 #include <linux/range.h>
 #include <linux/sizes.h>
 #include <linux/types.h>
@@ -139,6 +140,36 @@ int sdxi_encode_cxt_start(struct sdxi_desc *desc,
 	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(sdxi_encode_cxt_start);
+
+int sdxi_encode_cxt_start_rs(struct sdxi_desc *desc,
+			     const struct sdxi_cxt_start_rs *params)
+{
+	u64 csb_ptr;
+	u32 opcode;
+
+	if (!params)
+		return -EINVAL;
+
+	opcode = (FIELD_PREP(SDXI_DSC_FE, 1) |
+		  FIELD_PREP(SDXI_DSC_SUBTYPE, SDXI_DSC_OP_SUBTYPE_CXT_START_RS) |
+		  FIELD_PREP(SDXI_DSC_TYPE, SDXI_DSC_OP_TYPE_ADMIN));
+	csb_ptr = FIELD_PREP(SDXI_DSC_NP, 1);
+
+	*desc = (typeof(*desc)) {
+		.cxt_start = (typeof(desc->cxt_start)) {
+			.opcode = cpu_to_le32(opcode),
+			.vflags = SDXI_DSC_CXT_START_VF,
+			.vf_num = cpu_to_le16(params->vf_num),
+			.cxt_start = cpu_to_le16(params->range.cxt_start),
+			.cxt_end = cpu_to_le16(params->range.cxt_end),
+			.db_value = cpu_to_le64(params->db_value),
+			.csb_ptr = cpu_to_le64(csb_ptr),
+		},
+	};
+
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(sdxi_encode_cxt_start_rs, "SDXI");
 
 int sdxi_encode_cxt_stop(struct sdxi_desc *desc,
 			  const struct sdxi_cxt_stop *params)

@@ -54,12 +54,15 @@ enum sdxi_reg {
 /* SDXI 1.0 Table 9-6: MMIO_CAP0 */
 #define SDXI_MMIO_CAP0_SFUNC          GENMASK_ULL(15, 0)
 #define SDXI_MMIO_CAP0_VF             BIT_ULL(16)
+#define SDXI_MMIO_CAP0_CS_CAP         GENMASK_ULL(18, 17)
 #define SDXI_MMIO_CAP0_DB_STRIDE      GENMASK_ULL(22, 20)
 #define SDXI_MMIO_CAP0_MAX_DS_RING_SZ GENMASK_ULL(28, 24)
+#define SDXI_MMIO_CAP0_MAX_RKEY_SZ    GENMASK_ULL(35, 32)
 
 /* SDXI 1.0 Table 9-7: MMIO_CAP1 */
 #define SDXI_MMIO_CAP1_MAX_BUFFER    GENMASK_ULL(3, 0)
 #define SDXI_MMIO_CAP1_RKEY_CAP      BIT_ULL(4)
+#define SDXI_MMIO_CAP1_RM            BIT_ULL(5)
 #define SDXI_MMIO_CAP1_MMIO64        BIT_ULL(6)
 #define SDXI_MMIO_CAP1_MAX_ERRLOG_SZ GENMASK_ULL(11, 8)
 #define SDXI_MMIO_CAP1_MAX_AKEY_SZ   GENMASK_ULL(15, 12)
@@ -90,5 +93,23 @@ enum sdxi_reg {
 #define SDXI_MMIO_ERR_CFG_EN  BIT_ULL(0)
 #define SDXI_MMIO_ERR_CFG_SZ  GENMASK_ULL(5, 1)
 #define SDXI_MMIO_ERR_CFG_PTR GENMASK_ULL(63, 12)
+
+/* SDXI 1.0 Table 9-5: MMIO_STS0.fn_gsv */
+enum sdxi_fn_gsv {
+	SDXI_GSV_STOP     = 0,
+	SDXI_GSV_INIT     = 1,
+	SDXI_GSV_ACTIVE   = 2,
+	SDXI_GSV_STOPG_SF = 3,
+	SDXI_GSV_STOPG_HD = 4,
+	SDXI_GSV_ERROR    = 5,
+};
+
+/* SDXI 1.0 Table 9-2: MMIO_CTL0.fn_gsr */
+enum sdxi_fn_gsr {
+	SDXI_GSRV_RESET   = 0,
+	SDXI_GSRV_STOP_SF = 1,
+	SDXI_GSRV_STOP_HD = 2,
+	SDXI_GSRV_ACTIVE  = 3,
+};
 
 #endif  /* DMA_SDXI_MMIO_H */

@@ -110,6 +110,16 @@ struct sdxi_cxt_start {
 int sdxi_encode_cxt_start(struct sdxi_desc *desc,
 			  const struct sdxi_cxt_start *params);
 
+/* PF admin command that starts contexts on one VF (DSC_CXT_START_RS). */
+struct sdxi_cxt_start_rs {
+	struct sdxi_cxt_range range;
+	u16 vf_num;
+	u64 db_value;
+};
+
+int sdxi_encode_cxt_start_rs(struct sdxi_desc *desc,
+			     const struct sdxi_cxt_start_rs *params);
+
 struct sdxi_cxt_stop {
 	struct sdxi_cxt_range range;
 };

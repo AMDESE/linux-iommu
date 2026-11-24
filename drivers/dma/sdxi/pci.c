@@ -18,7 +18,10 @@
 #include <linux/pci-ats.h>
 #include <linux/pci.h>
 
+#include "admin.h"
 #include "context.h"
+#include "descriptor.h"
+#include "migration.h"
 #include "mmio.h"
 #include "sdxi.h"
 
@@ -202,6 +205,40 @@ static const struct sdxi_bus_ops sdxi_pci_ops = {
 	.mmap_doorbell = sdxi_pci_mmap_doorbell,
 	.chardev_name = sdxi_pci_chardev_name,
 };
+
+/*
+ * Start a range of contexts on @vf by submitting DSC_CXT_START_RS to the
+ * PF admin queue. A stuck command returns the error and leaves the PF
+ * running; it does not mark the admin queue dead or force the function
+ * quiescent.
+ */
+int sdxi_pf_restart_vf_contexts(struct pci_dev *vf, u16 vf_num,
+				u16 cxt_start, u16 cxt_end, u64 db_value)
+{
+	struct sdxi_dev *pf;
+	struct sdxi_desc desc = {};
+	int ret;
+
+	if (!vf || !vf->is_virtfn)
+		return -EINVAL;
+
+	pf = pci_iov_get_pf_drvdata(vf, &sdxi_driver);
+	if (IS_ERR_OR_NULL(pf) || !pf->admin_cxt)
+		return -ENODEV;
+
+	ret = sdxi_encode_cxt_start_rs(&desc, &(const struct sdxi_cxt_start_rs) {
+			.range = sdxi_cxt_range(cxt_start, cxt_end),
+			.vf_num = vf_num,
+			.db_value = db_value,
+		});
+	if (ret)
+		return ret;
+
+	return sdxi_adm_submit_desc_noforce(pf->admin_cxt, &desc,
+					    SDXI_ADMIN_DEFAULT_TIMEOUT_MS,
+					    NULL);
+}
+EXPORT_SYMBOL_NS_GPL(sdxi_pf_restart_vf_contexts, "SDXI");
 
 static int sdxi_pci_probe(struct pci_dev *pdev,
 			  const struct pci_device_id *id)

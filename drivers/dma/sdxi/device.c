@@ -31,15 +31,6 @@
 #include "mmio.h"
 #include "sdxi.h"
 
-enum sdxi_fn_gsv {
-	SDXI_GSV_STOP     = 0,
-	SDXI_GSV_INIT     = 1,
-	SDXI_GSV_ACTIVE   = 2,
-	SDXI_GSV_STOPG_SF = 3,
-	SDXI_GSV_STOPG_HD = 4,
-	SDXI_GSV_ERROR    = 5,
-};
-
 static const char *const gsv_strings[] = {
 	[SDXI_GSV_STOP]     = "stopped",
 	[SDXI_GSV_INIT]     = "initializing",
@@ -56,13 +47,6 @@ static const char *gsv_str(enum sdxi_fn_gsv gsv)
 
 	return "unknown";
 }
-
-enum sdxi_fn_gsr {
-	SDXI_GSRV_RESET   = 0,
-	SDXI_GSRV_STOP_SF = 1,
-	SDXI_GSRV_STOP_HD = 2,
-	SDXI_GSRV_ACTIVE  = 3,
-};
 
 static const char *const gsr_strings[] = {
 	[SDXI_GSRV_RESET]   = "reset",
