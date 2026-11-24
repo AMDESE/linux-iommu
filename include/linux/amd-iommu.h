@@ -102,4 +102,27 @@ static inline int amd_iommu_enable_perfopt(struct pci_dev *pdev)
 static inline void amd_iommu_disable_perfopt(struct pci_dev *pdev) { }
 #endif
 
+struct device;
+
+#if IS_ENABLED(CONFIG_AMD_IOMMU)
+int amd_iommu_read_guest_dma(struct device *dev, u32 pasid,
+			     dma_addr_t iova, void *buf, size_t len);
+int amd_iommu_write_guest_dma(struct device *dev, u32 pasid,
+			      dma_addr_t iova, const void *buf, size_t len);
+#else
+static inline int amd_iommu_read_guest_dma(struct device *dev, u32 pasid,
+					   dma_addr_t iova, void *buf,
+					   size_t len)
+{
+	return -ENODEV;
+}
+
+static inline int amd_iommu_write_guest_dma(struct device *dev, u32 pasid,
+					    dma_addr_t iova, const void *buf,
+					    size_t len)
+{
+	return -ENODEV;
+}
+#endif
+
 #endif /* _ASM_X86_AMD_IOMMU_H */
