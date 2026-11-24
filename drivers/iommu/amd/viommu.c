@@ -936,6 +936,11 @@ static void amd_viommu_hw_queue_destroy(struct iommufd_hw_queue *hw_queue)
 	mutex_unlock(&aviommu->vfctrl_lock);
 }
 
+/*
+ * The enable bits come from hw_queue->flags and may be zero. During migration,
+ * restore allocates the ring with its enables masked off and COMMIT_RESTORE
+ * arms it afterwards.
+ */
 int amd_viommu_set_hw_queue_flags(struct iommufd_hw_queue *hw_queue)
 {
 	struct iommufd_viommu *viommu = hw_queue->viommu;
@@ -946,7 +951,6 @@ int amd_viommu_set_hw_queue_flags(struct iommufd_hw_queue *hw_queue)
 	const struct amd_viommu_ring_desc *desc;
 	u8 __iomem *vfctrl;
 	unsigned int slot;
-	u64 enable_bits;
 	u64 val;
 	int ret = 0;
 
@@ -956,9 +960,6 @@ int amd_viommu_set_hw_queue_flags(struct iommufd_hw_queue *hw_queue)
 	slot = desc - amd_viommu_rings;
 
 	if (hw_queue->flags & ~amd_viommu_ring_queue_flags(desc))
-		return -EINVAL;
-	enable_bits = amd_viommu_ring_reg_bits(desc, hw_queue->flags);
-	if (!enable_bits)
 		return -EINVAL;
 	if (!IS_ALIGNED(hw_queue->base_addr, SZ_4K))
 		return -EINVAL;
@@ -982,7 +983,7 @@ int amd_viommu_set_hw_queue_flags(struct iommufd_hw_queue *hw_queue)
 	val |= field_prep(desc->len_mask, ilog2(hw_queue->length) - 4);
 	/* The base field holds GPA bit 12 up, wherever the ring puts it */
 	val |= field_prep(desc->base_mask, hw_queue->base_addr >> PAGE_SHIFT);
-	val |= enable_bits;
+	val |= amd_viommu_ring_reg_bits(desc, hw_queue->flags);
 	writeq(val, vfctrl + desc->ctrl_off);
 
 	aviommu->hw_queues[slot] = hw_queue;
