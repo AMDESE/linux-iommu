@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SDXI_VFIO_PCI
+	tristate "VFIO support for SDXI PCI devices"
+	depends on PCI && PCI_MSI
+	depends on SDXI_PCI
+	select VFIO_PCI_CORE
+	help
+	  VFIO driver for AMD SDXI (Smart Data Accelerator Interface)
+	  PCI devices with savevm/loadvm migration support.
+
+	  The driver saves and restores the small set of writable BAR0
+	  control registers (CTL0, CTL2, CXT_L2, RKEY, ERR_CFG, ERR_CTL,
+	  ERR_WRT, ERR_RD). Context tables, descriptor rings, and
+	  completion-status blocks live in guest RAM and are captured
+	  as part of the VM memory snapshot.
+
+	  After resume, the variant driver asks the host SDXI PF driver
+	  to restart the VF's contexts so the guest can resume DMA
+	  without explicit cooperation.
+
+	  P2P migration (VFIO_MIGRATION_P2P) enables QEMU live migration
+	  when multiple SDXI VFs are assigned to one VM. SDXI cannot
+	  quiesce peer DMA independently, so RUNNING_P2P uses the same
+	  function stop (GSV_STOP) as STOP; see main.h for the FSM design.
+
+	  PRE_COPY migration (VFIO_MIGRATION_PRE_COPY) keeps the function
+	  active during the precopy phase; guest RAM dirtiness is tracked
+	  via IOMMU dirty pages. The device migration stream carries the
+	  MMIO blob only at STOP_COPY. That blob includes each context's
+	  post-stop status block. Resume writes those bytes into guest
+	  RAM before the function starts again.
+
+	  To compile this driver as a module, choose M here; the module
+	  will be called sdxi-vfio-pci.
