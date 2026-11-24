@@ -109,6 +109,13 @@ void amd_iommu_dev_flush_pasid_pages(struct iommu_dev_data *dev_data,
 
 int amd_iommu_pdom_bind_iommu(struct amd_iommu *iommu, struct protection_domain *pdom);
 void amd_iommu_pdom_unbind_iommu(struct amd_iommu *iommu, struct protection_domain *pdom);
+void amd_iommu_nested_dev_link(struct protection_domain *parent,
+			       struct iommu_domain *nested_dom,
+			       struct iommu_dev_data *dev_data);
+void amd_iommu_nested_dev_unlink(struct iommu_dev_data *dev_data);
+void amd_iommu_dev_list_remove(struct iommu_dev_data *dev_data);
+void amd_iommu_update_nested_dte(struct iommu_dev_data *dev_data,
+				 phys_addr_t top_paddr, unsigned int top_level);
 
 #ifdef CONFIG_IRQ_REMAP
 int amd_iommu_create_irq_domain(struct amd_iommu *iommu);
