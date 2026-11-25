@@ -110,7 +110,8 @@ void iommufd_ctx_get(struct iommufd_ctx *ictx);
  * SAVED and COMMITTED are terminal: the vIOMMU is either about to be destroyed
  * along with its VM, or is resumed by an abort. That makes abort the path a
  * source takes when migration fails and the VM keeps running, which is why it
- * is reachable from a state where nothing actually went wrong.
+ * is reachable from a state where nothing actually went wrong. Destroying a
+ * vIOMMU in any state other than NONE runs the same abort first.
  */
 enum iommufd_viommu_mig_state {
 	IOMMUFD_VIOMMU_MIG_NONE = 0,
@@ -278,20 +279,29 @@ struct iommufd_hw_queue {
  * @mig_save: Fill in @hdr and write up to @payload_len bytes to @payload. The
  *            core has zeroed both. The driver owns the payload layout and must
  *            set hdr->payload_size to the number of bytes it actually wrote
- * @mig_restore: Consume a header and payload saved by @mig_save, validating
- *               them against the objects userspace has allocated. Must not
- *               apply anything to hardware, so that a rejected payload leaves
- *               the vIOMMU untouched
+ * @mig_restore: Consume a header and payload saved by @mig_save. Validate all
+ *               of it against the objects userspace has allocated before
+ *               applying any of it, so that a payload that fails validation
+ *               leaves the vIOMMU untouched. The apply step may then write
+ *               guest memory and program ring pointers, but must not arm
+ *               queues or enable anything. An error from it is an access
+ *               failure or a ring that changed after validation, and
+ *               @mig_abort discards the records of what it applied
  * @mig_commit_restore: Apply the state accepted by @mig_restore to hardware,
  *                      arm queues and invalidate caches
  *
  * Every migration op that may touch guest memory is passed a @ctx it can read
  * and write guest pages through, valid only for that call. @mig_get_size and
  * @mig_abort are not: sizing must not depend on guest memory, and an abort
- * only has hardware left to undo.
+ * only has hardware left to undo. Guest bytes a failed @mig_restore apply
+ * already wrote are not put back.
  * @mig_abort: Abandon an in-progress save or restore and undo its effects,
  *             including any freeze applied by @mig_prepare_save. Cannot fail:
- *             there is no useful way for a caller to respond to a failed abort
+ *             there is no useful way for a caller to respond to a failed abort.
+ *             The core also calls it from vIOMMU destruction when a migration
+ *             is still in flight, ahead of @destroy and with the vIOMMU still
+ *             intact, so a driver need not duplicate migration cleanup in
+ *             @destroy
  *
  * The migration ops are optional, but must be provided as a set: the core
  * reports migration as unsupported unless all of them are present. The core
