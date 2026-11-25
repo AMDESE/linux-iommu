@@ -336,24 +336,32 @@ static int nested_attach_device(struct iommu_domain *dom, struct device *dev,
 		goto out_err;
 
 	/*
+	 * Program gdom_id -> hdom_id before the DTE is live with
+	 * DTE_VIOMMU_EN. Hold vfctrl_lock across the update, the teardown
+	 * and the link so a concurrent last-ref free cannot restore the
+	 * idle map in between. vfctrl_lock is taken before the parent
+	 * domain lock, which the unlink and nested_dev_link() acquire.
+	 *
+	 * This is the last step that can fail, and it runs before the
+	 * device is detached, so a failure leaves the previous attachment
+	 * intact.
+	 */
+	mutex_lock(&ndom->viommu->vfctrl_lock);
+	ret = amd_viommu_domain_id_update_locked(ndom->viommu,
+						 ndom->gdom_info->hdom_id,
+						 ndom->gdom_id);
+	if (ret) {
+		mutex_unlock(&ndom->viommu->vfctrl_lock);
+		goto out_err;
+	}
+
+	/*
 	 * Past the last failure. The old parent may be a different domain
 	 * from the one being joined, and the unlink drops the reference
 	 * this device holds on it.
 	 */
 	amd_iommu_nested_dev_unlink(dev_data);
 	amd_iommu_dev_list_remove(dev_data);
-
-	/*
-	 * Program gdom_id -> hdom_id before the DTE is live with
-	 * DTE_VIOMMU_EN. Hold vfctrl_lock across both so a concurrent
-	 * last-ref free cannot restore the idle map in between.
-	 * vfctrl_lock is taken before the parent domain lock, which
-	 * nested_dev_link() acquires while it writes the DTE.
-	 */
-	mutex_lock(&ndom->viommu->vfctrl_lock);
-	amd_viommu_domain_id_update_locked(ndom->viommu,
-					   ndom->gdom_info->hdom_id,
-					   ndom->gdom_id);
 	amd_iommu_nested_dev_link(ndom->viommu->parent, dom, dev_data);
 	mutex_unlock(&ndom->viommu->vfctrl_lock);
 
@@ -416,8 +424,9 @@ static void nested_domain_free(struct iommu_domain *dom)
 	 * until this last free, so a lingering gdom_id -> hdom_id
 	 * map cannot point at a recycled ID.
 	 */
-	amd_viommu_domain_id_update_locked(aviommu, aviommu->parent->id,
-					   ndom->gdom_id);
+	WARN_ON(amd_viommu_domain_id_update_locked(aviommu,
+						   aviommu->parent->id,
+						   ndom->gdom_id));
 	mutex_unlock(&aviommu->vfctrl_lock);
 
 	amd_iommu_pdom_id_free(curr->hdom_id);

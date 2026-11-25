@@ -667,8 +667,8 @@ void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
  * Guest DomID table update via VFCTRL CONTROL1. Same WRITE-bit
  * doorbell as CONTROL0.
  */
-static void domain_id_update_unlocked(struct amd_iommu *iommu, u16 gid,
-				      u16 hdom_id, u16 gdom_id)
+static int domain_id_update_unlocked(struct amd_iommu *iommu, u16 gid,
+				     u16 hdom_id, u16 gdom_id)
 {
 	u64 val;
 	u8 __iomem *vfctrl = VIOMMU_VFCTRL_MMIO_BASE(iommu, gid);
@@ -682,20 +682,27 @@ static void domain_id_update_unlocked(struct amd_iommu *iommu, u16 gid,
 	writeq(val, vfctrl + VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
 	vfctrl_wait_write_clear(iommu, gid,
 			VIOMMU_VFCTRL_GUEST_DID_MAP_CONTROL1_OFFSET);
+
+	return 0;
 }
 
 /*
  * Program a gdom_id -> hdom_id entry through VFCTRL CONTROL1.
  * Caller must hold aviommu->vfctrl_lock.
+ *
+ * Returns 0 on success or a negative errno. A caller that tears down
+ * state must call this first so a failure leaves that state intact.
+ * Nothing in the update fails today; the return value keeps that
+ * ordering safe if one is added.
  */
-void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
-					u16 hdom_id, u16 gdom_id)
+int amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
+				       u16 hdom_id, u16 gdom_id)
 {
 	struct amd_iommu *iommu =
 		container_of(aviommu->core.iommu_dev, struct amd_iommu, iommu);
 
 	lockdep_assert_held(&aviommu->vfctrl_lock);
-	domain_id_update_unlocked(iommu, aviommu->gid, hdom_id, gdom_id);
+	return domain_id_update_unlocked(iommu, aviommu->gid, hdom_id, gdom_id);
 }
 
 static bool viommu_vfctrl_ready(struct amd_iommu *iommu)

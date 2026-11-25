@@ -32,8 +32,8 @@ int amd_viommu_init_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu
 
 void amd_viommu_uninit_one(struct amd_iommu *iommu, struct amd_iommu_viommu *viommu);
 
-void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
-					u16 hdom_id, u16 gdom_id);
+int amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
+				       u16 hdom_id, u16 gdom_id);
 
 void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviommu,
 				   u16 hdev_id, u16 gdev_id);
@@ -105,9 +105,10 @@ static inline void amd_viommu_set_device_mapping(struct amd_iommu_viommu *aviomm
 {
 }
 
-static inline void amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
-						      u16 hdom_id, u16 gdom_id)
+static inline int amd_viommu_domain_id_update_locked(struct amd_iommu_viommu *aviommu,
+						     u16 hdom_id, u16 gdom_id)
 {
+	return 0;
 }
 
 static inline void
