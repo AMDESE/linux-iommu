@@ -16,6 +16,7 @@
 #include <linux/ktime.h>
 #include <linux/log2.h>
 #include <linux/overflow.h>
+#include <linux/sched/signal.h>
 #include <linux/string.h>
 
 #include "amd_iommu.h"
@@ -197,6 +198,10 @@ static int amd_viommu_mig_wait_sem(const struct iommufd_viommu_mig_ctx *ctx,
 		if ((s64)(observed - expected) >= 0)
 			return 0;
 
+		/* The caller is dying, so there is no one left to wait for */
+		if (fatal_signal_pending(current))
+			return -EINTR;
+
 		if (ktime_after(ktime_get(), deadline))
 			return -ETIMEDOUT;
 
@@ -255,10 +260,14 @@ static int amd_viommu_mig_wait_newest(const struct iommufd_viommu_mig_ctx *ctx,
  * amd_viommu_mig_quiesce_cmdbuf - Settle the guest command ring for capture
  * @aviommu: vIOMMU being migrated
  * @ctx: Guest memory accessor for this operation
- * @timeout_ms: Total budget for draining and for the completion fence
+ * @timeout_ms: Total budget for draining and for the completion fence. The
+ *             core has already bounded it. Zero is one attempt without
+ *             waiting: a disabled or already empty ring still passes, and a
+ *             completion wait that has not stored yet does not
  *
  * Return: 0 once no guest command is outstanding, -ETIMEDOUT if the ring did
- * not settle in time, or an error from reading guest memory.
+ * not settle in time, -EINTR if a fatal signal ended the wait, or an error
+ * from reading guest memory.
  *
  * Expects the guest to be stopped already: the caller runs this once the vCPUs
  * are paused and the endpoint has reached VFIO STOP, so nothing can add to the
@@ -266,7 +275,8 @@ static int amd_viommu_mig_wait_newest(const struct iommufd_viommu_mig_ctx *ctx,
  * since it could post another command the moment head met tail.
  *
  * Sleeps, and may do so for the whole budget. Runs under the vIOMMU's
- * mig_lock, which is why that lock is a mutex.
+ * mig_lock, which is why that lock is a mutex. Every other migration op on the
+ * vIOMMU, ABORT included, waits behind it, which is why the budget is bounded.
  */
 int amd_viommu_mig_quiesce_cmdbuf(struct amd_iommu_viommu *aviommu,
 				  const struct iommufd_viommu_mig_ctx *ctx,
@@ -296,6 +306,9 @@ int amd_viommu_mig_quiesce_cmdbuf(struct amd_iommu_viommu *aviommu,
 		amd_viommu_mig_get_ptrs(iommu, aviommu->gid, &head, &tail);
 		if (head == tail)
 			break;
+
+		if (fatal_signal_pending(current))
+			return -EINTR;
 
 		if (ktime_after(ktime_get(), deadline)) {
 			pr_warn("%s: gid=%#x ring did not drain, head=%#x tail=%#x\n",
